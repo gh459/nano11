@@ -136,6 +136,7 @@ You can also run the builder non-interactively with customized flags:
 | `-KeepRecovery` | Retains Windows Recovery Environment (WinRE) permanently (Default: disabled safely post-install) |
 | `-SafeDebloat` | Enables safe component store cleanup mode preserving CBS integrity (Default: True) |
 | `-AggressiveWinSxS` | Opts into aggressive WinSxS pruning mode (Experimental, for testing) |
+| `-UltraSlim` | Enables UltraSlim mode to achieve ~3.0 GB ISO (prunes Edge WebView, non-JP CJK fonts, WinSxS dead weight, compresses WinRE) |
 
 When finished, your bootable ISO will be generated in the script directory as `nano11.iso` with SHA256 verification hash displayed!
 

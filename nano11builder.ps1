@@ -33,7 +33,8 @@ param(
     [switch]$KeepWinRE,
     [switch]$SafeDebloat = $true,
     [switch]$AggressiveWinSxS,
-    [switch]$TrimWinSxS
+    [switch]$TrimWinSxS,
+    [switch]$UltraSlim
 )
 
 # 1. Check and adjust Execution Policy
@@ -189,6 +190,7 @@ $keepBT = $true
 $wslSupport = $false
 $keepRecoveryEnv = $false
 $safeDebloatMode = $true
+$ultraSlimMode = $false
 
 if ($NonInteractive) {
     if ($KeepDefender)          { $removeDefender = $false }
@@ -200,6 +202,7 @@ if ($NonInteractive) {
     if ($EnableWSL)             { $wslSupport = $true }
     if ($KeepRecovery -or $KeepWinRE) { $keepRecoveryEnv = $true }
     if ($AggressiveWinSxS -or $TrimWinSxS) { $safeDebloatMode = $false }
+    if ($UltraSlim)             { $ultraSlimMode = $true; $keepExtraFonts = $false }
 } else {
     Write-Host "Configure debloat options (Press Enter to use recommended defaults):" -ForegroundColor Gray
     
@@ -250,6 +253,15 @@ if ($NonInteractive) {
     } else {
         $safeDebloatMode = $true
     }
+
+    # 10. UltraSlim (~3.0 GB ISO Target Mode)
+    $opt = Read-Host "10. Enable UltraSlim mode (~3.0 GB ISO target: prunes Edge WebView, non-JP CJK fonts, WinSxS dead weight)? [Y/n] (Default: Y)"
+    if ($opt -and ($opt.Trim().ToLower() -in @('no', 'n'))) {
+        $ultraSlimMode = $false
+    } else {
+        $ultraSlimMode = $true
+        $keepExtraFonts = $false
+    }
 }
 
 Write-Host ""
@@ -263,6 +275,7 @@ Write-Host "  - Keep Bluetooth Services: $keepBT"
 Write-Host "  - Enable WSL2 Platform:    $wslSupport"
 Write-Host "  - Keep Recovery (WinRE):   $keepRecoveryEnv"
 Write-Host "  - Safe Debloat (WinSxS):   $safeDebloatMode"
+Write-Host "  - UltraSlim (~3GB ISO):    $ultraSlimMode"
 Write-Host ""
 
 # Determine Working Directory (Resolves Issue #27, #23 - Low disk space on C:)
@@ -569,7 +582,10 @@ $winDir = "$scratchDir\Windows"
 if ($removeDrivers) {
     Write-Host "Slimming DriverStore..." -ForegroundColor Cyan
     $driverRepo = Join-Path -Path $winDir -ChildPath "System32\DriverStore\FileRepository"
-    $driverPatterns = @('prn*', 'scan*', 'mfd*', 'wscsmd.inf*', 'tapdrv*', 'rdpbus.inf*', 'tdibth.inf*')
+    $driverPatterns = [System.Collections.Generic.List[string]]@('prn*', 'scan*', 'mfd*', 'wscsmd.inf*', 'tapdrv*', 'rdpbus.inf*', 'tdibth.inf*')
+    if ($ultraSlimMode) {
+        $driverPatterns.AddRange(@('ntprint*.inf*', 'fax*.inf*', 'smartcrd*.inf*', 'modem*.inf*'))
+    }
     if (Test-Path -LiteralPath $driverRepo) {
         Get-ChildItem -Path $driverRepo -Directory | ForEach-Object {
             $folder = $_
@@ -584,19 +600,43 @@ if ($removeDrivers) {
     }
 }
 
-# Fonts slimming (optional)
-if (-not $keepExtraFonts) {
-    Write-Host "Slimming Fonts folder..." -ForegroundColor Cyan
+# Fonts slimming (preserves Japanese and core system fonts, trims heavy foreign fonts)
+if (-not $keepExtraFonts -or $ultraSlimMode) {
+    Write-Host "Slimming Fonts folder (preserving Japanese and core system fonts)..." -ForegroundColor Cyan
     $fontsPath = Join-Path -Path $winDir -ChildPath "Fonts"
     if (Test-Path -LiteralPath $fontsPath) {
-        $excludeFonts = @("segoe*.*", "tahoma*.*", "marlett.ttf", "8541oem.fon", "segui*.*", "consol*.*", "lucon*.*", "calibri*.*", "arial*.*", "times*.*", "cou*.*", "8*.*")
-        $includeFonts = @("mingli*", "msjh*", "msyh*", "malgun*", "meiryo*", "yugoth*", "segoeuihistoric.ttf")
+        $essentialSystemFonts = @(
+            "segoe*", "tahoma*", "marlett.ttf", "8541oem.fon", "segui*", "consol*",
+            "lucon*", "calibri*", "arial*", "times*", "cou*", "8*.*"
+        )
+        $japaneseFonts = @(
+            "meiryo*", "yugoth*", "yumin*", "msgothic*", "msmincho*", "segoeuihistoric.ttf"
+        )
+        $fontsToKeep = $essentialSystemFonts + $japaneseFonts
         
-        $fontsToRemove = Get-ChildItem -Path $fontsPath -Exclude $excludeFonts
-        $fontsToRemoveExtra = Get-ChildItem -Path $fontsPath -Include $includeFonts
-        ($fontsToRemove + $fontsToRemoveExtra) | ForEach-Object {
-            Set-ItemOwnershipAndAccess -Path $_.FullName
-            Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue
+        $foreignFonts = @(
+            "mingliu*", "simsun*", "msjh*", "msyh*", "malgun*",
+            "khmer*", "lao*", "myanmar*", "thai*", "leelaw*", "gadugi*",
+            "ebrima*", "dokchamp*", "taile*", "sylfaen*", "mvboli*",
+            "plantc*", "himalaya*", "nyala*", "monbaiti*", "javatext*"
+        )
+        
+        Get-ChildItem -Path $fontsPath | ForEach-Object {
+            $fontItem = $_
+            $isKeep = $false
+            foreach ($kp in $fontsToKeep) {
+                if ($fontItem.Name -like $kp) { $isKeep = $true; break }
+            }
+            if (-not $isKeep) {
+                $isForeign = $false
+                foreach ($fp in $foreignFonts) {
+                    if ($fontItem.Name -like $fp) { $isForeign = $true; break }
+                }
+                if ($isForeign -or (-not $keepExtraFonts)) {
+                    Set-ItemOwnershipAndAccess -Path $fontItem.FullName
+                    Remove-Item -LiteralPath $fontItem.FullName -Force -ErrorAction SilentlyContinue
+                }
+            }
         }
     }
 }
@@ -611,9 +651,26 @@ if (-not $keepAsianIME) {
     Remove-Item -Path (Join-Path -Path $winDir -ChildPath "Speech\Engines\TTS") -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-# Windows Defender definitions cleanup (optional)
+# Speech & Text-to-Speech Engines (UltraSlim cleanup)
+if ($ultraSlimMode) {
+    Write-Host "Removing heavy Speech recognition and TTS engines..." -ForegroundColor Cyan
+    Remove-ProtectedDirectory -Path (Join-Path -Path $winDir -ChildPath "Speech") -ScratchPath $scratchDir
+    Remove-ProtectedDirectory -Path (Join-Path -Path $winDir -ChildPath "Speech_OneCore") -ScratchPath $scratchDir
+    Get-ChildItem -Path "$scratchDir\Windows\WinSxS" -Filter "*speechrecognizer*" -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+        Remove-ProtectedDirectory -Path $_.FullName -ScratchPath $scratchDir
+    }
+    Get-ChildItem -Path "$scratchDir\Windows\WinSxS" -Filter "*speech-onecore*" -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+        Remove-ProtectedDirectory -Path $_.FullName -ScratchPath $scratchDir
+    }
+}
+
+# Windows Defender definitions and binaries cleanup (optional)
 if ($removeDefender) {
+    Write-Host "Purging Windows Defender signatures and binaries from WinSxS..." -ForegroundColor Cyan
     Remove-Item -Path "$scratchDir\ProgramData\Microsoft\Windows Defender\Definition Updates" -Recurse -Force -ErrorAction SilentlyContinue
+    Get-ChildItem -Path "$scratchDir\Windows\WinSxS" -Filter "*windows-defender*" -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+        Remove-ProtectedDirectory -Path $_.FullName -ScratchPath $scratchDir
+    }
 }
 
 # General cleanup
@@ -622,21 +679,30 @@ Remove-Item -Path (Join-Path -Path $winDir -ChildPath "Web") -Recurse -Force -Er
 Remove-Item -Path (Join-Path -Path $winDir -ChildPath "Help") -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item -Path (Join-Path -Path $winDir -ChildPath "Cursors") -Recurse -Force -ErrorAction SilentlyContinue
 
-# Edge, WinRE, and OneDrive
-Write-Host "Removing Edge and OneDrive..." -ForegroundColor Cyan
-Remove-Item -Path "$scratchDir\Program Files (x86)\Microsoft\Edge*" -Recurse -Force -ErrorAction SilentlyContinue
-if ($architecture -eq 'amd64') {
-    $edgeFolders = Get-ChildItem -Path "$scratchDir\Windows\WinSxS" -Filter "amd64_microsoft-edge-webview_31bf3856ad364e35*" -Directory -ErrorAction SilentlyContinue
-    foreach ($f in $edgeFolders) {
-        Remove-ProtectedDirectory -Path $f.FullName -ScratchPath $scratchDir
-    }
+# Edge, Edge WebView, and OneDrive
+Write-Host "Removing Edge, Edge WebView, and OneDrive..." -ForegroundColor Cyan
+Remove-ProtectedDirectory -Path "$scratchDir\Program Files (x86)\Microsoft\Edge" -ScratchPath $scratchDir
+Remove-ProtectedDirectory -Path "$scratchDir\Program Files (x86)\Microsoft\EdgeUpdate" -ScratchPath $scratchDir
+Remove-ProtectedDirectory -Path "$scratchDir\Program Files (x86)\Microsoft\EdgeCore" -ScratchPath $scratchDir
+Remove-ProtectedDirectory -Path "$scratchDir\Windows\System32\Microsoft-Edge-WebView" -ScratchPath $scratchDir
+Remove-ProtectedDirectory -Path "$scratchDir\Windows\System32\Microsoft-Edge-Webview" -ScratchPath $scratchDir
+
+# Purge Edge WebView from WinSxS
+Get-ChildItem -Path "$scratchDir\Windows\WinSxS" -Filter "*microsoft-edge-webview*" -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+    Remove-ProtectedDirectory -Path $_.FullName -ScratchPath $scratchDir
 }
-Remove-Item -Path "$scratchDir\Windows\System32\Microsoft-Edge-Webview" -Recurse -Force -ErrorAction SilentlyContinue
+
+# Purge OneDrive setup payload (197 MB) and executable
 Remove-Item -Path "$scratchDir\Windows\System32\OneDriveSetup.exe" -Force -ErrorAction SilentlyContinue
+Get-ChildItem -Path "$scratchDir\Windows\WinSxS" -Filter "*microsoft-windows-onedrive-setup*" -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+    Remove-ProtectedDirectory -Path $_.FullName -ScratchPath $scratchDir
+}
 
 # WinRE Handling (Guarantees Setup SafeOS staging succeeds, then cleans up post-install)
 $recoveryDir = Join-Path -Path $scratchDir -ChildPath "Windows\System32\Recovery"
 $keepMarkerFile = Join-Path -Path $recoveryDir -ChildPath "winre.wim.keep"
+$targetWinre = Join-Path -Path $recoveryDir -ChildPath "winre.wim"
+
 if ($keepRecoveryEnv) {
     Write-Host "Preserving Windows Recovery Environment (WinRE)..." -ForegroundColor Green
     New-Item -Path $keepMarkerFile -ItemType File -Force -ErrorAction SilentlyContinue | Out-Null
@@ -649,6 +715,20 @@ if ($keepRecoveryEnv) {
     if (Test-Path -LiteralPath $keepMarkerFile) {
         Remove-Item -LiteralPath $keepMarkerFile -Force -ErrorAction SilentlyContinue
     }
+
+    # In UltraSlim mode, re-export winre.wim with maximum compression to save ~300 MB inside install.esd
+    if ($ultraSlimMode -and (Test-Path -LiteralPath $targetWinre)) {
+        Write-Host "Optimizing WinRE compression for UltraSlim footprint..." -ForegroundColor Cyan
+        $tempCompactWinre = Join-Path -Path $recoveryDir -ChildPath "winre_compact.wim"
+        Set-ItemOwnershipAndAccess -Path $targetWinre
+        try { Set-ItemProperty -LiteralPath $targetWinre -Name IsReadOnly -Value $false -ErrorAction Stop } catch {}
+        & dism.exe /English /Export-Image "/SourceImageFile:$targetWinre" /SourceIndex:1 "/DestinationImageFile:$tempCompactWinre" /Compress:max > $null 2>&1
+        if ((Test-Path -LiteralPath $tempCompactWinre) -and ((Get-Item -LiteralPath $tempCompactWinre).Length -gt 10MB)) {
+            Remove-Item -LiteralPath $targetWinre -Force -ErrorAction SilentlyContinue
+            Rename-Item -LiteralPath $tempCompactWinre -NewName "winre.wim" -Force
+            Write-Host "  - WinRE successfully compressed and optimized." -ForegroundColor Green
+        }
+    }
 }
 
 # 9. Component Store (WinSxS) Optimization
@@ -657,9 +737,29 @@ if ($safeDebloatMode) {
     & dism.exe /English "/image:$scratchDir" /Cleanup-Image /StartComponentCleanup /ResetBase > $null 2>&1
 
     Write-Host "Cleaning WinSxS temporary, install, and backup caches..." -ForegroundColor Cyan
-    Remove-Item -Path "$scratchDir\Windows\WinSxS\Backup\*" -Recurse -Force -ErrorAction SilentlyContinue
-    Remove-Item -Path "$scratchDir\Windows\WinSxS\InstallTemp\*" -Recurse -Force -ErrorAction SilentlyContinue
-    Remove-Item -Path "$scratchDir\Windows\WinSxS\Temp\*" -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-ProtectedDirectory -Path "$scratchDir\Windows\WinSxS\Backup" -ScratchPath $scratchDir
+    New-Item -ItemType Directory -Force -Path "$scratchDir\Windows\WinSxS\Backup" | Out-Null
+    Remove-ProtectedDirectory -Path "$scratchDir\Windows\WinSxS\InstallTemp" -ScratchPath $scratchDir
+    New-Item -ItemType Directory -Force -Path "$scratchDir\Windows\WinSxS\InstallTemp" | Out-Null
+    Remove-ProtectedDirectory -Path "$scratchDir\Windows\WinSxS\Temp" -ScratchPath $scratchDir
+    New-Item -ItemType Directory -Force -Path "$scratchDir\Windows\WinSxS\Temp" | Out-Null
+
+    # UltraSlim targeted WinSxS dead-weight pruning (safe packages only)
+    if ($ultraSlimMode) {
+        Write-Host "Pruning targeted non-essential components from WinSxS..." -ForegroundColor Cyan
+        $ultraSlimSxsPatterns = @(
+            "*iis-legacyscripts*",
+            "*printing_admin_scripts*"
+        )
+        if (-not $wslSupport) {
+            $ultraSlimSxsPatterns += "*hyperv-vmfirmware*"
+        }
+        foreach ($pat in $ultraSlimSxsPatterns) {
+            Get-ChildItem -Path "$scratchDir\Windows\WinSxS" -Filter $pat -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+                Remove-ProtectedDirectory -Path $_.FullName -ScratchPath $scratchDir
+            }
+        }
+    }
 } else {
     Write-Host "Running Aggressive WinSxS Pruning (Experimental)..." -ForegroundColor Yellow
     # Pre-cleanup DISM component base before trimming
