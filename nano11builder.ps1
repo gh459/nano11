@@ -290,6 +290,10 @@ $nano11Dir = Join-Path -Path $baseWorkDir -ChildPath "nano11"
 $scratchDir = Join-Path -Path $baseWorkDir -ChildPath "scratchdir"
 Write-Host "Working Directory: $baseWorkDir" -ForegroundColor Cyan
 
+if (Test-Path -LiteralPath $nano11Dir) {
+    Write-Host "Cleaning up previous $nano11Dir to prevent leftover file conflicts..." -ForegroundColor Yellow
+    Remove-Item -LiteralPath $nano11Dir -Recurse -Force -ErrorAction SilentlyContinue
+}
 New-Item -ItemType Directory -Force -Path (Join-Path -Path $nano11Dir -ChildPath "sources") | Out-Null
 
 # Prompt for source drive letter
@@ -325,7 +329,33 @@ if (-not (Test-Path -LiteralPath $sourceWim)) {
 }
 
 Write-Host "Copying Windows installation files to $nano11Dir..." -ForegroundColor Green
-Copy-Item -Path "$DriveLetter\*" -Destination $nano11Dir -Recurse -Force | Out-Null
+$sourcePath = $DriveLetter.TrimEnd('\') + "\"
+$copySuccess = $false
+try {
+    & robocopy.exe "$sourcePath" "$nano11Dir" /E /R:1 /W:1 /NP /NFL /NDL /NJH /NJS > $null 2>&1
+    if ($LASTEXITCODE -lt 8) {
+        $copySuccess = $true
+    }
+} catch {}
+
+if (-not $copySuccess) {
+    Write-Host "Robocopy completed or unavailable, ensuring files via Copy-Item..." -ForegroundColor Yellow
+    Copy-Item -Path "$sourcePath*" -Destination $nano11Dir -Recurse -Force | Out-Null
+}
+
+# Explicitly ensure critical boot files exist in target image
+$criticalBootFiles = @(
+    @{ Src = "$sourcePath`boot\etfsboot.com"; Dest = "$nano11Dir\boot\etfsboot.com"; Dir = "$nano11Dir\boot" },
+    @{ Src = "$sourcePath`efi\microsoft\boot\efisys.bin"; Dest = "$nano11Dir\efi\microsoft\boot\efisys.bin"; Dir = "$nano11Dir\efi\microsoft\boot" },
+    @{ Src = "$sourcePath`efi\microsoft\boot\efisys_noprompt.bin"; Dest = "$nano11Dir\efi\microsoft\boot\efisys_noprompt.bin"; Dir = "$nano11Dir\efi\microsoft\boot" },
+    @{ Src = "$sourcePath`sources\boot.wim"; Dest = "$nano11Dir\sources\boot.wim"; Dir = "$nano11Dir\sources" }
+)
+foreach ($cbf in $criticalBootFiles) {
+    if ((Test-Path -LiteralPath $cbf.Src) -and (-not (Test-Path -LiteralPath $cbf.Dest))) {
+        New-Item -ItemType Directory -Force -Path $cbf.Dir -ErrorAction SilentlyContinue | Out-Null
+        Copy-Item -LiteralPath $cbf.Src -Destination $cbf.Dest -Force -ErrorAction SilentlyContinue
+    }
+}
 
 # Bypass hardware requirement checks in installer (Resolves Issue #29 - Canary 28020+, Older CPUs/TPM)
 $appraiserDll = Join-Path -Path "$nano11Dir\sources" -ChildPath "appraiserres.dll"
@@ -988,6 +1018,13 @@ Rename-Item -LiteralPath $tempWim -NewName "install.wim" -Force
 
 # 14. Shrink and modify boot.wim (Setup bypasses & dynamic index handling)
 $bootWimPath = Join-Path -Path "$nano11Dir\sources" -ChildPath "boot.wim"
+if (-not (Test-Path -LiteralPath $bootWimPath)) {
+    $sourceBootWim = Join-Path -Path "$DriveLetter\sources" -ChildPath "boot.wim"
+    if (Test-Path -LiteralPath $sourceBootWim) {
+        Write-Host "Restoring boot.wim from source media..." -ForegroundColor Cyan
+        Copy-Item -LiteralPath $sourceBootWim -Destination $bootWimPath -Force -ErrorAction SilentlyContinue
+    }
+}
 if (Test-Path -LiteralPath $bootWimPath) {
     Write-Host "Processing boot.wim..." -ForegroundColor Green
     Set-ItemOwnershipAndAccess -Path $bootWimPath
@@ -1032,7 +1069,7 @@ if (Test-Path -LiteralPath $finalEsd) {
 
 # 16. Final cleanup of ISO root
 Write-Host "Performing final cleanup of ISO root..." -ForegroundColor Cyan
-$keepList = @("boot", "efi", "sources", "bootmgr", "bootmgr.efi", "setup.exe", "autounattend.xml")
+$keepList = @("boot", "efi", "sources", "bootmgr", "bootmgr.efi", "bootmgfw.efi", "setup.exe", "autounattend.xml")
 Get-ChildItem -Path $nano11Dir | Where-Object { $_.Name -notin $keepList } | ForEach-Object {
     Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
 }
@@ -1069,21 +1106,92 @@ if (-not (Test-Path -LiteralPath $oscdimgExe)) {
 # 18. Create bootable ISO (oscdimg) with Architecture-aware bootdata and Volume Label
 Write-Host "Creating bootable ISO image..." -ForegroundColor Green
 $outputIso = Join-Path -Path $PSScriptRoot -ChildPath "nano11.iso"
-$etfsBoot = Join-Path -Path "$nano11Dir\boot" -ChildPath "etfsboot.com"
-$efiSys   = Join-Path -Path "$nano11Dir\efi\microsoft\boot" -ChildPath "efisys.bin"
 
-# Determine bootdata parameters based on architecture and available bootloaders
-if ($architecture -eq 'arm64' -or (-not (Test-Path -LiteralPath $etfsBoot))) {
-    # ARM64 or UEFI-only media
-    $bootData = "1#pEF,e,b$efiSys"
-} else {
-    # Dual boot: BIOS (etfsboot.com) + UEFI (efisys.bin)
-    $bootData = "2#p0,e,b$etfsBoot#pEF,e,b$efiSys"
+# Remove any existing output ISO to prevent file locks/collisions
+if (Test-Path -LiteralPath $outputIso) {
+    Remove-Item -LiteralPath $outputIso -Force -ErrorAction SilentlyContinue
 }
 
+# Resolve etfsboot.com (BIOS boot sector)
+$etfsBootCandidates = @(
+    (Join-Path -Path "$nano11Dir\boot" -ChildPath "etfsboot.com"),
+    (Join-Path -Path "$DriveLetter\boot" -ChildPath "etfsboot.com")
+)
+$etfsBoot = $null
+foreach ($c in $etfsBootCandidates) {
+    if (Test-Path -LiteralPath $c) {
+        $localEtfs = Join-Path -Path "$nano11Dir\boot" -ChildPath "etfsboot.com"
+        if (-not (Test-Path -LiteralPath $localEtfs)) {
+            New-Item -ItemType Directory -Force -Path "$nano11Dir\boot" -ErrorAction SilentlyContinue | Out-Null
+            Copy-Item -LiteralPath $c -Destination $localEtfs -Force -ErrorAction SilentlyContinue
+        }
+        if (Test-Path -LiteralPath $localEtfs) {
+            $etfsBoot = $localEtfs
+            break
+        }
+    }
+}
+
+# Resolve efisys.bin (UEFI boot sector) across candidate paths
+$efiSysCandidates = @(
+    (Join-Path -Path "$nano11Dir\efi\microsoft\boot" -ChildPath "efisys.bin"),
+    (Join-Path -Path "$nano11Dir\efi\microsoft\boot" -ChildPath "efisys_noprompt.bin"),
+    (Join-Path -Path "$DriveLetter\efi\microsoft\boot" -ChildPath "efisys.bin"),
+    (Join-Path -Path "$DriveLetter\efi\microsoft\boot" -ChildPath "efisys_noprompt.bin"),
+    (Join-Path -Path "$nano11Dir\efi\boot" -ChildPath "efisys.bin"),
+    (Join-Path -Path "$DriveLetter\efi\boot" -ChildPath "efisys.bin")
+)
+$efiSys = $null
+foreach ($c in $efiSysCandidates) {
+    if (Test-Path -LiteralPath $c) {
+        $localEfiSys = Join-Path -Path "$nano11Dir\efi\microsoft\boot" -ChildPath "efisys.bin"
+        if (-not (Test-Path -LiteralPath $localEfiSys)) {
+            New-Item -ItemType Directory -Force -Path "$nano11Dir\efi\microsoft\boot" -ErrorAction SilentlyContinue | Out-Null
+            Copy-Item -LiteralPath $c -Destination $localEfiSys -Force -ErrorAction SilentlyContinue
+        }
+        if (Test-Path -LiteralPath $localEfiSys) {
+            $efiSys = $localEfiSys
+            break
+        }
+    }
+}
+
+# Determine bootdata parameters based on discovered boot sector files
+$bootData = $null
+if ($efiSys -and $etfsBoot -and ($architecture -ne 'arm64')) {
+    # Dual boot: BIOS (etfsboot.com) + UEFI (efisys.bin)
+    $bootData = "2#p0,e,b$etfsBoot#pEF,e,b$efiSys"
+    Write-Host "Configured Dual Boot (BIOS + UEFI):" -ForegroundColor Green
+    Write-Host "  - BIOS Boot Sector: $etfsBoot" -ForegroundColor Gray
+    Write-Host "  - UEFI Boot Sector: $efiSys" -ForegroundColor Gray
+} elseif ($efiSys) {
+    # UEFI-only (ARM64 or systems without BIOS bootloader)
+    $bootData = "1#pEF,e,b$efiSys"
+    Write-Host "Configured UEFI Boot:" -ForegroundColor Green
+    Write-Host "  - UEFI Boot Sector: $efiSys" -ForegroundColor Gray
+} elseif ($etfsBoot) {
+    # BIOS-only
+    $bootData = "1#p0,e,b$etfsBoot"
+    Write-Host "Configured BIOS Boot:" -ForegroundColor Green
+    Write-Host "  - BIOS Boot Sector: $etfsBoot" -ForegroundColor Gray
+} else {
+    Write-Host "Warning: Neither BIOS nor UEFI boot sector files were found. Output ISO will not be bootable." -ForegroundColor Yellow
+}
+
+$isoCreatedSuccessfully = $false
 if (Test-Path -LiteralPath $oscdimgExe) {
-    & "$oscdimgExe" -m -o -u2 -udfver102 -l"nano11" "-bootdata:$bootData" "$nano11Dir" "$outputIso"
-    if (Test-Path -LiteralPath $outputIso) {
+    $oscdimgArgs = @("-m", "-o", "-u2", "-udfver102", "-l`"nano11`"")
+    if ($bootData) {
+        $oscdimgArgs += "-bootdata:$bootData"
+    }
+    $oscdimgArgs += $nano11Dir
+    $oscdimgArgs += $outputIso
+
+    Write-Host "Executing oscdimg..." -ForegroundColor Cyan
+    & "$oscdimgExe" @oscdimgArgs
+    
+    if ((Test-Path -LiteralPath $outputIso) -and ((Get-Item -LiteralPath $outputIso).Length -gt 1MB)) {
+        $isoCreatedSuccessfully = $true
         $isoItem = Get-Item -LiteralPath $outputIso
         $isoSizeMB = [math]::Round($isoItem.Length / 1MB, 2)
         Write-Host "Calculating SHA256 checksum..." -ForegroundColor Cyan
@@ -1095,6 +1203,13 @@ if (Test-Path -LiteralPath $oscdimgExe) {
         Write-Host "   Path:   $outputIso ($isoSizeMB MB)                     " -ForegroundColor Green
         Write-Host "   SHA256: $sha256                                        " -ForegroundColor Green
         Write-Host "=========================================================" -ForegroundColor Green
+    } else {
+        Write-Host ""
+        Write-Host "=========================================================" -ForegroundColor Red
+        Write-Host "   ERROR: Failed to create bootable ISO!                 " -ForegroundColor Red
+        Write-Host "   oscdimg exited with code $LASTEXITCODE. The ISO file was not generated." -ForegroundColor Red
+        Write-Host "   Working directory preserved for inspection: $nano11Dir" -ForegroundColor Yellow
+        Write-Host "=========================================================" -ForegroundColor Red
     }
 } else {
     Write-Host "oscdimg.exe not found. You can manually package the ISO from: $nano11Dir" -ForegroundColor Yellow
@@ -1105,8 +1220,16 @@ if (-not $NonInteractive) {
     Read-Host "Press Enter to clean up working directories and exit."
 }
 & dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /discard > $null 2>&1
-Remove-Item -LiteralPath $nano11Dir -Recurse -Force -ErrorAction SilentlyContinue
+if ($isoCreatedSuccessfully) {
+    Remove-Item -LiteralPath $nano11Dir -Recurse -Force -ErrorAction SilentlyContinue
+} else {
+    Write-Host "Preserving $nano11Dir because ISO creation was not completed." -ForegroundColor Yellow
+}
 Remove-Item -LiteralPath $scratchDir -Recurse -Force -ErrorAction SilentlyContinue
 
 Stop-Transcript
-Write-Host "Done!" -ForegroundColor Green
+if ($isoCreatedSuccessfully) {
+    Write-Host "Done! nano11.iso is ready." -ForegroundColor Green
+} else {
+    Write-Host "Process ended with errors. Please check the logs in $transcriptPath" -ForegroundColor Red
+}

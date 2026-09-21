@@ -34,6 +34,11 @@ The goal of nano11 is to automate the creation of a streamlined Windows 11 image
   - **Administrator Account Auto-Activation**: Explicitly activates the built-in Administrator account in `Specialize.ps1` for seamless unattended setup across Windows 11 Home and Pro editions.
   - **Setup Script Pre-Extraction**: Unattend scripts (`Specialize.ps1`, `DefaultUser.ps1`, etc.) are pre-extracted directly into the image during build time with robust `try/catch` error shielding, preventing specialize pass aborts.
   - **Bootable WIM Exports**: Added `/Bootable` flag to all `boot.wim` exports to prevent `0xc1510115` errors across all UEFI/BIOS firmware.
+- **💿 Robust ISO Generation & Boot Sector Auto-Recovery**:
+  - **Auto-Discovery & Fallback**: Searches for `etfsboot.com` and `efisys.bin` / `efisys_noprompt.bin` across candidate paths, automatically copying from source installation media if missing.
+  - **Dynamic Bootdata**: Seamlessly builds Dual-Boot (BIOS + UEFI), UEFI-only, or BIOS-only boot parameters based on available bootloaders.
+  - **Robocopy Mirroring**: Uses `robocopy` with `Copy-Item` fallback to ensure 100% of directory structures and boot files are preserved from read-only ISO media.
+  - **Build Integrity & Safe Cleanup**: Validates output ISO existence and size (> 1 MB), captures `oscdimg` exit codes, displays SHA256 checksums, and preserves the working directory upon error for troubleshooting.
 - **🐧 WSL2 & Virtualization Support (Issue #5)**:
   - Optional `-EnableWSL` flag pre-enables `VirtualMachinePlatform` and `Microsoft-Windows-Subsystem-Linux` before WinSxS stripping, allowing full WSL2, Docker, and Linux containers on a lightweight nano11 installation.
 - **💾 Custom Working Directory Support (Issues #27, #23)**:
