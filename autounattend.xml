@@ -6,8 +6,7 @@
 		<component name="Microsoft-Windows-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
 			<UserData>
 				<ProductKey>
-					<Key>00000-00000-00000-00000-00000</Key>
-					<WillShowUI>Always</WillShowUI>
+					<WillShowUI>OnError</WillShowUI>
 				</ProductKey>
 				<AcceptEula>true</AcceptEula>
 			</UserData>
@@ -234,6 +233,12 @@ $scripts = @(
 	};
 	{
 		cmd.exe /c "rmdir C:\Windows.old";
+	};
+	{
+		compact.exe /CompactOS:always;
+	};
+	{
+		ie4uinit.exe -show;
 	};
 );
 

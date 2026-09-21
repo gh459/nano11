@@ -5,15 +5,16 @@
     Generates a significantly reduced Windows 11 image with support for:
     - Universal language compatibility (independent of host OS locale)
     - Full Debloat with optional customizations (keep IME, Defender, Fonts, Drivers, Updates, Bluetooth)
+    - Optional WSL2 & VirtualMachinePlatform pre-enablement before WinSxS slimming (-EnableWSL)
     - Custom working directory support (-WorkDir) to prevent disk space issues
     - Setup hardware requirement bypasses including appraiserres.dll patch for Canary 28020+
     - Fixed WinSxS and DriverStore permission issues (robocopy mirror trick & .NET ACL)
     - Architecture support: amd64 (x64) and arm64
-    - Proper placement of autounattend.xml (in ISO root, Sysprep, Panther) with self-healing
+    - Proper placement of autounattend.xml (in ISO root, Sysprep, Panther) with self-healing and CompactOS
     - Clean unattended setup with local account support
 .NOTES
     Original Author: NTDEV
-    Contributions: Tinnitus97 (PR #6), Antigravity (Multi-language, ARM64, Bugfixes & Customization)
+    Contributions: Tinnitus97 (PR #6), Antigravity (Multi-language, ARM64, Bugfixes, WSL2 & Customization)
     License: MIT
 #>
 
@@ -26,7 +27,8 @@ param(
     [switch]$KeepFonts,
     [switch]$KeepDrivers,
     [switch]$KeepWindowsUpdate,
-    [switch]$KeepBluetooth
+    [switch]$KeepBluetooth,
+    [switch]$EnableWSL
 )
 
 # 1. Check and adjust Execution Policy
@@ -170,7 +172,7 @@ if (-not $NonInteractive) {
     }
 }
 
-# Customization Options (Resolves Issues #1, #9, #10, #12, #13)
+# Customization Options (Resolves Issues #1, #5, #9, #10, #12, #13)
 Write-Host ""
 Write-Host "--- Customization Settings ---" -ForegroundColor Green
 $removeDefender = $true
@@ -179,6 +181,7 @@ $keepExtraFonts = $true
 $removeDrivers = $true
 $disableWU = $true
 $keepBT = $true
+$wslSupport = $false
 
 if ($NonInteractive) {
     if ($KeepDefender)      { $removeDefender = $false }
@@ -187,6 +190,7 @@ if ($NonInteractive) {
     if ($KeepDrivers)       { $removeDrivers = $false }
     if ($KeepWindowsUpdate) { $disableWU = $false }
     if ($KeepBluetooth)     { $keepBT = $true }
+    if ($EnableWSL)         { $wslSupport = $true }
 } else {
     Write-Host "Configure debloat options (Press Enter to use recommended defaults):" -ForegroundColor Gray
     
@@ -221,6 +225,10 @@ if ($NonInteractive) {
     # 6. Bluetooth & Audio peripherals
     $opt = Read-Host "6. Keep Bluetooth audio and peripheral services? [Y/n] (Default: Y)"
     if ($opt -and ($opt.Trim().ToLower() -in @('no', 'n'))) { $keepBT = $false }
+
+    # 7. WSL2 & Virtualization (Resolves Issue #5)
+    $opt = Read-Host "7. Enable WSL2 and Virtual Machine Platform before stripping WinSxS? [y/N] (Default: N)"
+    if ($opt -and ($opt.Trim().ToLower() -in @('yes', 'y'))) { $wslSupport = $true }
 }
 
 Write-Host ""
@@ -231,6 +239,7 @@ Write-Host "  - Keep Extra Fonts:        $keepExtraFonts"
 Write-Host "  - Remove Legacy Drivers:   $removeDrivers"
 Write-Host "  - Disable Windows Update:  $disableWU"
 Write-Host "  - Keep Bluetooth Services: $keepBT"
+Write-Host "  - Enable WSL2 Platform:    $wslSupport"
 Write-Host ""
 
 # Determine Working Directory (Resolves Issue #27, #23 - Low disk space on C:)
@@ -389,6 +398,14 @@ foreach ($line in $lines) {
         Write-Host "Detected Architecture: $architecture" -ForegroundColor Green
         break
     }
+}
+
+# Pre-enable WSL2 and Virtual Machine Platform if requested (Resolves Issue #5)
+if ($wslSupport) {
+    Write-Host "Enabling WSL2 and VirtualMachinePlatform before WinSxS slimming..." -ForegroundColor Green
+    & dism.exe /English "/image:$scratchDir" /Enable-Feature /FeatureName:VirtualMachinePlatform /All > $null 2>&1
+    & dism.exe /English "/image:$scratchDir" /Enable-Feature /FeatureName:Microsoft-Windows-Subsystem-Linux /All > $null 2>&1
+    Write-Host "  - WSL2 and VirtualMachinePlatform enabled." -ForegroundColor Green
 }
 
 # 5. Removing provisioned AppX packages (Bloatware)
@@ -737,10 +754,18 @@ if ($removeDefender) {
     foreach ($svc in $defServices) {
         reg.exe add "HKLM\zSYSTEM\ControlSet001\Services\$svc" /v "Start" /t REG_DWORD /d 4 /f | Out-Null
     }
-    reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer" /v "SettingsPageVisibility" /t REG_SZ /d "hide:virus;windowsupdate" /f | Out-Null
 }
 
-# 11. Copy autounattend.xml with Architecture Support & Self-healing (Resolves Issues #18, #21, #2, #8, #20)
+# Dynamically set SettingsPageVisibility only for actually removed/disabled components
+$hidePages = [System.Collections.Generic.List[string]]::new()
+if ($removeDefender) { $hidePages.Add("virus") }
+if ($disableWU)      { $hidePages.Add("windowsupdate") }
+if ($hidePages.Count -gt 0) {
+    $hideVal = "hide:" + ($hidePages -join ";")
+    reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer" /v "SettingsPageVisibility" /t REG_SZ /d "$hideVal" /f | Out-Null
+}
+
+# 11. Copy autounattend.xml with Architecture Support & Self-healing (Resolves Issues #3, #18, #21, #2, #8, #20)
 Write-Host "Configuring autounattend.xml for target architecture ($architecture)..." -ForegroundColor Green
 $unattendSource = Join-Path -Path $PSScriptRoot -ChildPath "autounattend.xml"
 
@@ -786,6 +811,7 @@ if (Test-Path -LiteralPath $unattendSource) {
 # Unmount Registry Hives
 Write-Host "Unmounting offline registry hives..." -ForegroundColor Cyan
 [GC]::Collect()
+[GC]::WaitForPendingFinalizers()
 reg.exe unload HKLM\zCOMPONENTS > $null 2>&1
 reg.exe unload HKLM\zDEFAULT    > $null 2>&1
 reg.exe unload HKLM\zNTUSER     > $null 2>&1
@@ -810,10 +836,21 @@ reg.exe unload HKLM\zSYSTEM | Out-Null
 # 13. Unmount and re-export install.wim
 Write-Host "Cleaning up and unmounting install.wim..." -ForegroundColor Green
 & dism.exe /English "/image:$scratchDir" /Cleanup-Image /StartComponentCleanup /ResetBase > $null 2>&1
+
+[GC]::Collect()
+[GC]::WaitForPendingFinalizers()
+Start-Sleep -Seconds 2
+
 & dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /commit
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "Warning: commit unmount failed, retrying discard..." -ForegroundColor Yellow
-    & dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /discard
+    Write-Host "Warning: commit unmount failed, retrying after garbage collection..." -ForegroundColor Yellow
+    [GC]::Collect()
+    Start-Sleep -Seconds 3
+    & dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /commit
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "Falling back to discard unmount..." -ForegroundColor Yellow
+        & dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /discard
+    }
 }
 
 $tempWim = Join-Path -Path "$nano11Dir\sources" -ChildPath "install2.wim"
@@ -822,15 +859,20 @@ Write-Host "Re-exporting install.wim with maximum compression..." -ForegroundCol
 Remove-Item -LiteralPath $destWim -Force -ErrorAction SilentlyContinue
 Rename-Item -LiteralPath $tempWim -NewName "install.wim" -Force
 
-# 14. Shrink and modify boot.wim (Setup bypasses)
+# 14. Shrink and modify boot.wim (Setup bypasses & dynamic index handling)
 $bootWimPath = Join-Path -Path "$nano11Dir\sources" -ChildPath "boot.wim"
 if (Test-Path -LiteralPath $bootWimPath) {
     Write-Host "Processing boot.wim..." -ForegroundColor Green
     Set-ItemOwnershipAndAccess -Path $bootWimPath
     try { Set-ItemProperty -LiteralPath $bootWimPath -Name IsReadOnly -Value $false -ErrorAction Stop } catch {}
 
+    # Inspect boot.wim indices (Setup image is usually Index 2, but can be Index 1 on single-index media)
+    $bootInfo = & dism.exe /English /Get-WimInfo "/WimFile:$bootWimPath"
+    $hasIndex2 = ($bootInfo -split '\r?\n') -match 'Index\s*:\s*2'
+    $setupIndex = if ($hasIndex2) { 2 } else { 1 }
+
     $newBootWim = Join-Path -Path "$nano11Dir\sources" -ChildPath "boot_new.wim"
-    & dism.exe /English /Export-Image "/SourceImageFile:$bootWimPath" /SourceIndex:2 "/DestinationImageFile:$newBootWim"
+    & dism.exe /English /Export-Image "/SourceImageFile:$bootWimPath" "/SourceIndex:$setupIndex" "/DestinationImageFile:$newBootWim"
     & dism.exe /English /Mount-Image "/ImageFile:$newBootWim" /Index:1 "/MountDir:$scratchDir"
 
     reg.exe load HKLM\zSYSTEM "$scratchDir\Windows\System32\config\SYSTEM" | Out-Null
@@ -838,8 +880,12 @@ if (Test-Path -LiteralPath $bootWimPath) {
     foreach ($key in $labConfigKeys) {
         reg.exe add "HKLM\zSYSTEM\Setup\LabConfig" /v $key /t REG_DWORD /d 1 /f | Out-Null
     }
+    reg.exe add "HKLM\zSYSTEM\Setup\MoSetup" /v "AllowUpgradesWithUnsupportedTPMOrCPU" /t REG_DWORD /d 1 /f | Out-Null
     reg.exe unload HKLM\zSYSTEM | Out-Null
 
+    [GC]::Collect()
+    [GC]::WaitForPendingFinalizers()
+    Start-Sleep -Seconds 1
     & dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /commit
 
     $finalBootWim = Join-Path -Path "$nano11Dir\sources" -ChildPath "boot_final.wim"
@@ -864,9 +910,24 @@ Get-ChildItem -Path $nano11Dir | Where-Object { $_.Name -notin $keepList } | For
     Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-# 17. Create bootable ISO (oscdimg) with Architecture-aware bootdata
-Write-Host "Creating bootable ISO image..." -ForegroundColor Green
+# 17. Locate or download oscdimg.exe (checks Windows ADK first)
 $oscdimgExe = Join-Path -Path $PSScriptRoot -ChildPath "oscdimg.exe"
+if (-not (Test-Path -LiteralPath $oscdimgExe)) {
+    # Check Windows ADK installed paths
+    $adkCandidates = @(
+        "${env:ProgramFiles(x86)}\Windows Kits\10\Assessment and Deployment Kit\Deployment Tools\amd64\Oscdimg\oscdimg.exe",
+        "${env:ProgramFiles(x86)}\Windows Kits\10\Assessment and Deployment Kit\Deployment Tools\arm64\Oscdimg\oscdimg.exe",
+        "$env:ProgramFiles\Windows Kits\10\Assessment and Deployment Kit\Deployment Tools\amd64\Oscdimg\oscdimg.exe"
+    )
+    foreach ($candidate in $adkCandidates) {
+        if (Test-Path -LiteralPath $candidate) {
+            $oscdimgExe = $candidate
+            Write-Host "Found local oscdimg.exe in Windows ADK: $oscdimgExe" -ForegroundColor Green
+            break
+        }
+    }
+}
+
 if (-not (Test-Path -LiteralPath $oscdimgExe)) {
     Write-Host "Downloading oscdimg.exe..." -ForegroundColor Cyan
     $oscdimgUrl = "https://msdl.microsoft.com/download/symbols/oscdimg.exe/3D44737265000/oscdimg.exe"
@@ -878,6 +939,8 @@ if (-not (Test-Path -LiteralPath $oscdimgExe)) {
     }
 }
 
+# 18. Create bootable ISO (oscdimg) with Architecture-aware bootdata and Volume Label
+Write-Host "Creating bootable ISO image..." -ForegroundColor Green
 $outputIso = Join-Path -Path $PSScriptRoot -ChildPath "nano11.iso"
 $etfsBoot = Join-Path -Path "$nano11Dir\boot" -ChildPath "etfsboot.com"
 $efiSys   = Join-Path -Path "$nano11Dir\efi\microsoft\boot" -ChildPath "efisys.bin"
@@ -892,20 +955,25 @@ if ($architecture -eq 'arm64' -or (-not (Test-Path -LiteralPath $etfsBoot))) {
 }
 
 if (Test-Path -LiteralPath $oscdimgExe) {
-    & "$oscdimgExe" -m -o -u2 -udfver102 "-bootdata:$bootData" "$nano11Dir" "$outputIso"
+    & "$oscdimgExe" -m -o -u2 -udfver102 -l"nano11" "-bootdata:$bootData" "$nano11Dir" "$outputIso"
     if (Test-Path -LiteralPath $outputIso) {
-        $isoSizeMB = [math]::Round((Get-Item -LiteralPath $outputIso).Length / 1MB, 2)
+        $isoItem = Get-Item -LiteralPath $outputIso
+        $isoSizeMB = [math]::Round($isoItem.Length / 1MB, 2)
+        Write-Host "Calculating SHA256 checksum..." -ForegroundColor Cyan
+        $sha256 = (Get-FileHash -LiteralPath $outputIso -Algorithm SHA256).Hash
+        
         Write-Host ""
         Write-Host "=========================================================" -ForegroundColor Green
         Write-Host "   Creation complete! Your ISO is named nano11.iso        " -ForegroundColor Green
-        Write-Host "   Path: $outputIso ($isoSizeMB MB)                       " -ForegroundColor Green
+        Write-Host "   Path:   $outputIso ($isoSizeMB MB)                     " -ForegroundColor Green
+        Write-Host "   SHA256: $sha256                                        " -ForegroundColor Green
         Write-Host "=========================================================" -ForegroundColor Green
     }
 } else {
     Write-Host "oscdimg.exe not found. You can manually package the ISO from: $nano11Dir" -ForegroundColor Yellow
 }
 
-# 18. Cleanup scratch and temporary files
+# 19. Cleanup scratch and temporary files
 if (-not $NonInteractive) {
     Read-Host "Press Enter to clean up working directories and exit."
 }

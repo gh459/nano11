@@ -12,7 +12,7 @@ A PowerShell script to build a heavily trimmed-down, lightning-fast Windows 11 i
 
 Introducing **nano11 builder**, a powerful PowerShell script that creates an ultra-minimal Windows 11 image!
 
-The goal of nano11 is to automate the creation of a streamlined Windows 11 image. The script uses native DISM capabilities and the official `oscdimg.exe` (downloaded automatically) to create a bootable ISO with no third-party binary dependencies. An included unattended answer file bypasses Microsoft Account requirements during setup, enables automatic local administrator logon, and configures a clean, bloatware-free desktop.
+The goal of nano11 is to automate the creation of a streamlined Windows 11 image. The script uses native DISM capabilities and official deployment tools (`oscdimg.exe`) to create a bootable ISO with no third-party binary dependencies. An included unattended answer file bypasses Microsoft Account requirements during setup, enables automatic local administrator logon, enables CompactOS compression, and configures a clean, bloatware-free desktop.
 
 ---
 
@@ -22,28 +22,33 @@ The goal of nano11 is to automate the creation of a streamlined Windows 11 image
   - Works on any host operating system language/locale without permission or translation errors.
   - Replaces localized tools (`takeown`/`icacls`) with native .NET Access Control Lists (`Set-Acl` via Well-Known Administrator SID `S-1-5-32-544`).
 - **🛡️ Customization Options (Issues #1, #9, #10, #12, #13)**:
-  - **Keep Asian IMEs**: Choose whether to retain Japanese, Chinese (Simplified/Traditional), and Korean input methods (Default: Keep).
+  - **Keep Asian IMEs**: Retain Japanese, Chinese (Simplified/Traditional), and Korean input methods (Default: Keep).
   - **Windows Defender Toggle**: Option to keep Windows Defender active or remove it completely.
   - **Fonts & Drivers**: Option to preserve international font collections and essential hardware drivers.
   - **Windows Update**: Option to keep Windows Update enabled or disabled.
   - **Bluetooth & Audio**: Preserves Bluetooth audio transport and peripheral services by default so wireless headphones and controllers function properly.
+- **🐧 WSL2 & Virtualization Support (Issue #5)**:
+  - Optional `-EnableWSL` flag pre-enables `VirtualMachinePlatform` and `Microsoft-Windows-Subsystem-Linux` before WinSxS stripping, allowing full WSL2, Docker, and Linux containers on a lightweight nano11 installation.
 - **💾 Custom Working Directory Support (Issues #27, #23)**:
   - Use `-WorkDir <Path>` to specify another partition (e.g. `D:\Build`) for extracting and building images, completely preventing DISM crashes (`0xc1510115`) caused by low C: drive SSD space.
   - Automatically selects an alternate drive with ample free space if C: has less than 25 GB.
-- **⚡ Unattended Setup Fixed (Issue #21)**:
-  - Automatically injects `autounattend.xml` directly into the **ISO root directory**, ensuring Windows Setup detects and executes unattended setup out-of-the-box.
-  - **Self-Healing**: If `autounattend.xml` is missing locally (e.g. script downloaded standalone), it will automatically download it from GitHub.
-- **📱 ARM64 & UEFI Support (Issues #2, #8, #20)**:
+- **⚡ Unattended Setup Fixed & Streamlined (Issues #3, #21)**:
+  - Injects `autounattend.xml` directly into the **ISO root directory**, ensuring Windows Setup detects unattended configuration out-of-the-box.
+  - Removed dummy product key to eliminate "Invalid Product Key" stops during setup.
+  - **Self-Healing**: If `autounattend.xml` is missing locally, it will automatically download it from GitHub.
+- **🗜️ Ultra-Compact Footprint via CompactOS (Issue #22)**:
+  - Automatically enables `compact.exe /CompactOS:always` on first logon, achieving installed disk space of **2.5 GB – 3.0 GB**.
+- **🎨 Shell & Icon Refresh (Issue #19)**:
+  - Automatically invokes `ie4uinit.exe -show` on first logon to rebuild icon caches, preventing blank icons on Start Menu and Settings.
+- **📱 ARM64 & Apple Silicon Support (Issues #2, #8, #20)**:
   - Dynamic architecture detection (`amd64` / `arm64`).
-  - Automatically adjusts `autounattend.xml` processor architecture and generates UEFI-compliant boot records for ARM64.
+  - Automatically adjusts `autounattend.xml` processor architecture and generates UEFI-compliant boot records for ARM64 (Parallels Desktop, VMware Fusion, UTM).
 - **🚀 Canary 28020+ & Legacy Hardware Setup Bypass (Issue #29)**:
   - Automatically neutralizes `sources\appraiserres.dll` alongside offline registry `LabConfig` tweaks, allowing installation on unsupported CPUs, TPM 1.2/none, and older motherboards (e.g. Intel 6-series H67, 2nd-7th gen Core).
-- **🛠️ Installation Failure Fixes (Issues #4, #11, #17, #28)**:
-  - Prevents "Windows 11 installation has failed" errors on Windows 11 24H2 and IoT Enterprise LTSC 2024 by properly preserving essential Servicing Stack and Windows Foundation components.
-  - Fixes WinSxS permission issues using the safe robocopy mirror technique.
+- **🛠️ Robust DISM & ISO Generation**:
   - Automatically repairs orphaned DISM mount points on startup (`dism /Cleanup-Wim`).
-- **📦 Support for `install.esd`**:
-  - Automatically detects `install.esd` in media and exports it to `install.wim` on-the-fly.
+  - Handles single-index and dual-index `boot.wim` structures seamlessly.
+  - Generates ISO with proper volume label (`-l"nano11"`) and outputs SHA256 verification hash.
 - **📄 MIT License Included (Issue #14)**:
   - Fully compliant open-source license.
 
@@ -94,8 +99,8 @@ The resulting minimal OS is **not serviceable via cumulative updates** when WinS
 ### **3. Non-Interactive / CLI Automation**
 You can also run the builder non-interactively with customized flags:
 ```powershell
-# Recommended balanced build: Keep Asian IMEs, Defender, international fonts, and Bluetooth:
-.\nano11builder.ps1 -NonInteractive -KeepIME -KeepDefender -KeepFonts -KeepBluetooth
+# Recommended balanced build: Keep Asian IMEs, Defender, international fonts, Bluetooth, and enable WSL2:
+.\nano11builder.ps1 -NonInteractive -KeepIME -KeepDefender -KeepFonts -KeepBluetooth -EnableWSL
 
 # Specify a custom working drive (e.g. when C: drive has low SSD space):
 .\nano11builder.ps1 -WorkDir "D:\nano11_temp"
@@ -115,8 +120,9 @@ You can also run the builder non-interactively with customized flags:
 | `-KeepDrivers` | Retains printer, scanner, and legacy drivers in DriverStore |
 | `-KeepWindowsUpdate` | Retains Windows Update services and registry endpoints |
 | `-KeepBluetooth` | Retains Bluetooth peripheral, audio transport, and user services |
+| `-EnableWSL` | Pre-enables WSL2 and Virtual Machine Platform before stripping WinSxS |
 
-When finished, your bootable ISO will be generated in the script directory as `nano11.iso`!
+When finished, your bootable ISO will be generated in the script directory as `nano11.iso` with SHA256 verification hash displayed!
 
 ---
 
