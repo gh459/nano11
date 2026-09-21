@@ -27,6 +27,12 @@ The goal of nano11 is to automate the creation of a streamlined Windows 11 image
   - **Fonts & Drivers**: Option to preserve international font collections and essential hardware drivers.
   - **Windows Update**: Option to keep Windows Update enabled or disabled.
   - **Bluetooth & Audio**: Preserves Bluetooth audio transport and peripheral services by default so wireless headphones and controllers function properly.
+  - **Recovery Environment (WinRE)**: Retain Windows RE with `-KeepRecovery` or `-KeepWinRE` (Default: cleanly disabled without breaking setup).
+- **🔧 Windows 11 Installation Failure Fixed (Resolves Issue #11 & Setup Rollbacks)**:
+  - **0-byte `winre.wim` Crash Fixed**: Fixed the infamous `0x8007000B (ERROR_BAD_FORMAT)` bug where Windows Setup crashes at ~100% when attempting to mount empty dummy `winre.wim` during SafeOS staging. WinRE is now properly disabled offline via `reagentc` and `ReAgent.xml`.
+  - **WinSxS Servicing & Specialize Pass Protected**: Eliminated corruptive post-trim `dism /StartComponentCleanup /ResetBase` and preserved critical modular servicing/setup/deployment/storage/crypto assemblies required by Windows 11 24H2, 23H2, and IoT Enterprise LTSC 2024.
+  - **Setup Script Pre-Extraction**: Unattend scripts (`Specialize.ps1`, `DefaultUser.ps1`, etc.) are pre-extracted directly into the image during build time with robust `try/catch` error shielding, preventing specialize pass aborts.
+  - **Bootable WIM Exports**: Added `/Bootable` flag to all `boot.wim` exports to prevent `0xc1510115` errors across all UEFI/BIOS firmware.
 - **🐧 WSL2 & Virtualization Support (Issue #5)**:
   - Optional `-EnableWSL` flag pre-enables `VirtualMachinePlatform` and `Microsoft-Windows-Subsystem-Linux` before WinSxS stripping, allowing full WSL2, Docker, and Linux containers on a lightweight nano11 installation.
 - **💾 Custom Working Directory Support (Issues #27, #23)**:
@@ -121,6 +127,7 @@ You can also run the builder non-interactively with customized flags:
 | `-KeepWindowsUpdate` | Retains Windows Update services and registry endpoints |
 | `-KeepBluetooth` | Retains Bluetooth peripheral, audio transport, and user services |
 | `-EnableWSL` | Pre-enables WSL2 and Virtual Machine Platform before stripping WinSxS |
+| `-KeepRecovery` | Retains Windows Recovery Environment (WinRE) instead of disabling it |
 
 When finished, your bootable ISO will be generated in the script directory as `nano11.iso` with SHA256 verification hash displayed!
 

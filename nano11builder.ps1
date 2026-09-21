@@ -28,7 +28,9 @@ param(
     [switch]$KeepDrivers,
     [switch]$KeepWindowsUpdate,
     [switch]$KeepBluetooth,
-    [switch]$EnableWSL
+    [switch]$EnableWSL,
+    [switch]$KeepRecovery,
+    [switch]$KeepWinRE
 )
 
 # 1. Check and adjust Execution Policy
@@ -182,15 +184,17 @@ $removeDrivers = $true
 $disableWU = $true
 $keepBT = $true
 $wslSupport = $false
+$keepRecoveryEnv = $false
 
 if ($NonInteractive) {
-    if ($KeepDefender)      { $removeDefender = $false }
-    if (-not $KeepIME)      { $keepAsianIME = $false }
-    if (-not $KeepFonts)    { $keepExtraFonts = $false }
-    if ($KeepDrivers)       { $removeDrivers = $false }
-    if ($KeepWindowsUpdate) { $disableWU = $false }
-    if ($KeepBluetooth)     { $keepBT = $true }
-    if ($EnableWSL)         { $wslSupport = $true }
+    if ($KeepDefender)          { $removeDefender = $false }
+    if (-not $KeepIME)          { $keepAsianIME = $false }
+    if (-not $KeepFonts)        { $keepExtraFonts = $false }
+    if ($KeepDrivers)           { $removeDrivers = $false }
+    if ($KeepWindowsUpdate)     { $disableWU = $false }
+    if ($KeepBluetooth)         { $keepBT = $true }
+    if ($EnableWSL)             { $wslSupport = $true }
+    if ($KeepRecovery -or $KeepWinRE) { $keepRecoveryEnv = $true }
 } else {
     Write-Host "Configure debloat options (Press Enter to use recommended defaults):" -ForegroundColor Gray
     
@@ -229,6 +233,10 @@ if ($NonInteractive) {
     # 7. WSL2 & Virtualization (Resolves Issue #5)
     $opt = Read-Host "7. Enable WSL2 and Virtual Machine Platform before stripping WinSxS? [y/N] (Default: N)"
     if ($opt -and ($opt.Trim().ToLower() -in @('yes', 'y'))) { $wslSupport = $true }
+
+    # 8. Windows Recovery Environment (WinRE)
+    $opt = Read-Host "8. Keep Windows Recovery Environment (WinRE)? [y/N] (Default: N - removes WinRE cleanly)"
+    if ($opt -and ($opt.Trim().ToLower() -in @('yes', 'y'))) { $keepRecoveryEnv = $true }
 }
 
 Write-Host ""
@@ -240,6 +248,7 @@ Write-Host "  - Remove Legacy Drivers:   $removeDrivers"
 Write-Host "  - Disable Windows Update:  $disableWU"
 Write-Host "  - Keep Bluetooth Services: $keepBT"
 Write-Host "  - Enable WSL2 Platform:    $wslSupport"
+Write-Host "  - Keep Recovery (WinRE):   $keepRecoveryEnv"
 Write-Host ""
 
 # Determine Working Directory (Resolves Issue #27, #23 - Low disk space on C:)
@@ -570,7 +579,7 @@ Remove-Item -Path (Join-Path -Path $winDir -ChildPath "Help") -Recurse -Force -E
 Remove-Item -Path (Join-Path -Path $winDir -ChildPath "Cursors") -Recurse -Force -ErrorAction SilentlyContinue
 
 # Edge, WinRE, and OneDrive
-Write-Host "Removing Edge, WinRE, and OneDrive..." -ForegroundColor Cyan
+Write-Host "Removing Edge and OneDrive..." -ForegroundColor Cyan
 Remove-Item -Path "$scratchDir\Program Files (x86)\Microsoft\Edge*" -Recurse -Force -ErrorAction SilentlyContinue
 if ($architecture -eq 'amd64') {
     $edgeFolders = Get-ChildItem -Path "$scratchDir\Windows\WinSxS" -Filter "amd64_microsoft-edge-webview_31bf3856ad364e35*" -Directory -ErrorAction SilentlyContinue
@@ -579,9 +588,43 @@ if ($architecture -eq 'amd64') {
     }
 }
 Remove-Item -Path "$scratchDir\Windows\System32\Microsoft-Edge-Webview" -Recurse -Force -ErrorAction SilentlyContinue
-Remove-Item -Path "$scratchDir\Windows\System32\Recovery\winre.wim" -Recurse -Force -ErrorAction SilentlyContinue
-New-Item -Path "$scratchDir\Windows\System32\Recovery\winre.wim" -ItemType File -Force | Out-Null
 Remove-Item -Path "$scratchDir\Windows\System32\OneDriveSetup.exe" -Force -ErrorAction SilentlyContinue
+
+# WinRE Handling (Resolves "Windows 11 installation has failed" 0x8007000B error - Issue #11)
+if ($keepRecoveryEnv) {
+    Write-Host "Preserving Windows Recovery Environment (WinRE)..." -ForegroundColor Green
+} else {
+    Write-Host "Disabling Windows Recovery Environment cleanly..." -ForegroundColor Cyan
+    # CRITICAL: Completely remove winre.wim. NEVER create a 0-byte placeholder,
+    # as 0-byte WIMs cause Setup Pre-Finalize phase to crash with ERROR_BAD_FORMAT (0x8007000B)!
+    Remove-Item -Path "$scratchDir\Windows\System32\Recovery\winre.wim" -Force -ErrorAction SilentlyContinue
+
+    # Offline unregister WinRE so Windows Setup SafeOS staging is cleanly skipped
+    & reagentc.exe /disable /target "$scratchDir\Windows" > $null 2>&1
+
+    # Sanitize ReAgent.xml if present to indicate WinRE is not staged/installed
+    $reagentXmlPath = Join-Path -Path $scratchDir -ChildPath "Windows\System32\Recovery\ReAgent.xml"
+    if (Test-Path -LiteralPath $reagentXmlPath) {
+        try {
+            $rXml = [xml](Get-Content -LiteralPath $reagentXmlPath -Raw)
+            if ($rXml.WindowsRE -and $rXml.WindowsRE.WinreInformation) {
+                if ($rXml.WindowsRE.WinreInformation.WindowsREpath) {
+                    $rXml.WindowsRE.WinreInformation.WindowsREpath.path = ""
+                }
+                if ($rXml.WindowsRE.WinreInformation.IsInstalled) {
+                    $rXml.WindowsRE.WinreInformation.IsInstalled.state = "0"
+                }
+                if ($rXml.WindowsRE.WinreInformation.ScheduledOperation) {
+                    $rXml.WindowsRE.WinreInformation.ScheduledOperation.state = "0"
+                }
+                if ($rXml.WindowsRE.WinreInformation.WinREStaged) {
+                    $rXml.WindowsRE.WinreInformation.WinREStaged.state = "0"
+                }
+                $rXml.Save($reagentXmlPath)
+            }
+        } catch {}
+    }
+}
 
 # Pre-cleanup DISM component base
 Write-Host "Running DISM Component Cleanup to consolidate WinSxS base..." -ForegroundColor Green
@@ -600,17 +643,46 @@ $dirsToKeep = @(
     "InstallTemp",
     "Manifests",
     "SettingsManifests",
+    "*servicing*",
     "*servicingstack*",
     "*servicingcommon*",
     "*servicing-adm*",
     "*servicing-onecore*",
     "*windows-foundation*",
+    "*foundation*",
     "*common-controls*",
     "*gdiplus*",
     "*isolationautomation*",
     "*vc80.crt*",
-    "*vc90.crt*"
+    "*vc90.crt*",
+    "*setup*",
+    "*deployment*",
+    "*sysprep*",
+    "*windeploy*",
+    "*cbs*",
+    "*onecore*",
+    "*kernel*",
+    "*storage*",
+    "*disk*",
+    "*cryptography*",
+    "*crypto*",
+    "*dcom*",
+    "*rpc*",
+    "*eventlog*"
 )
+
+if ($keepDrivers) {
+    $dirsToKeep += @("*driver*", "*inf*", "*net*")
+}
+if (-not $removeDefender) {
+    $dirsToKeep += @("*defender*", "*security-health*", "*smartscreen*")
+}
+if ($keepAsianIME) {
+    $dirsToKeep += @("*inputmethod*", "*ime*")
+}
+if ($wslSupport) {
+    $dirsToKeep += @("*hyperv*", "*vm*", "*subsystem-linux*")
+}
 
 if ($architecture -eq 'amd64') {
     $dirsToKeep += @(
@@ -814,6 +886,30 @@ if (Test-Path -LiteralPath $unattendSource) {
     $pantherDir = Join-Path -Path $scratchDir -ChildPath "Windows\Panther"
     New-Item -Path $pantherDir -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null
     $xmlContent | Set-Content -LiteralPath (Join-Path -Path $pantherDir -ChildPath "unattend.xml") -Encoding utf8
+
+    # Pre-extract Setup scripts directly into image (Windows\Setup\Scripts)
+    # Guarantees Specialize.ps1, DefaultUser.ps1, UserOnce.ps1, and FirstLogon.ps1 exist
+    # even if dynamic XML extraction during Specialize pass is blocked or delayed.
+    $setupScriptsDir = Join-Path -Path $scratchDir -ChildPath "Windows\Setup\Scripts"
+    New-Item -Path $setupScriptsDir -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null
+    try {
+        $xmlDoc = [xml]$xmlContent
+        if ($xmlDoc.unattend -and $xmlDoc.unattend.Extensions -and $xmlDoc.unattend.Extensions.File) {
+            foreach ($fileNode in $xmlDoc.unattend.Extensions.File) {
+                $rawTarget = $fileNode.GetAttribute("path")
+                if ($rawTarget) {
+                    $relTarget = $rawTarget -replace '^[A-Za-z]:\\Windows\\', 'Windows\'
+                    $destPath = Join-Path -Path $scratchDir -ChildPath $relTarget
+                    $parentDir = Split-Path -Path $destPath -Parent
+                    if (-not (Test-Path -LiteralPath $parentDir)) {
+                        New-Item -Path $parentDir -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null
+                    }
+                    [System.IO.File]::WriteAllText($destPath, $fileNode.InnerText.Trim(), [System.Text.Encoding]::UTF8)
+                }
+            }
+            Write-Host "  - Pre-extracted Setup scripts to Windows\Setup\Scripts" -ForegroundColor Green
+        }
+    } catch {}
 }
 
 # Unmount Registry Hives
@@ -842,8 +938,7 @@ foreach ($service in $servicesToRemove) {
 reg.exe unload HKLM\zSYSTEM | Out-Null
 
 # 13. Unmount and re-export install.wim
-Write-Host "Cleaning up and unmounting install.wim..." -ForegroundColor Green
-& dism.exe /English "/image:$scratchDir" /Cleanup-Image /StartComponentCleanup /ResetBase > $null 2>&1
+Write-Host "Unmounting install.wim..." -ForegroundColor Green
 
 [GC]::Collect()
 [GC]::WaitForPendingFinalizers()
@@ -880,7 +975,7 @@ if (Test-Path -LiteralPath $bootWimPath) {
     $setupIndex = if ($hasIndex2) { 2 } else { 1 }
 
     $newBootWim = Join-Path -Path "$nano11Dir\sources" -ChildPath "boot_new.wim"
-    & dism.exe /English /Export-Image "/SourceImageFile:$bootWimPath" "/SourceIndex:$setupIndex" "/DestinationImageFile:$newBootWim"
+    & dism.exe /English /Export-Image "/SourceImageFile:$bootWimPath" "/SourceIndex:$setupIndex" "/DestinationImageFile:$newBootWim" /Bootable
     & dism.exe /English /Mount-Image "/ImageFile:$newBootWim" /Index:1 "/MountDir:$scratchDir"
 
     reg.exe load HKLM\zSYSTEM "$scratchDir\Windows\System32\config\SYSTEM" | Out-Null
@@ -898,7 +993,7 @@ if (Test-Path -LiteralPath $bootWimPath) {
 
     $finalBootWim = Join-Path -Path "$nano11Dir\sources" -ChildPath "boot_final.wim"
     Remove-Item -LiteralPath $bootWimPath -Force -ErrorAction SilentlyContinue
-    & dism.exe /English /Export-Image "/SourceImageFile:$newBootWim" /SourceIndex:1 "/DestinationImageFile:$finalBootWim" /Compress:max
+    & dism.exe /English /Export-Image "/SourceImageFile:$newBootWim" /SourceIndex:1 "/DestinationImageFile:$finalBootWim" /Compress:max /Bootable
     Remove-Item -LiteralPath $newBootWim -Force -ErrorAction SilentlyContinue
     Rename-Item -LiteralPath $finalBootWim -NewName "boot.wim" -Force
 }
