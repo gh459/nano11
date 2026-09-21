@@ -27,10 +27,11 @@ The goal of nano11 is to automate the creation of a streamlined Windows 11 image
   - **Fonts & Drivers**: Option to preserve international font collections and essential hardware drivers.
   - **Windows Update**: Option to keep Windows Update enabled or disabled.
   - **Bluetooth & Audio**: Preserves Bluetooth audio transport and peripheral services by default so wireless headphones and controllers function properly.
-  - **Recovery Environment (WinRE)**: Retain Windows RE with `-KeepRecovery` or `-KeepWinRE` (Default: cleanly disabled without breaking setup).
+  - **Recovery Environment (WinRE)**: Retain Windows RE with `-KeepRecovery` or `-KeepWinRE`. By default, WinRE is kept intact during installation so Windows Setup SafeOS staging succeeds 100%, then safely disabled and deleted online on first logon.
 - **🔧 Windows 11 Installation Failure Fixed (Resolves Issue #11 & Setup Rollbacks)**:
-  - **0-byte `winre.wim` Crash Fixed**: Fixed the infamous `0x8007000B (ERROR_BAD_FORMAT)` bug where Windows Setup crashes at ~100% when attempting to mount empty dummy `winre.wim` during SafeOS staging. WinRE is now properly disabled offline via `reagentc` and `ReAgent.xml`.
-  - **WinSxS Servicing & Specialize Pass Protected**: Eliminated corruptive post-trim `dism /StartComponentCleanup /ResetBase` and preserved critical modular servicing/setup/deployment/storage/crypto assemblies required by Windows 11 24H2, 23H2, and IoT Enterprise LTSC 2024.
+  - **Setup Pre-Finalize SafeOS Crash Fixed**: Solved the `0x80070002` / `0x8007000B` error where Windows Setup crashes at ~100% when attempting to stage missing or corrupt `winre.wim`. `winre.wim` is preserved at build time and removed cleanly via online `reagentc /disable` during `FirstLogon.ps1`.
+  - **SafeDebloat Component Store Mode (Default)**: Protects CBS servicing integrity and localized (`ja-JP`) resources using official DISM `StartComponentCleanup /ResetBase` + cache pruning. Aggressive pruning mode (`-AggressiveWinSxS`) is also available with comprehensive core system and language preservation.
+  - **Administrator Account Auto-Activation**: Explicitly activates the built-in Administrator account in `Specialize.ps1` for seamless unattended setup across Windows 11 Home and Pro editions.
   - **Setup Script Pre-Extraction**: Unattend scripts (`Specialize.ps1`, `DefaultUser.ps1`, etc.) are pre-extracted directly into the image during build time with robust `try/catch` error shielding, preventing specialize pass aborts.
   - **Bootable WIM Exports**: Added `/Bootable` flag to all `boot.wim` exports to prevent `0xc1510115` errors across all UEFI/BIOS firmware.
 - **🐧 WSL2 & Virtualization Support (Issue #5)**:
@@ -127,7 +128,9 @@ You can also run the builder non-interactively with customized flags:
 | `-KeepWindowsUpdate` | Retains Windows Update services and registry endpoints |
 | `-KeepBluetooth` | Retains Bluetooth peripheral, audio transport, and user services |
 | `-EnableWSL` | Pre-enables WSL2 and Virtual Machine Platform before stripping WinSxS |
-| `-KeepRecovery` | Retains Windows Recovery Environment (WinRE) instead of disabling it |
+| `-KeepRecovery` | Retains Windows Recovery Environment (WinRE) permanently (Default: disabled safely post-install) |
+| `-SafeDebloat` | Enables safe component store cleanup mode preserving CBS integrity (Default: True) |
+| `-AggressiveWinSxS` | Opts into aggressive WinSxS pruning mode (Experimental, for testing) |
 
 When finished, your bootable ISO will be generated in the script directory as `nano11.iso` with SHA256 verification hash displayed!
 

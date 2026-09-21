@@ -30,7 +30,10 @@ param(
     [switch]$KeepBluetooth,
     [switch]$EnableWSL,
     [switch]$KeepRecovery,
-    [switch]$KeepWinRE
+    [switch]$KeepWinRE,
+    [switch]$SafeDebloat = $true,
+    [switch]$AggressiveWinSxS,
+    [switch]$TrimWinSxS
 )
 
 # 1. Check and adjust Execution Policy
@@ -185,6 +188,7 @@ $disableWU = $true
 $keepBT = $true
 $wslSupport = $false
 $keepRecoveryEnv = $false
+$safeDebloatMode = $true
 
 if ($NonInteractive) {
     if ($KeepDefender)          { $removeDefender = $false }
@@ -195,6 +199,7 @@ if ($NonInteractive) {
     if ($KeepBluetooth)         { $keepBT = $true }
     if ($EnableWSL)             { $wslSupport = $true }
     if ($KeepRecovery -or $KeepWinRE) { $keepRecoveryEnv = $true }
+    if ($AggressiveWinSxS -or $TrimWinSxS) { $safeDebloatMode = $false }
 } else {
     Write-Host "Configure debloat options (Press Enter to use recommended defaults):" -ForegroundColor Gray
     
@@ -235,8 +240,16 @@ if ($NonInteractive) {
     if ($opt -and ($opt.Trim().ToLower() -in @('yes', 'y'))) { $wslSupport = $true }
 
     # 8. Windows Recovery Environment (WinRE)
-    $opt = Read-Host "8. Keep Windows Recovery Environment (WinRE)? [y/N] (Default: N - removes WinRE cleanly)"
+    $opt = Read-Host "8. Keep Windows Recovery Environment (WinRE)? [y/N] (Default: N - removes WinRE safely post-install)"
     if ($opt -and ($opt.Trim().ToLower() -in @('yes', 'y'))) { $keepRecoveryEnv = $true }
+
+    # 9. Component Store (WinSxS) Optimization Mode
+    $opt = Read-Host "9. Component Store optimization mode [1=Safe Cleanup (Recommended: 100% Setup success), 2=Aggressive Pruning (Experimental)] (Default: 1)"
+    if ($opt -and ($opt.Trim() -eq '2')) {
+        $safeDebloatMode = $false
+    } else {
+        $safeDebloatMode = $true
+    }
 }
 
 Write-Host ""
@@ -249,6 +262,7 @@ Write-Host "  - Disable Windows Update:  $disableWU"
 Write-Host "  - Keep Bluetooth Services: $keepBT"
 Write-Host "  - Enable WSL2 Platform:    $wslSupport"
 Write-Host "  - Keep Recovery (WinRE):   $keepRecoveryEnv"
+Write-Host "  - Safe Debloat (WinSxS):   $safeDebloatMode"
 Write-Host ""
 
 # Determine Working Directory (Resolves Issue #27, #23 - Low disk space on C:)
@@ -590,129 +604,139 @@ if ($architecture -eq 'amd64') {
 Remove-Item -Path "$scratchDir\Windows\System32\Microsoft-Edge-Webview" -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item -Path "$scratchDir\Windows\System32\OneDriveSetup.exe" -Force -ErrorAction SilentlyContinue
 
-# WinRE Handling (Resolves "Windows 11 installation has failed" 0x8007000B error - Issue #11)
+# WinRE Handling (Guarantees Setup SafeOS staging succeeds, then cleans up post-install)
+$recoveryDir = Join-Path -Path $scratchDir -ChildPath "Windows\System32\Recovery"
+$keepMarkerFile = Join-Path -Path $recoveryDir -ChildPath "winre.wim.keep"
 if ($keepRecoveryEnv) {
     Write-Host "Preserving Windows Recovery Environment (WinRE)..." -ForegroundColor Green
+    New-Item -Path $keepMarkerFile -ItemType File -Force -ErrorAction SilentlyContinue | Out-Null
 } else {
-    Write-Host "Disabling Windows Recovery Environment cleanly..." -ForegroundColor Cyan
-    # CRITICAL: Completely remove winre.wim. NEVER create a 0-byte placeholder,
-    # as 0-byte WIMs cause Setup Pre-Finalize phase to crash with ERROR_BAD_FORMAT (0x8007000B)!
-    Remove-Item -Path "$scratchDir\Windows\System32\Recovery\winre.wim" -Force -ErrorAction SilentlyContinue
-
-    # Offline unregister WinRE so Windows Setup SafeOS staging is cleanly skipped
-    & reagentc.exe /disable /target "$scratchDir\Windows" > $null 2>&1
-
-    # Sanitize ReAgent.xml if present to indicate WinRE is not staged/installed
-    $reagentXmlPath = Join-Path -Path $scratchDir -ChildPath "Windows\System32\Recovery\ReAgent.xml"
-    if (Test-Path -LiteralPath $reagentXmlPath) {
-        try {
-            $rXml = [xml](Get-Content -LiteralPath $reagentXmlPath -Raw)
-            if ($rXml.WindowsRE -and $rXml.WindowsRE.WinreInformation) {
-                if ($rXml.WindowsRE.WinreInformation.WindowsREpath) {
-                    $rXml.WindowsRE.WinreInformation.WindowsREpath.path = ""
-                }
-                if ($rXml.WindowsRE.WinreInformation.IsInstalled) {
-                    $rXml.WindowsRE.WinreInformation.IsInstalled.state = "0"
-                }
-                if ($rXml.WindowsRE.WinreInformation.ScheduledOperation) {
-                    $rXml.WindowsRE.WinreInformation.ScheduledOperation.state = "0"
-                }
-                if ($rXml.WindowsRE.WinreInformation.WinREStaged) {
-                    $rXml.WindowsRE.WinreInformation.WinREStaged.state = "0"
-                }
-                $rXml.Save($reagentXmlPath)
-            }
-        } catch {}
+    Write-Host "Configuring Windows Recovery Environment for post-install cleanup..." -ForegroundColor Cyan
+    # CRITICAL: winre.wim MUST remain inside the image during build time!
+    # Windows Setup (setup.exe) mandatory Pre-Finalize phase stages SafeOS from winre.wim.
+    # If winre.wim is removed offline or is 0 bytes, Setup aborts with "Windows 11 installation has failed" (0x80070002 / 0x8007000B).
+    # Instead, we keep winre.wim for Setup to succeed, and FirstLogon.ps1 unregisters (reagentc /disable) and deletes it online post-install.
+    if (Test-Path -LiteralPath $keepMarkerFile) {
+        Remove-Item -LiteralPath $keepMarkerFile -Force -ErrorAction SilentlyContinue
     }
 }
 
-# Pre-cleanup DISM component base
-Write-Host "Running DISM Component Cleanup to consolidate WinSxS base..." -ForegroundColor Green
-& dism.exe /English "/image:$scratchDir" /Cleanup-Image /StartComponentCleanup /ResetBase > $null 2>&1
+# 9. Component Store (WinSxS) Optimization
+if ($safeDebloatMode) {
+    Write-Host "Consolidating component store safely via DISM Component Cleanup..." -ForegroundColor Green
+    & dism.exe /English "/image:$scratchDir" /Cleanup-Image /StartComponentCleanup /ResetBase > $null 2>&1
 
-# 9. WinSxS Slimming (Robust & compatible with 23H2, 24H2, LTSC 2024)
-Write-Host "Slimming WinSxS directory safely..." -ForegroundColor Cyan
-$sourceWinSxS = Join-Path -Path $scratchDir -ChildPath "Windows\WinSxS"
-$tempWinSxS = Join-Path -Path $scratchDir -ChildPath "Windows\WinSxS_edit"
-New-Item -Path $tempWinSxS -ItemType Directory -Force | Out-Null
+    Write-Host "Cleaning WinSxS temporary, install, and backup caches..." -ForegroundColor Cyan
+    Remove-Item -Path "$scratchDir\Windows\WinSxS\Backup\*" -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -Path "$scratchDir\Windows\WinSxS\InstallTemp\*" -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -Path "$scratchDir\Windows\WinSxS\Temp\*" -Recurse -Force -ErrorAction SilentlyContinue
+} else {
+    Write-Host "Running Aggressive WinSxS Pruning (Experimental)..." -ForegroundColor Yellow
+    # Pre-cleanup DISM component base before trimming
+    & dism.exe /English "/image:$scratchDir" /Cleanup-Image /StartComponentCleanup /ResetBase > $null 2>&1
 
-$dirsToKeep = @(
-    "Catalogs",
-    "FileMaps",
-    "Fusion",
-    "InstallTemp",
-    "Manifests",
-    "SettingsManifests",
-    "*servicing*",
-    "*servicingstack*",
-    "*servicingcommon*",
-    "*servicing-adm*",
-    "*servicing-onecore*",
-    "*windows-foundation*",
-    "*foundation*",
-    "*common-controls*",
-    "*gdiplus*",
-    "*isolationautomation*",
-    "*vc80.crt*",
-    "*vc90.crt*",
-    "*setup*",
-    "*deployment*",
-    "*sysprep*",
-    "*windeploy*",
-    "*cbs*",
-    "*onecore*",
-    "*kernel*",
-    "*storage*",
-    "*disk*",
-    "*cryptography*",
-    "*crypto*",
-    "*dcom*",
-    "*rpc*",
-    "*eventlog*"
-)
+    $sourceWinSxS = Join-Path -Path $scratchDir -ChildPath "Windows\WinSxS"
+    $tempWinSxS = Join-Path -Path $scratchDir -ChildPath "Windows\WinSxS_edit"
+    New-Item -Path $tempWinSxS -ItemType Directory -Force | Out-Null
 
-if ($keepDrivers) {
-    $dirsToKeep += @("*driver*", "*inf*", "*net*")
-}
-if (-not $removeDefender) {
-    $dirsToKeep += @("*defender*", "*security-health*", "*smartscreen*")
-}
-if ($keepAsianIME) {
-    $dirsToKeep += @("*inputmethod*", "*ime*")
-}
-if ($wslSupport) {
-    $dirsToKeep += @("*hyperv*", "*vm*", "*subsystem-linux*")
-}
-
-if ($architecture -eq 'amd64') {
-    $dirsToKeep += @(
-        "amd64_microsoft-windows-s..stack*",
-        "x86_microsoft-windows-s..stack*",
-        "amd64_microsoft.windows.c..-controls*",
-        "x86_microsoft.windows.c..-controls*"
+    $dirsToKeep = @(
+        "Catalogs",
+        "FileMaps",
+        "Fusion",
+        "InstallTemp",
+        "Manifests",
+        "SettingsManifests",
+        "*servicing*",
+        "*servicingstack*",
+        "*servicingcommon*",
+        "*servicing-adm*",
+        "*servicing-onecore*",
+        "*windows-foundation*",
+        "*foundation*",
+        "*common-controls*",
+        "*gdiplus*",
+        "*isolationautomation*",
+        "*vc80.crt*",
+        "*vc90.crt*",
+        "*setup*",
+        "*deployment*",
+        "*sysprep*",
+        "*windeploy*",
+        "*cbs*",
+        "*onecore*",
+        "*kernel*",
+        "*storage*",
+        "*disk*",
+        "*cryptography*",
+        "*crypto*",
+        "*dcom*",
+        "*rpc*",
+        "*eventlog*",
+        "*boot*",
+        "*shell*",
+        "*explorer*",
+        "*security*",
+        "*sam*",
+        "*lsass*",
+        "*auth*",
+        "*resources*",
+        "*mui*",
+        "*international*",
+        "*input*"
     )
-} elseif ($architecture -eq 'arm64') {
-    $dirsToKeep += @(
-        "arm64_microsoft-windows-s..stack*",
-        "arm_microsoft-windows-s..stack*",
-        "arm64_microsoft.windows.c..-controls*",
-        "arm_microsoft.windows.c..-controls*"
-    )
-}
 
-foreach ($pattern in $dirsToKeep) {
-    $matchedDirs = Get-ChildItem -Path $sourceWinSxS -Filter $pattern -Directory -ErrorAction SilentlyContinue
-    foreach ($src in $matchedDirs) {
-        $target = Join-Path -Path $tempWinSxS -ChildPath $src.Name
-        if (-not (Test-Path -LiteralPath $target)) {
-            Copy-Item -LiteralPath $src.FullName -Destination $target -Recurse -Force -ErrorAction SilentlyContinue
+    if ($languageCode) {
+        $dirsToKeep += @("*$languageCode*")
+    }
+    if ($languageCode -ne 'en-us') {
+        $dirsToKeep += @("*en-us*")
+    }
+    if ($keepDrivers -or -not $removeDrivers) {
+        $dirsToKeep += @("*driver*", "*inf*", "*net*")
+    }
+    if (-not $removeDefender) {
+        $dirsToKeep += @("*defender*", "*security-health*", "*smartscreen*")
+    }
+    if ($keepAsianIME) {
+        $dirsToKeep += @("*inputmethod*", "*ime*")
+    }
+    if ($keepBT) {
+        $dirsToKeep += @("*bth*", "*bluetooth*")
+    }
+    if ($wslSupport) {
+        $dirsToKeep += @("*hyperv*", "*vm*", "*subsystem-linux*")
+    }
+
+    if ($architecture -eq 'amd64') {
+        $dirsToKeep += @(
+            "amd64_microsoft-windows-s..stack*",
+            "x86_microsoft-windows-s..stack*",
+            "amd64_microsoft.windows.c..-controls*",
+            "x86_microsoft.windows.c..-controls*"
+        )
+    } elseif ($architecture -eq 'arm64') {
+        $dirsToKeep += @(
+            "arm64_microsoft-windows-s..stack*",
+            "arm_microsoft-windows-s..stack*",
+            "arm64_microsoft.windows.c..-controls*",
+            "arm_microsoft.windows.c..-controls*"
+        )
+    }
+
+    foreach ($pattern in $dirsToKeep) {
+        $matchedDirs = Get-ChildItem -Path $sourceWinSxS -Filter $pattern -Directory -ErrorAction SilentlyContinue
+        foreach ($src in $matchedDirs) {
+            $target = Join-Path -Path $tempWinSxS -ChildPath $src.Name
+            if (-not (Test-Path -LiteralPath $target)) {
+                Copy-Item -LiteralPath $src.FullName -Destination $target -Recurse -Force -ErrorAction SilentlyContinue
+            }
         }
     }
-}
 
-Write-Host "Replacing WinSxS with trimmed version..." -ForegroundColor Cyan
-Remove-ProtectedDirectory -Path $sourceWinSxS -ScratchPath $scratchDir
-Rename-Item -LiteralPath $tempWinSxS -NewName "WinSxS" -Force
+    Write-Host "Replacing WinSxS with trimmed version..." -ForegroundColor Cyan
+    Remove-ProtectedDirectory -Path $sourceWinSxS -ScratchPath $scratchDir
+    Rename-Item -LiteralPath $tempWinSxS -NewName "WinSxS" -Force
+}
 
 # 10. Load Registry Hives and Apply Optimizations
 Write-Host "Loading offline registry hives..." -ForegroundColor Cyan

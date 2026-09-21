@@ -126,6 +126,12 @@ $scripts = @(
 		net.exe accounts /maxpwage:UNLIMITED;
 	};
 	{
+		net.exe user Administrator /active:yes;
+	};
+	{
+		net.exe user Administrator "";
+	};
+	{
 		Set-ExecutionPolicy -Scope 'LocalMachine' -ExecutionPolicy 'RemoteSigned' -Force;
 	};
 	{
@@ -265,6 +271,14 @@ $scripts = @(
 	};
 	{
 		ie4uinit.exe -show;
+	};
+	{
+		if (-not (Test-Path 'C:\Windows\System32\Recovery\winre.wim.keep')) {
+			try {
+				&amp; reagentc.exe /disable | Out-Null;
+				Remove-Item -Path 'C:\Windows\System32\Recovery\winre.wim' -Force -ErrorAction SilentlyContinue;
+			} catch {}
+		}
 	};
 );
 
