@@ -1073,7 +1073,7 @@ if (Test-Path -LiteralPath $unattendSource) {
             foreach ($fileNode in $xmlDoc.unattend.Extensions.File) {
                 $rawTarget = $fileNode.GetAttribute("path")
                 if ($rawTarget) {
-                    $relTarget = $rawTarget -replace '^[A-Za-z]:\\Windows\\', 'Windows\'
+                    $relTarget = $rawTarget -replace '^[A-Za-z]:\\', ''
                     $destPath = Join-Path -Path $scratchDir -ChildPath $relTarget
                     $parentDir = Split-Path -Path $destPath -Parent
                     if (-not (Test-Path -LiteralPath $parentDir)) {
@@ -1082,7 +1082,7 @@ if (Test-Path -LiteralPath $unattendSource) {
                     [System.IO.File]::WriteAllText($destPath, $fileNode.InnerText.Trim(), [System.Text.Encoding]::UTF8)
                 }
             }
-            Write-Host "  - Pre-extracted Setup scripts to Windows\Setup\Scripts" -ForegroundColor Green
+            Write-Host "  - Pre-extracted Setup & Winhance scripts directly into image" -ForegroundColor Green
         }
     } catch {}
 }
