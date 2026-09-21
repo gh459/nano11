@@ -417,12 +417,15 @@ $appxPatterns = @(
     '*CommunicationsApps*', '*Copilot*', '*CompatibilityEnhancements*',
     '*AV1VideoExtension*', '*AVCEncoderVideoExtension*', '*HEIFImageExtension*',
     '*HEVCVideoExtension*', '*MicrosoftStickyNotes*', '*OutlookForWindows*',
-    '*RawImageExtension*', '*SecHealthUI*', '*VP9VideoExtensions*',
-    '*WebpImageExtension*', '*DevHome*', '*Photos*', '*Camera*', '*QuickAssist*',
-    '*CoreAI*', '*PeopleExperienceHost*', '*PinningConfirmationDialog*',
-    '*SecureAssessmentBrowser*', '*Paint*', '*Notepad*'
+    '*RawImageExtension*', '*VP9VideoExtensions*', '*WebpImageExtension*',
+    '*DevHome*', '*Photos*', '*Camera*', '*QuickAssist*',
+    '*Paint*', '*Notepad*'
 )
-$packagesToRemove = Get-AppxProvisionedPackage -Path $scratchDir | Where-Object {
+# Note: *SecHealthUI*, *CoreAI*, *PeopleExperienceHost*, *PinningConfirmationDialog*, *SecureAssessmentBrowser*
+# are protected system components in newer Windows 11 builds that trigger COMException (0x80073cfa) if removed via DISM.
+# Defender and other features are cleanly managed via services and registry instead.
+
+$packagesToRemove = Get-AppxProvisionedPackage -Path $scratchDir -ErrorAction SilentlyContinue | Where-Object {
     $pkg = $_
     foreach ($pat in $appxPatterns) {
         if ($pkg.PackageName -like $pat) { return $true }
@@ -431,14 +434,19 @@ $packagesToRemove = Get-AppxProvisionedPackage -Path $scratchDir | Where-Object 
 }
 foreach ($package in $packagesToRemove) {
     Write-Host "  - Removing: $($package.DisplayName)"
-    Remove-AppxProvisionedPackage -Path $scratchDir -PackageName $package.PackageName -ErrorAction SilentlyContinue | Out-Null
+    try {
+        Remove-AppxProvisionedPackage -Path $scratchDir -PackageName $package.PackageName -ErrorAction Stop | Out-Null
+    } catch {
+        # Fallback to silent dism.exe CLI if PowerShell COMException occurs
+        & dism.exe /English "/image:$scratchDir" /Remove-ProvisionedAppxPackage "/PackageName:$($package.PackageName)" > $null 2>&1
+    }
 }
 
 # Clean leftover WindowsApps folders
 foreach ($package in $packagesToRemove) {
     $folderPath = Join-Path -Path "$scratchDir\Program Files\WindowsApps" -ChildPath $package.PackageName
     if (Test-Path -LiteralPath $folderPath) {
-        Remove-Item -LiteralPath $folderPath -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-ProtectedDirectory -Path $folderPath -ScratchPath $scratchDir
     }
 }
 
