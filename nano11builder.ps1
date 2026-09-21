@@ -4,11 +4,12 @@
 .DESCRIPTION
     Generates a significantly reduced Windows 11 image with support for:
     - Universal language compatibility (independent of host OS locale)
-    - Full Debloat with optional customizations (keep IME, Defender, Fonts, Drivers, Updates)
+    - Full Debloat with optional customizations (keep IME, Defender, Fonts, Drivers, Updates, Bluetooth)
+    - Custom working directory support (-WorkDir) to prevent disk space issues
+    - Setup hardware requirement bypasses including appraiserres.dll patch for Canary 28020+
     - Fixed WinSxS and DriverStore permission issues (robocopy mirror trick & .NET ACL)
     - Architecture support: amd64 (x64) and arm64
-    - Proper placement of autounattend.xml (in ISO root and Sysprep)
-    - Setup requirement bypasses (TPM, CPU, RAM, SecureBoot, Storage, Disk)
+    - Proper placement of autounattend.xml (in ISO root, Sysprep, Panther) with self-healing
     - Clean unattended setup with local account support
 .NOTES
     Original Author: NTDEV
@@ -19,11 +20,13 @@
 [CmdletBinding()]
 param(
     [switch]$NonInteractive,
+    [string]$WorkDir,
     [switch]$KeepIME,
     [switch]$KeepDefender,
     [switch]$KeepFonts,
     [switch]$KeepDrivers,
-    [switch]$KeepWindowsUpdate
+    [switch]$KeepWindowsUpdate,
+    [switch]$KeepBluetooth
 )
 
 # 1. Check and adjust Execution Policy
@@ -40,13 +43,25 @@ if ((Get-ExecutionPolicy) -eq 'Restricted') {
     }
 }
 
-# 2. Check for Admin rights and restart the script as admin if required
+# 2. Check for Admin rights and restart with full arguments preserved
 $myWindowsID = [System.Security.Principal.WindowsIdentity]::GetCurrent()
 $myWindowsPrincipal = New-Object System.Security.Principal.WindowsPrincipal($myWindowsID)
 if (-not $myWindowsPrincipal.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)) {
     Write-Host "Restarting script with Administrator privileges in a new window..." -ForegroundColor Yellow
+    
+    # Reconstruct bound parameters for elevated process
+    $paramList = [System.Collections.Generic.List[string]]::new()
+    foreach ($key in $PSBoundParameters.Keys) {
+        $val = $PSBoundParameters[$key]
+        if ($val -is [switch] -or $val -is [bool]) {
+            if ($val) { $paramList.Add("-$key") }
+        } else {
+            $paramList.Add("-$key `"$val`"")
+        }
+    }
+    
     $newProcess = New-Object System.Diagnostics.ProcessStartInfo "PowerShell"
-    $newProcess.Arguments = "-File `"$($myInvocation.MyCommand.Definition)`""
+    $newProcess.Arguments = "-File `"$($myInvocation.MyCommand.Definition)`" " + ($paramList -join " ")
     $newProcess.Verb = "runas"
     try {
         [System.Diagnostics.Process]::Start($newProcess) | Out-Null
@@ -56,7 +71,11 @@ if (-not $myWindowsPrincipal.IsInRole([System.Security.Principal.WindowsBuiltInR
     exit 0
 }
 
-# 3. Language-independent Administrators group via Well-Known SID (S-1-5-32-544)
+# 3. Clean up any orphaned DISM mount points from previous failed runs
+Write-Host "Checking for and repairing any orphaned DISM mount points..." -ForegroundColor Cyan
+& dism.exe /English /Cleanup-Wim > $null 2>&1
+
+# 4. Language-independent Administrators group via Well-Known SID (S-1-5-32-544)
 $adminGroupSid = New-Object System.Security.Principal.SecurityIdentifier([System.Security.Principal.WellKnownSidType]::BuiltinAdministratorsSid, $null)
 $adminGroup = $adminGroupSid.Translate([System.Security.Principal.NTAccount])
 
@@ -151,23 +170,25 @@ if (-not $NonInteractive) {
     }
 }
 
-# Customization Options (Resolves Issues #9, #10, #12, #13)
+# Customization Options (Resolves Issues #1, #9, #10, #12, #13)
 Write-Host ""
 Write-Host "--- Customization Settings ---" -ForegroundColor Green
 $removeDefender = $true
-$keepAsianIME = $false
-$keepExtraFonts = $false
+$keepAsianIME = $true
+$keepExtraFonts = $true
 $removeDrivers = $true
 $disableWU = $true
+$keepBT = $true
 
 if ($NonInteractive) {
     if ($KeepDefender)      { $removeDefender = $false }
-    if ($KeepIME)           { $keepAsianIME = $true }
-    if ($KeepFonts)         { $keepExtraFonts = $true }
+    if (-not $KeepIME)      { $keepAsianIME = $false }
+    if (-not $KeepFonts)    { $keepExtraFonts = $false }
     if ($KeepDrivers)       { $removeDrivers = $false }
     if ($KeepWindowsUpdate) { $disableWU = $false }
+    if ($KeepBluetooth)     { $keepBT = $true }
 } else {
-    Write-Host "Configure debloat options (Press Enter to use defaults):" -ForegroundColor Gray
+    Write-Host "Configure debloat options (Press Enter to use recommended defaults):" -ForegroundColor Gray
     
     # 1. Windows Defender
     $opt = Read-Host "1. Remove Windows Defender? [Y/n] (Default: Y)"
@@ -196,6 +217,10 @@ if ($NonInteractive) {
     # 5. Windows Update
     $opt = Read-Host "5. Disable Windows Update? [Y/n] (Default: Y)"
     if ($opt -and ($opt.Trim().ToLower() -in @('no', 'n'))) { $disableWU = $false }
+
+    # 6. Bluetooth & Audio peripherals
+    $opt = Read-Host "6. Keep Bluetooth audio and peripheral services? [Y/n] (Default: Y)"
+    if ($opt -and ($opt.Trim().ToLower() -in @('no', 'n'))) { $keepBT = $false }
 }
 
 Write-Host ""
@@ -205,11 +230,33 @@ Write-Host "  - Keep Asian IMEs:         $keepAsianIME"
 Write-Host "  - Keep Extra Fonts:        $keepExtraFonts"
 Write-Host "  - Remove Legacy Drivers:   $removeDrivers"
 Write-Host "  - Disable Windows Update:  $disableWU"
+Write-Host "  - Keep Bluetooth Services: $keepBT"
 Write-Host ""
 
-$mainOSDrive = $env:SystemDrive
-$nano11Dir = Join-Path -Path $mainOSDrive -ChildPath "nano11"
-$scratchDir = Join-Path -Path $mainOSDrive -ChildPath "scratchdir"
+# Determine Working Directory (Resolves Issue #27, #23 - Low disk space on C:)
+if ($WorkDir) {
+    if (-not (Test-Path -LiteralPath $WorkDir)) {
+        New-Item -ItemType Directory -Force -Path $WorkDir | Out-Null
+    }
+    $baseWorkDir = (Resolve-Path -LiteralPath $WorkDir).Path
+} else {
+    $sysDrive = (Get-Item -LiteralPath $env:SystemDrive).PSDrive
+    if ($sysDrive -and $sysDrive.Free -lt 25GB) {
+        $altDrive = Get-PSDrive -PSProvider FileSystem | Where-Object { $_.Free -gt 30GB -and $_.Root -ne $env:SystemDrive } | Sort-Object Free -Descending | Select-Object -First 1
+        if ($altDrive) {
+            Write-Host "System drive has low free space ($([math]::Round($sysDrive.Free / 1GB, 1)) GB). Using $($altDrive.Root) for working directory." -ForegroundColor Yellow
+            $baseWorkDir = $altDrive.Root.TrimEnd('\')
+        } else {
+            $baseWorkDir = $env:SystemDrive
+        }
+    } else {
+        $baseWorkDir = $env:SystemDrive
+    }
+}
+
+$nano11Dir = Join-Path -Path $baseWorkDir -ChildPath "nano11"
+$scratchDir = Join-Path -Path $baseWorkDir -ChildPath "scratchdir"
+Write-Host "Working Directory: $baseWorkDir" -ForegroundColor Cyan
 
 New-Item -ItemType Directory -Force -Path (Join-Path -Path $nano11Dir -ChildPath "sources") | Out-Null
 
@@ -247,6 +294,15 @@ if (-not (Test-Path -LiteralPath $sourceWim)) {
 
 Write-Host "Copying Windows installation files to $nano11Dir..." -ForegroundColor Green
 Copy-Item -Path "$DriveLetter\*" -Destination $nano11Dir -Recurse -Force | Out-Null
+
+# Bypass hardware requirement checks in installer (Resolves Issue #29 - Canary 28020+, Older CPUs/TPM)
+$appraiserDll = Join-Path -Path "$nano11Dir\sources" -ChildPath "appraiserres.dll"
+if (Test-Path -LiteralPath $appraiserDll) {
+    Set-ItemOwnershipAndAccess -Path $appraiserDll
+    Set-Content -LiteralPath $appraiserDll -Value "" -NoNewline -Force
+    Write-Host "Patched appraiserres.dll for legacy hardware compatibility (TPM, CPU, SecureBoot bypass)." -ForegroundColor Green
+}
+
 # Remove ESD from copy if it exists to avoid duplication
 if (Test-Path -LiteralPath "$nano11Dir\sources\install.esd") {
     Remove-Item -LiteralPath "$nano11Dir\sources\install.esd" -Force -ErrorAction SilentlyContinue
@@ -335,7 +391,7 @@ foreach ($line in $lines) {
     }
 }
 
-# 4. Removing provisioned AppX packages (Bloatware)
+# 5. Removing provisioned AppX packages (Bloatware)
 Write-Host "Removing provisioned AppX packages (bloatware)..." -ForegroundColor Cyan
 $appxPatterns = @(
     '*Zune*', '*Bing*', '*Clipchamp*', '*Gaming*', '*People*', '*PowerAutomate*',
@@ -369,7 +425,7 @@ foreach ($package in $packagesToRemove) {
     }
 }
 
-# 5. Removing system packages (FoD / Optional features)
+# 6. Removing system packages (FoD / Optional features)
 Write-Host "Removing unnecessary system packages..." -ForegroundColor Cyan
 $packagePatterns = [System.Collections.Generic.List[string]]@(
     "Microsoft-Windows-InternetExplorer-Optional-Package~",
@@ -424,11 +480,11 @@ foreach ($packagePattern in $packagePatterns) {
     }
 }
 
-# 6. Removing NativeImages (.NET)
+# 7. Removing NativeImages (.NET)
 Write-Host "Removing pre-compiled .NET Native Images..." -ForegroundColor Cyan
 Remove-Item -Path "$scratchDir\Windows\assembly\NativeImages_*" -Recurse -Force -ErrorAction SilentlyContinue
 
-# 7. File system slimming
+# 8. File system slimming
 $winDir = "$scratchDir\Windows"
 
 # Non-essential driver cleanup (optional)
@@ -506,7 +562,7 @@ Remove-Item -Path "$scratchDir\Windows\System32\OneDriveSetup.exe" -Force -Error
 Write-Host "Running DISM Component Cleanup to consolidate WinSxS base..." -ForegroundColor Green
 & dism.exe /English "/image:$scratchDir" /Cleanup-Image /StartComponentCleanup /ResetBase > $null 2>&1
 
-# 8. WinSxS Slimming (Robust & compatible with 23H2, 24H2, LTSC 2024)
+# 9. WinSxS Slimming (Robust & compatible with 23H2, 24H2, LTSC 2024)
 Write-Host "Slimming WinSxS directory safely..." -ForegroundColor Cyan
 $sourceWinSxS = Join-Path -Path $scratchDir -ChildPath "Windows\WinSxS"
 $tempWinSxS = Join-Path -Path $scratchDir -ChildPath "Windows\WinSxS_edit"
@@ -561,7 +617,7 @@ Write-Host "Replacing WinSxS with trimmed version..." -ForegroundColor Cyan
 Remove-ProtectedDirectory -Path $sourceWinSxS -ScratchPath $scratchDir
 Rename-Item -LiteralPath $tempWinSxS -NewName "WinSxS" -Force
 
-# 9. Load Registry Hives and Apply Optimizations
+# 10. Load Registry Hives and Apply Optimizations
 Write-Host "Loading offline registry hives..." -ForegroundColor Cyan
 $systemHive    = "$scratchDir\Windows\System32\config\SYSTEM"
 $softwareHive  = "$scratchDir\Windows\System32\config\SOFTWARE"
@@ -684,9 +740,29 @@ if ($removeDefender) {
     reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer" /v "SettingsPageVisibility" /t REG_SZ /d "hide:virus;windowsupdate" /f | Out-Null
 }
 
-# 10. Copy autounattend.xml with Architecture Support (Resolves Issue #21, #2, #8, #20)
+# 11. Copy autounattend.xml with Architecture Support & Self-healing (Resolves Issues #18, #21, #2, #8, #20)
 Write-Host "Configuring autounattend.xml for target architecture ($architecture)..." -ForegroundColor Green
 $unattendSource = Join-Path -Path $PSScriptRoot -ChildPath "autounattend.xml"
+
+# Self-healing if autounattend.xml was not downloaded with script
+if (-not (Test-Path -LiteralPath $unattendSource)) {
+    Write-Host "autounattend.xml not found locally. Attempting to download from repository..." -ForegroundColor Yellow
+    $unattendUrl = "https://raw.githubusercontent.com/gh459/nano11/main/autounattend.xml"
+    try {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        Invoke-WebRequest -Uri $unattendUrl -OutFile $unattendSource -UseBasicParsing -ErrorAction Stop
+        Write-Host "Successfully downloaded autounattend.xml." -ForegroundColor Green
+    } catch {
+        $fallbackUrl = "https://raw.githubusercontent.com/ntdevlabs/nano11/main/autounattend.xml"
+        try {
+            Invoke-WebRequest -Uri $fallbackUrl -OutFile $unattendSource -UseBasicParsing -ErrorAction Stop
+            Write-Host "Successfully downloaded autounattend.xml from upstream." -ForegroundColor Green
+        } catch {
+            Write-Host "Warning: Could not retrieve autounattend.xml automatically." -ForegroundColor Yellow
+        }
+    }
+}
+
 if (Test-Path -LiteralPath $unattendSource) {
     $xmlContent = Get-Content -LiteralPath $unattendSource -Raw -Encoding utf8
     # Dynamically match detected architecture
@@ -705,8 +781,6 @@ if (Test-Path -LiteralPath $unattendSource) {
     $pantherDir = Join-Path -Path $scratchDir -ChildPath "Windows\Panther"
     New-Item -Path $pantherDir -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null
     $xmlContent | Set-Content -LiteralPath (Join-Path -Path $pantherDir -ChildPath "unattend.xml") -Encoding utf8
-} else {
-    Write-Host "Warning: autounattend.xml not found in script directory." -ForegroundColor Yellow
 }
 
 # Unmount Registry Hives
@@ -718,10 +792,13 @@ reg.exe unload HKLM\zNTUSER     > $null 2>&1
 reg.exe unload HKLM\zSOFTWARE   > $null 2>&1
 reg.exe unload HKLM\zSYSTEM     > $null 2>&1
 
-# 11. Remove Services from SYSTEM hive
+# 12. Remove Services from SYSTEM hive (Resolves Issue #1 - Keep Bluetooth / Audio)
 Write-Host "Removing unneeded services..." -ForegroundColor Cyan
 reg.exe load HKLM\zSYSTEM "$systemHive" | Out-Null
-$servicesToRemove = @('Spooler', 'PrintNotify', 'Fax', 'RemoteRegistry', 'diagsvc', 'WerSvc', 'PcaSvc', 'MapsBroker', 'WalletService', 'BthAvctpSvc', 'BluetoothUserService')
+$servicesToRemove = @('Spooler', 'PrintNotify', 'Fax', 'RemoteRegistry', 'diagsvc', 'WerSvc', 'PcaSvc', 'MapsBroker', 'WalletService')
+if (-not $keepBT) {
+    $servicesToRemove += @('BthAvctpSvc', 'BluetoothUserService')
+}
 if ($disableWU) {
     $servicesToRemove += @('wuauserv', 'UsoSvc', 'WaaSMedicSvc')
 }
@@ -730,7 +807,7 @@ foreach ($service in $servicesToRemove) {
 }
 reg.exe unload HKLM\zSYSTEM | Out-Null
 
-# 12. Unmount and re-export install.wim
+# 13. Unmount and re-export install.wim
 Write-Host "Cleaning up and unmounting install.wim..." -ForegroundColor Green
 & dism.exe /English "/image:$scratchDir" /Cleanup-Image /StartComponentCleanup /ResetBase > $null 2>&1
 & dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /commit
@@ -745,7 +822,7 @@ Write-Host "Re-exporting install.wim with maximum compression..." -ForegroundCol
 Remove-Item -LiteralPath $destWim -Force -ErrorAction SilentlyContinue
 Rename-Item -LiteralPath $tempWim -NewName "install.wim" -Force
 
-# 13. Shrink and modify boot.wim (Setup bypasses)
+# 14. Shrink and modify boot.wim (Setup bypasses)
 $bootWimPath = Join-Path -Path "$nano11Dir\sources" -ChildPath "boot.wim"
 if (Test-Path -LiteralPath $bootWimPath) {
     Write-Host "Processing boot.wim..." -ForegroundColor Green
@@ -772,22 +849,22 @@ if (Test-Path -LiteralPath $bootWimPath) {
     Rename-Item -LiteralPath $finalBootWim -NewName "boot.wim" -Force
 }
 
-# 14. Export final image to recovery ESD format
+# 15. Export final image to recovery ESD format
 Write-Host "Exporting final install.wim to recovery-compressed install.esd..." -ForegroundColor Green
 $finalEsd = Join-Path -Path "$nano11Dir\sources" -ChildPath "install.esd"
-& dism.exe /English /Export-Image "/SourceImageFile:$destWim" /SourceIndex:1 "/DestinationImageFile:$finalEsd" /Compress:recovery
+& dism.exe /English /Export-Image "/SourceImageFile:$destWim" "/SourceIndex:1" "/DestinationImageFile:$finalEsd" /Compress:recovery
 if (Test-Path -LiteralPath $finalEsd) {
     Remove-Item -LiteralPath $destWim -Force -ErrorAction SilentlyContinue
 }
 
-# 15. Final cleanup of ISO root
+# 16. Final cleanup of ISO root
 Write-Host "Performing final cleanup of ISO root..." -ForegroundColor Cyan
 $keepList = @("boot", "efi", "sources", "bootmgr", "bootmgr.efi", "setup.exe", "autounattend.xml")
 Get-ChildItem -Path $nano11Dir | Where-Object { $_.Name -notin $keepList } | ForEach-Object {
     Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-# 16. Create bootable ISO (oscdimg) with Architecture-aware bootdata
+# 17. Create bootable ISO (oscdimg) with Architecture-aware bootdata
 Write-Host "Creating bootable ISO image..." -ForegroundColor Green
 $oscdimgExe = Join-Path -Path $PSScriptRoot -ChildPath "oscdimg.exe"
 if (-not (Test-Path -LiteralPath $oscdimgExe)) {
@@ -828,7 +905,7 @@ if (Test-Path -LiteralPath $oscdimgExe) {
     Write-Host "oscdimg.exe not found. You can manually package the ISO from: $nano11Dir" -ForegroundColor Yellow
 }
 
-# 17. Cleanup scratch and temporary files
+# 18. Cleanup scratch and temporary files
 if (-not $NonInteractive) {
     Read-Host "Press Enter to clean up working directories and exit."
 }
