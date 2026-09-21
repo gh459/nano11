@@ -582,9 +582,9 @@ $winDir = "$scratchDir\Windows"
 if ($removeDrivers) {
     Write-Host "Slimming DriverStore..." -ForegroundColor Cyan
     $driverRepo = Join-Path -Path $winDir -ChildPath "System32\DriverStore\FileRepository"
-    $driverPatterns = [System.Collections.Generic.List[string]]@('prn*', 'scan*', 'mfd*', 'wscsmd.inf*', 'tapdrv*', 'rdpbus.inf*', 'tdibth.inf*')
+    $driverPatterns = @('prn*', 'scan*', 'mfd*', 'wscsmd.inf*', 'tapdrv*', 'rdpbus.inf*', 'tdibth.inf*')
     if ($ultraSlimMode) {
-        $driverPatterns.AddRange(@('ntprint*.inf*', 'fax*.inf*', 'smartcrd*.inf*', 'modem*.inf*'))
+        $driverPatterns += @('ntprint*.inf*', 'fax*.inf*', 'smartcrd*.inf*', 'modem*.inf*')
     }
     if (Test-Path -LiteralPath $driverRepo) {
         Get-ChildItem -Path $driverRepo -Directory | ForEach-Object {
