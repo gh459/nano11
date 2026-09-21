@@ -358,10 +358,10 @@ if (-not $copySuccess) {
 
 # Explicitly ensure critical boot files exist in target image
 $criticalBootFiles = @(
-    @{ Src = "$sourcePath`boot\etfsboot.com"; Dest = "$nano11Dir\boot\etfsboot.com"; Dir = "$nano11Dir\boot" },
-    @{ Src = "$sourcePath`efi\microsoft\boot\efisys.bin"; Dest = "$nano11Dir\efi\microsoft\boot\efisys.bin"; Dir = "$nano11Dir\efi\microsoft\boot" },
-    @{ Src = "$sourcePath`efi\microsoft\boot\efisys_noprompt.bin"; Dest = "$nano11Dir\efi\microsoft\boot\efisys_noprompt.bin"; Dir = "$nano11Dir\efi\microsoft\boot" },
-    @{ Src = "$sourcePath`sources\boot.wim"; Dest = "$nano11Dir\sources\boot.wim"; Dir = "$nano11Dir\sources" }
+    @{ Src = (Join-Path -Path $sourcePath -ChildPath "boot\etfsboot.com"); Dest = (Join-Path -Path $nano11Dir -ChildPath "boot\etfsboot.com"); Dir = (Join-Path -Path $nano11Dir -ChildPath "boot") },
+    @{ Src = (Join-Path -Path $sourcePath -ChildPath "efi\microsoft\boot\efisys.bin"); Dest = (Join-Path -Path $nano11Dir -ChildPath "efi\microsoft\boot\efisys.bin"); Dir = (Join-Path -Path $nano11Dir -ChildPath "efi\microsoft\boot") },
+    @{ Src = (Join-Path -Path $sourcePath -ChildPath "efi\microsoft\boot\efisys_noprompt.bin"); Dest = (Join-Path -Path $nano11Dir -ChildPath "efi\microsoft\boot\efisys_noprompt.bin"); Dir = (Join-Path -Path $nano11Dir -ChildPath "efi\microsoft\boot") },
+    @{ Src = (Join-Path -Path $sourcePath -ChildPath "sources\boot.wim"); Dest = (Join-Path -Path $nano11Dir -ChildPath "sources\boot.wim"); Dir = (Join-Path -Path $nano11Dir -ChildPath "sources") }
 )
 foreach ($cbf in $criticalBootFiles) {
     if ((Test-Path -LiteralPath $cbf.Src) -and (-not (Test-Path -LiteralPath $cbf.Dest))) {
