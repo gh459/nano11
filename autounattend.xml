@@ -48,23 +48,31 @@
 			<RunSynchronous>
 				<RunSynchronousCommand wcm:action="add">
 					<Order>1</Order>
-					<Path>powershell.exe -WindowStyle Normal -NoProfile -Command "try { $candidates = @('C:\Windows\Panther\unattend.xml', 'C:\Windows\Panther\autounattend.xml', 'C:\Windows\System32\Sysprep\autounattend.xml', 'C:\Windows\System32\Sysprep\unattend.xml'); foreach ($p in $candidates) { if (Test-Path $p) { $xml = [xml]::new(); $xml.Load($p); if ($xml.unattend.Extensions.ExtractScript) { $sb = [scriptblock]::Create( $xml.unattend.Extensions.ExtractScript ); Invoke-Command -ScriptBlock $sb -ArgumentList $xml; break } } } } catch {}"</Path>
+					<Path>cmd.exe /c "net user Administrator /active:yes &amp;&amp; net user Administrator \"\" &amp;&amp; net accounts /maxpwage:unlimited"</Path>
 				</RunSynchronousCommand>
 				<RunSynchronousCommand wcm:action="add">
 					<Order>2</Order>
-					<Path>powershell.exe -WindowStyle Normal -NoProfile -Command "try { if (Test-Path 'C:\Windows\Setup\Scripts\Specialize.ps1') { &amp; 'C:\Windows\Setup\Scripts\Specialize.ps1' } } catch {}"</Path>
+					<Path>cmd.exe /c "reg.exe add \"HKLM\SYSTEM\CurrentControlSet\Control\Lsa\" /v \"LimitBlankPasswordUse\" /t REG_DWORD /d 0 /f &amp;&amp; reg.exe add \"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\" /v \"FilterAdministratorToken\" /t REG_DWORD /d 0 /f &amp;&amp; reg.exe add \"HKLM\SOFTWARE\Microsoft\PowerShell\1\ShellIds\Microsoft.PowerShell\" /v \"ExecutionPolicy\" /t REG_SZ /d \"Unrestricted\" /f"</Path>
 				</RunSynchronousCommand>
 				<RunSynchronousCommand wcm:action="add">
 					<Order>3</Order>
-					<Path>cmd.exe /c "reg.exe load HKU\DefaultUser C:\Users\Default\NTUSER.DAT || exit 0"</Path>
+					<Path>powershell.exe -ExecutionPolicy Bypass -WindowStyle Normal -NoProfile -Command "try { $candidates = @('C:\Windows\Panther\unattend.xml', 'C:\Windows\Panther\autounattend.xml', 'C:\Windows\System32\Sysprep\autounattend.xml', 'C:\Windows\System32\Sysprep\unattend.xml'); foreach ($p in $candidates) { if (Test-Path $p) { $xml = [xml]::new(); $xml.Load($p); if ($xml.unattend.Extensions.ExtractScript) { $sb = [scriptblock]::Create( $xml.unattend.Extensions.ExtractScript ); Invoke-Command -ScriptBlock $sb -ArgumentList $xml; break } } } } catch {}"</Path>
 				</RunSynchronousCommand>
 				<RunSynchronousCommand wcm:action="add">
 					<Order>4</Order>
-					<Path>powershell.exe -WindowStyle Normal -NoProfile -Command "try { if (Test-Path 'C:\Windows\Setup\Scripts\DefaultUser.ps1') { &amp; 'C:\Windows\Setup\Scripts\DefaultUser.ps1' } } catch {}"</Path>
+					<Path>powershell.exe -ExecutionPolicy Bypass -WindowStyle Normal -NoProfile -Command "try { if (Test-Path 'C:\Windows\Setup\Scripts\Specialize.ps1') { &amp; 'C:\Windows\Setup\Scripts\Specialize.ps1' } } catch {}"</Path>
 				</RunSynchronousCommand>
 				<RunSynchronousCommand wcm:action="add">
 					<Order>5</Order>
-					<Path>cmd.exe /c "reg.exe unload HKU\DefaultUser || exit 0"</Path>
+					<Path>cmd.exe /c "reg.exe load HKU\DefaultUser C:\Users\Default\NTUSER.DAT || exit 0"</Path>
+				</RunSynchronousCommand>
+				<RunSynchronousCommand wcm:action="add">
+					<Order>6</Order>
+					<Path>powershell.exe -ExecutionPolicy Bypass -WindowStyle Normal -NoProfile -Command "try { if (Test-Path 'C:\Windows\Setup\Scripts\DefaultUser.ps1') { &amp; 'C:\Windows\Setup\Scripts\DefaultUser.ps1' } } catch {}"</Path>
+				</RunSynchronousCommand>
+				<RunSynchronousCommand wcm:action="add">
+					<Order>7</Order>
+					<Path>cmd.exe /c "for /l %i in (1,1,5) do (reg.exe unload HKU\DefaultUser &amp;&amp; exit /b 0 || timeout /t 1 >nul)"</Path>
 				</RunSynchronousCommand>
 			</RunSynchronous>
 		</component>
@@ -97,7 +105,7 @@
 			<FirstLogonCommands>
 				<SynchronousCommand wcm:action="add">
 					<Order>1</Order>
-					<CommandLine>powershell.exe -WindowStyle Normal -NoProfile -Command "try { if (Test-Path 'C:\Windows\Setup\Scripts\FirstLogon.ps1') { &amp; 'C:\Windows\Setup\Scripts\FirstLogon.ps1' } } catch {}"</CommandLine>
+					<CommandLine>powershell.exe -ExecutionPolicy Bypass -WindowStyle Normal -NoProfile -Command "try { if (Test-Path 'C:\Windows\Setup\Scripts\FirstLogon.ps1') { &amp; 'C:\Windows\Setup\Scripts\FirstLogon.ps1' } } catch {}"</CommandLine>
 				</SynchronousCommand>
 			</FirstLogonCommands>
 		</component>
@@ -132,7 +140,13 @@ $scripts = @(
 		net.exe user Administrator "";
 	};
 	{
-		Set-ExecutionPolicy -Scope 'LocalMachine' -ExecutionPolicy 'RemoteSigned' -Force;
+		Set-ExecutionPolicy -Scope 'LocalMachine' -ExecutionPolicy 'Unrestricted' -Force;
+	};
+	{
+		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Control\Lsa" /v "LimitBlankPasswordUse" /t REG_DWORD /d 0 /f;
+	};
+	{
+		reg.exe add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" /v "FilterAdministratorToken" /t REG_DWORD /d 0 /f;
 	};
 	{
 		reg.exe add "HKLM\SOFTWARE\Policies\Microsoft\Dsh" /v AllowNewsAndInterests /t REG_DWORD /d 0 /f;
@@ -229,7 +243,7 @@ $scripts = @(
 		}
 	};
 	{
-		reg.exe add "HKU\DefaultUser\Software\Microsoft\Windows\CurrentVersion\RunOnce" /v "UnattendedSetup" /t REG_SZ /d "powershell.exe -WindowStyle Normal -NoProfile -Command \""Get-Content -LiteralPath 'C:\Windows\Setup\Scripts\UserOnce.ps1' -Raw | Invoke-Expression;\""" /f;
+		reg.exe add "HKU\DefaultUser\Software\Microsoft\Windows\CurrentVersion\RunOnce" /v "UnattendedSetup" /t REG_SZ /d "powershell.exe -ExecutionPolicy Bypass -WindowStyle Normal -NoProfile -Command \""Get-Content -LiteralPath 'C:\Windows\Setup\Scripts\UserOnce.ps1' -Raw | Invoke-Expression;\""" /f;
 	};
 );
 

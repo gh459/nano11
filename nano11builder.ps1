@@ -937,6 +937,14 @@ reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\ReserveManager" /v 
 reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\BitLocker" /v "PreventDeviceEncryption" /t REG_DWORD /d 1 /f | Out-Null
 reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\Windows Chat" /v "ChatIcon" /t REG_DWORD /d 3 /f | Out-Null
 reg.exe add "HKLM\zNTUSER\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v "TaskbarMn" /t REG_DWORD /d 0 /f | Out-Null
+reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Search" /v "SearchboxTaskbarMode" /t REG_DWORD /d 0 /f | Out-Null
+
+# Setup & Winlogon / Blank Password / PowerShell Execution Policy tweaks
+reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\Lsa" /v "LimitBlankPasswordUse" /t REG_DWORD /d 0 /f | Out-Null
+reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" /v "FilterAdministratorToken" /t REG_DWORD /d 0 /f | Out-Null
+reg.exe add "HKLM\zSOFTWARE\Microsoft\PowerShell\1\ShellIds\Microsoft.PowerShell" /v "ExecutionPolicy" /t REG_SZ /d "Unrestricted" /f | Out-Null
+reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\PowerShell" /v "EnableScripts" /t REG_DWORD /d 1 /f | Out-Null
+reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\PowerShell" /v "ExecutionPolicy" /t REG_SZ /d "Unrestricted" /f | Out-Null
 
 # Edge Uninstall Registry cleanup
 reg.exe delete "HKEY_LOCAL_MACHINE\zSOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft Edge" /f > $null 2>&1
@@ -977,8 +985,8 @@ if ($disableWU) {
     reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate" /v "DisableWindowsUpdateAccess" /t REG_DWORD /d 1 /f | Out-Null
     reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU" /v "NoAutoUpdate" /t REG_DWORD /d 1 /f | Out-Null
     reg.exe add "HKLM\zSYSTEM\ControlSet001\Services\wuauserv" /v "Start" /t REG_DWORD /d 4 /f | Out-Null
-    reg.exe delete "HKLM\zSYSTEM\ControlSet001\Services\WaaSMedicSVC" /f > $null 2>&1
-    reg.exe delete "HKLM\zSYSTEM\ControlSet001\Services\UsoSvc" /f > $null 2>&1
+    reg.exe add "HKLM\zSYSTEM\ControlSet001\Services\WaaSMedicSVC" /v "Start" /t REG_DWORD /d 4 /f | Out-Null
+    reg.exe add "HKLM\zSYSTEM\ControlSet001\Services\UsoSvc" /v "Start" /t REG_DWORD /d 4 /f | Out-Null
 }
 
 # Windows Defender (optional)
@@ -988,6 +996,19 @@ if ($removeDefender) {
     foreach ($svc in $defServices) {
         reg.exe add "HKLM\zSYSTEM\ControlSet001\Services\$svc" /v "Start" /t REG_DWORD /d 4 /f | Out-Null
     }
+}
+
+# Disabling unneeded background services (Resolves Issue #1 - Keep Bluetooth / Audio)
+Write-Host "Disabling unneeded background services..." -ForegroundColor Cyan
+$servicesToDisable = @('Spooler', 'PrintNotify', 'Fax', 'RemoteRegistry', 'diagsvc', 'WerSvc', 'PcaSvc', 'MapsBroker', 'WalletService')
+if (-not $keepBT) {
+    $servicesToDisable += @('BthAvctpSvc', 'BluetoothUserService')
+}
+if ($disableWU) {
+    $servicesToDisable += @('wuauserv', 'UsoSvc', 'WaaSMedicSVC')
+}
+foreach ($service in $servicesToDisable) {
+    reg.exe add "HKLM\zSYSTEM\ControlSet001\Services\$service" /v "Start" /t REG_DWORD /d 4 /f | Out-Null
 }
 
 # Dynamically set SettingsPageVisibility only for actually removed/disabled components
@@ -1076,22 +1097,7 @@ reg.exe unload HKLM\zNTUSER     > $null 2>&1
 reg.exe unload HKLM\zSOFTWARE   > $null 2>&1
 reg.exe unload HKLM\zSYSTEM     > $null 2>&1
 
-# 12. Remove Services from SYSTEM hive (Resolves Issue #1 - Keep Bluetooth / Audio)
-Write-Host "Removing unneeded services..." -ForegroundColor Cyan
-reg.exe load HKLM\zSYSTEM "$systemHive" | Out-Null
-$servicesToRemove = @('Spooler', 'PrintNotify', 'Fax', 'RemoteRegistry', 'diagsvc', 'WerSvc', 'PcaSvc', 'MapsBroker', 'WalletService')
-if (-not $keepBT) {
-    $servicesToRemove += @('BthAvctpSvc', 'BluetoothUserService')
-}
-if ($disableWU) {
-    $servicesToRemove += @('wuauserv', 'UsoSvc', 'WaaSMedicSvc')
-}
-foreach ($service in $servicesToRemove) {
-    reg.exe delete "HKLM\zSYSTEM\ControlSet001\Services\$service" /f > $null 2>&1
-}
-reg.exe unload HKLM\zSYSTEM | Out-Null
-
-# 13. Unmount and re-export install.wim
+# 12. Unmount and re-export install.wim
 Write-Host "Unmounting install.wim..." -ForegroundColor Green
 
 [GC]::Collect()
