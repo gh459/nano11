@@ -1216,16 +1216,16 @@ Write-Log "Bloat removal process completed"
     # POWER SETTINGS
     # ============================================================================
 
-    Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Power' -Name 'HibernateEnabled' -Type 'DWord' -Value 1 -Description 'Save your session to disk and power down completely, using no battery while preserving your work'
-    Set-RegistryValue -Path 'HKLM:\SYSTEM\ControlSet001\Control\Session Manager\Power' -Name 'HiberbootEnabled' -Type 'DWord' -Value 0 -Description 'Hibernate system state during shutdown for faster boot times (does not affect restart)'
-    Set-RegistryValue -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\FlyoutMenuSettings' -Name 'ShowHibernateOption' -Type 'DWord' -Value 0 -Description 'Display the Hibernate option in the Start Menu power button menu'
-    Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Power\PowerThrottling' -Name 'PowerThrottlingOff' -Type 'DWord' -Value 1 -Description 'Allow Windows to reduce CPU performance for background processes to save power'
-    Set-RegistryValue -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\FlyoutMenuSettings' -Name 'ShowLockOption' -Type 'DWord' -Value 0 -Description 'Display the Lock option in the Start Menu power button menu'
-    Set-RegistryValue -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\FlyoutMenuSettings' -Name 'ShowSleepOption' -Type 'DWord' -Value 0 -Description 'Display the Sleep option in the Start Menu power button menu'
+    Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Power' -Name 'HibernateEnabled' -Type 'DWord' -Value 0 -Description 'Disable Hibernation'
+    Set-RegistryValue -Path 'HKLM:\SYSTEM\ControlSet001\Control\Session Manager\Power' -Name 'HiberbootEnabled' -Type 'DWord' -Value 0 -Description 'Disable Fast Startup'
+    Set-RegistryValue -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\FlyoutMenuSettings' -Name 'ShowHibernateOption' -Type 'DWord' -Value 0 -Description 'Hide the Hibernate option'
+    Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Power\PowerThrottling' -Name 'PowerThrottlingOff' -Type 'DWord' -Value 1 -Description 'Disable Power Throttling'
+    Set-RegistryValue -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\FlyoutMenuSettings' -Name 'ShowLockOption' -Type 'DWord' -Value 0 -Description 'Hide the Lock option'
+    Set-RegistryValue -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\FlyoutMenuSettings' -Name 'ShowSleepOption' -Type 'DWord' -Value 0 -Description 'Hide the Sleep option'
 
-    Write-Log "Setting hibernation to on..." "INFO"
-    powercfg /hibernate on 2>$null
-    Write-Log "Hibernation set to on" "SUCCESS"
+    Write-Log "Disabling hibernation completely..." "INFO"
+    powercfg -h off 2>$null
+    Write-Log "Hibernation disabled" "SUCCESS"
 
     # ============================================================================
     # GAMING & PERFORMANCE SETTINGS
@@ -1252,12 +1252,67 @@ Write-Log "Bloat removal process completed"
     Remove-RegistryValue -Path 'HKLM:\SOFTWARE\Microsoft\Windows\Dwm' -Name 'OverlayTestMode' -Description 'Composite multiple display layers in hardware using the GPU. Disabling can fix screen flickering, black screens, and stuttering on multi-monitor setups'
     Remove-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\GraphicsDrivers' -Name 'DisableOverlays' -Description 'Allow the graphics driver to use hardware overlay surfaces for compositing. Disabling forces software composition for all overlays and is known to break the Steam, Discord, and RTSS in-game overlays 窶・leave enabled unless you specifically need this'
     Remove-RegistryValue -Path 'HKLM:\SOFTWARE\Microsoft\Windows\Dwm' -Name 'OverlayMinFPS' -Description 'Allow Desktop Window Manager to dynamically switch apps between overlay modes based on frame rate. Disabling can fix stuttering in browsers and Discord without fully disabling MPO'
-    Set-RegistryValue -Path 'HKLM:\Software\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile' -Name 'NetworkThrottlingIndex' -Type 'DWord' -Value 10 -Description 'Controls network packet rate limiting for multimedia applications. Keeping throttling enabled (default: 10 packets/ms) is recommended as it provides better DPC latency for gaming than disabling it entirely'
+    Set-RegistryValue -Path 'HKLM:\Software\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile' -Name 'NetworkThrottlingIndex' -Type 'DWord' -Value 4294967295 -Description 'Controls network packet rate limiting for multimedia applications. 0xFFFFFFFF disables network throttling for maximum throughput'
     Get-ChildItem -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces' -ErrorAction SilentlyContinue | ForEach-Object {
-        Remove-RegistryValue -Path $_.PSPath -Name 'TcpAckFrequency' -Description 'Buffers small network packets before sending to reduce overhead. Turn off to lower latency in online games, or keep on for general-purpose network efficiency'
+        Set-RegistryValue -Path $_.PSPath -Name 'TcpAckFrequency' -Type 'DWord' -Value 1 -Description 'Send TCP ACK immediately for lower gaming latency'
+        Set-RegistryValue -Path $_.PSPath -Name 'TCPNoDelay' -Type 'DWord' -Value 1 -Description 'Disable Nagle algorithm for immediate packet delivery'
     }
-    Get-ChildItem -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces' -ErrorAction SilentlyContinue | ForEach-Object {
-        Remove-RegistryValue -Path $_.PSPath -Name 'TCPNoDelay' -Description 'Buffers small network packets before sending to reduce overhead. Turn off to lower latency in online games, or keep on for general-purpose network efficiency'
+
+    # BCD Latency optimizations (Integrated from optimizerDuck & sparkle)
+    Write-Log "Applying BCD Dynamic Ticking and Timer optimizations..." "INFO"
+    try {
+        & bcdedit /set disabledynamictick yes 2>$null
+        & bcdedit /set useplatformtick yes 2>$null
+        & bcdedit /set tscsyncpolicy Enhanced 2>$null
+        Write-Log "BCD timer tweaks applied successfully" "SUCCESS"
+    } catch {
+        Write-Log "BCD timer tweaks warning: $($_.Exception.Message)" "WARNING"
+    }
+
+    # Network Stack optimizations (Integrated from optimizerDuck & sparkle)
+    Write-Log "Applying Netsh TCP/IP stack optimizations..." "INFO"
+    try {
+        & netsh int tcp set heuristics disabled 2>$null
+        & netsh int tcp set supplemental template=internet congestionprovider=ctcp 2>$null
+        & netsh int tcp set global rss=enabled 2>$null
+        & netsh int tcp set global ecncapability=enabled 2>$null
+        & netsh int tcp set global timestamps=disabled 2>$null
+        & netsh int tcp set global fastopen=enabled 2>$null
+        & netsh int tcp set global fastopenfallback=enabled 2>$null
+        & netsh int tcp set supplemental template=custom icw=10 2>$null
+        & netsh int ip set global taskoffload=enabled 2>$null
+        Write-Log "Netsh TCP/IP tweaks applied successfully" "SUCCESS"
+    } catch {
+        Write-Log "Netsh TCP/IP tweaks warning: $($_.Exception.Message)" "WARNING"
+    }
+
+    # GPU Driver Class Latency optimizations (Integrated from optimizerDuck & sparkle)
+    Write-Log "Applying GPU Display Driver Class Latency optimizations..." "INFO"
+    $gpuClassKey = "HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}"
+    if (Test-Path $gpuClassKey) {
+        Get-ChildItem -Path $gpuClassKey -ErrorAction SilentlyContinue | Where-Object { $_.PSChildName -match '^\d{4}$' } | ForEach-Object {
+            $gpuPath = $_.PSPath
+            Set-RegistryValue -Path $gpuPath -Name "DisableDynamicPstate" -Type "DWord" -Value 0 -Description "GPU Dynamic P-State"
+
+            $driverDesc = (Get-ItemProperty -Path $gpuPath -Name "DriverDesc" -ErrorAction SilentlyContinue).DriverDesc
+            $provider = (Get-ItemProperty -Path $gpuPath -Name "ProviderName" -ErrorAction SilentlyContinue).ProviderName
+            $combined = "$driverDesc $provider"
+
+            if ($combined -match "NVIDIA") {
+                Set-RegistryValue -Path $gpuPath -Name "RMEnablePcieGen4" -Type "DWord" -Value 1 -Description "NVIDIA PCIe Gen 4"
+                Set-RegistryValue -Path $gpuPath -Name "D3PCLatency" -Type "DWord" -Value 1 -Description "NVIDIA D3 PC Latency"
+                Set-RegistryValue -Path $gpuPath -Name "F1OptLatency" -Type "DWord" -Value 1 -Description "NVIDIA F1 Opt Latency"
+                Set-RegistryValue -Path $gpuPath -Name "RMHdcpKeyglobZero" -Type "DWord" -Value 1 -Description "NVIDIA HDCP zero overhead"
+            } elseif ($combined -match "AMD|Advanced Micro Devices|Radeon") {
+                Set-RegistryValue -Path $gpuPath -Name "DalDisableDisplayDynamicFrameRate" -Type "DWord" -Value 1 -Description "AMD Dal Disable Dynamic Framerate"
+                Set-RegistryValue -Path $gpuPath -Name "EnableUlps" -Type "DWord" -Value 0 -Description "AMD Disable ULPS for smooth frames"
+                Set-RegistryValue -Path $gpuPath -Name "KMD_EnableFlipQueue" -Type "DWord" -Value 1 -Description "AMD Flip Queue"
+                Set-RegistryValue -Path $gpuPath -Name "DisableDMACopy" -Type "DWord" -Value 1 -Description "AMD Disable DMA Copy"
+                Set-RegistryValue -Path $gpuPath -Name "DisableBlockWrite" -Type "DWord" -Value 0 -Description "AMD Enable Block Write"
+            } elseif ($combined -match "Intel") {
+                Set-RegistryValue -Path $gpuPath -Name "DisablePSR" -Type "DWord" -Value 1 -Description "Intel Disable Panel Self Refresh for lower latency"
+            }
+        }
     }
     Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard' -Name 'EnableVirtualizationBasedSecurity' -Type 'DWord' -Value 0 -Description 'Isolates parts of memory to protect the system from vulnerabilities. Disabling can improve gaming performance but reduces system security'
     Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard' -Name 'RequirePlatformSecurityFeatures' -Type 'DWord' -Value 0 -Description 'Isolates parts of memory to protect the system from vulnerabilities. Disabling can improve gaming performance but reduces system security'
@@ -1274,8 +1329,8 @@ Write-Log "Bloat removal process completed"
     Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\DiagTrack' -Name 'Start' -Type 'DWord' -Value 4 -Description 'Sends usage data and diagnostics to Microsoft. Setting to Manual or Disabled reduces background network and CPU usage'
     Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\CDPSvc' -Name 'Start' -Type 'DWord' -Value 3 -Description 'Enables cross-device experiences like phone linking and nearby sharing. Disabling reduces background activity and device interaction logging'
     Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\CDPUserSvc' -Name 'Start' -Type 'DWord' -Value 3 -Description 'Enables cross-device experiences like phone linking and nearby sharing. Disabling reduces background activity and device interaction logging'
-    Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\PcaSvc' -Name 'Start' -Type 'DWord' -Value 2 -Description 'Monitors programs for compatibility issues and suggests fixes. Disabling prevents compatibility prompts and saves minor system resources'
-    Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\WerSvc' -Name 'Start' -Type 'DWord' -Value 3 -Description 'Collects and sends crash data to Microsoft. Disabling prevents crash reporting, reduces network traffic, and improves privacy with minimal system impact'
+    Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\PcaSvc' -Name 'Start' -Type 'DWord' -Value 4 -Description 'Monitors programs for compatibility issues and suggests fixes. Disabling prevents compatibility prompts and saves minor system resources'
+    Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\WerSvc' -Name 'Start' -Type 'DWord' -Value 4 -Description 'Collects and sends crash data to Microsoft. Disabling prevents crash reporting, reduces network traffic, and improves privacy with minimal system impact'
     Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\lfsvc' -Name 'Start' -Type 'DWord' -Value 3 -Description 'Tracks your physical location for apps and services. Disabling improves privacy and prevents location tracking, but apps won''t be able to use location features'
     Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\RetailDemo' -Name 'Start' -Type 'DWord' -Value 4 -Description 'Controls device activity when in retail demo mode. Safe to disable for personal computers as it only serves retail display purposes'
     Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\wisvc' -Name 'Start' -Type 'DWord' -Value 3 -Description 'Manages Windows Insider Program features and preview builds. Safe to disable if you''re not participating in the Windows Insider Program'
@@ -1298,9 +1353,9 @@ Write-Log "Bloat removal process completed"
     Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\TermService' -Name 'Start' -Type 'DWord' -Value 3 -Description 'Allows users to connect interactively to a remote computer. Set to Manual to reduce background activity while keeping Remote Desktop available.'
     Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\SessionEnv' -Name 'Start' -Type 'DWord' -Value 3 -Description 'Manages Remote Desktop Services and Remote Desktop related configurations. Set to Manual to reduce background activity while keeping Remote Desktop available'
     Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\UmRdpService' -Name 'Start' -Type 'DWord' -Value 3 -Description 'Allows local device redirection for Remote Desktop connections. Safe to disable if you don''t need to share local devices during Remote Desktop sessions'
-    Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\XblAuthManager' -Name 'Start' -Type 'DWord' -Value 3 -Description 'Provides authentication and authorization services for Xbox Live. Safe to disable if you don''t use Xbox Game Pass, Microsoft Store games, or Xbox features'
-    Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\XblGameSave' -Name 'Start' -Type 'DWord' -Value 3 -Description 'Syncs game saves to Xbox Live cloud. Only needed for Xbox Game Pass and Microsoft Store games with cloud save features'
-    Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\XboxNetApiSvc' -Name 'Start' -Type 'DWord' -Value 3 -Description 'Supports Xbox Live multiplayer networking. Required for Xbox multiplayer gaming but not needed for Steam/Epic/other gaming platforms'
+    Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\XblAuthManager' -Name 'Start' -Type 'DWord' -Value 4 -Description 'Provides authentication and authorization services for Xbox Live. Safe to disable if you don''t use Xbox Game Pass, Microsoft Store games, or Xbox features'
+    Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\XblGameSave' -Name 'Start' -Type 'DWord' -Value 4 -Description 'Syncs game saves to Xbox Live cloud. Only needed for Xbox Game Pass and Microsoft Store games with cloud save features'
+    Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\XboxNetApiSvc' -Name 'Start' -Type 'DWord' -Value 4 -Description 'Supports Xbox Live multiplayer networking. Required for Xbox multiplayer gaming but not needed for Steam/Epic/other gaming platforms'
     Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\WbioSrvc' -Name 'Start' -Type 'DWord' -Value 3 -Description 'Enables fingerprint and facial recognition login via Windows Hello. Safe to disable on desktop systems without biometric hardware'
     Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\TabletInputService' -Name 'Start' -Type 'DWord' -Value 4 -Description 'Manages the Windows Input Experience including touch keyboard, pen/stylus input, handwriting panel, emoji panel (Win+.), and Xbox controller keyboard. Disabling will break all virtual/software keyboard input but is safe on desktop systems without touchscreen, pen, or gamepad'
 
@@ -1946,9 +2001,19 @@ if ($UserCustomizations) {
             # GAMING & PERFORMANCE SETTINGS
             # ============================================================================
 
-            Set-RegistryValue -Path 'HKCU:\Software\Microsoft\GameBar' -Name 'AutoGameModeEnabled' -Type 'DWord' -Value 0 -Description 'Optimize your PC for play by turning things off in the background'
+            Set-RegistryValue -Path 'HKCU:\Software\Microsoft\GameBar' -Name 'AutoGameModeEnabled' -Type 'DWord' -Value 1 -Description 'Optimize your PC for play by turning things off in the background'
+            Set-RegistryValue -Path 'HKCU:\Software\Microsoft\GameBar' -Name 'AllowAutoGameMode' -Type 'DWord' -Value 1 -Description 'Allow Auto Game Mode'
             Set-RegistryValue -Path 'HKCU:\Control Panel\Mouse' -Name 'MouseSpeed' -Type 'String' -Value '0' -Description 'Adjust cursor speed based on movement velocity (mouse acceleration). Most competitive gamers disable this for consistent aiming in FPS games'
+            Set-RegistryValue -Path 'HKCU:\Control Panel\Mouse' -Name 'MouseThreshold1' -Type 'String' -Value '0' -Description 'Disable mouse acceleration threshold 1'
+            Set-RegistryValue -Path 'HKCU:\Control Panel\Mouse' -Name 'MouseThreshold2' -Type 'String' -Value '0' -Description 'Disable mouse acceleration threshold 2'
             Set-RegistryValue -Path 'HKCU:\Control Panel\Mouse' -Name 'MouseHoverTime' -Type 'String' -Value '1' -Description 'Controls how long you must hover over an element before it activates (in milliseconds). Lower values make tooltips, menus, and hover effects appear faster. Default is 400ms'
+            Set-RegistryValue -Path 'HKCU:\Control Panel\Keyboard' -Name 'KeyboardDelay' -Type 'String' -Value '0' -Description 'Keyboard repeat delay'
+            Set-RegistryValue -Path 'HKCU:\Control Panel\Keyboard' -Name 'KeyboardSpeed' -Type 'String' -Value '31' -Description 'Keyboard repeat speed'
+            Set-RegistryValue -Path 'HKCU:\Control Panel\Keyboard' -Name 'InitialKeyboardIndicators' -Type 'String' -Value '2' -Description 'NumLock enabled at startup'
+            Set-RegistryValue -Path 'HKCU:\Control Panel\Accessibility\Keyboard Response' -Name 'AutoRepeatDelay' -Type 'String' -Value '200' -Description 'Keyboard repeat delay ms'
+            Set-RegistryValue -Path 'HKCU:\Control Panel\Accessibility\Keyboard Response' -Name 'AutoRepeatRate' -Type 'String' -Value '6' -Description 'Keyboard repeat rate ms'
+            Set-RegistryValue -Path 'HKCU:\Control Panel\Accessibility\Keyboard Response' -Name 'BounceTime' -Type 'String' -Value '0' -Description 'Keyboard bounce time'
+            Set-RegistryValue -Path 'HKCU:\Control Panel\Accessibility\Keyboard Response' -Name 'DelayBeforeAcceptance' -Type 'String' -Value '0' -Description 'Keyboard delay before acceptance'
             Set-RegistryValue -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Serialize' -Name 'StartupDelayInMSec' -Type 'DWord' -Value 0 -Description 'Delay startup applications by 10 seconds after boot to improve initial system responsiveness. Windows becomes usable faster, but your startup apps take longer to load'
             Set-RegistryValue -Path 'HKCU:\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy' -Name 'LetAppsRunInBackground' -Type 'DWord' -Value 2 -Description 'Control whether apps can run in the background via Group Policy. Force Deny removes per-app background settings from Windows Settings. Use User in Control if you need apps like Teams, Zoom, or WhatsApp'
             Set-RegistryValue -Path 'HKCU:\SOFTWARE\Policies\Microsoft\Windows\StorageSense' -Name 'AllowStorageSenseGlobal' -Type 'DWord' -Value 0 -Description 'Automatically free up disk space by removing temporary files, emptying the recycle bin, and managing downloads'
@@ -1956,10 +2021,11 @@ if ($UserCustomizations) {
             Set-RegistryValue -Path 'HKCU:\Control Panel\Desktop' -Name 'JPEGImportQuality' -Type 'DWord' -Value 100 -Description 'Allow Windows to compress wallpapers to save disk space and improve performance. Only affects images in JPEG format.'
             Set-RegistryValue -Path 'HKCU:\Control Panel\Desktop' -Name 'MenuShowDelay' -Type 'String' -Value '0' -Description 'Add a brief delay before displaying menus (400ms - Windows default), or show them instantly (0ms) for faster navigation'
             Set-RegistryValue -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced' -Name 'MultiTaskingAltTabFilter' -Type 'DWord' -Value 3 -Description 'Show only traditional open windows in Alt+Tab instead of including Microsoft Edge tabs and other Windows suggestions'
-            Set-RegistryValue -Path 'HKCU:\Software\Microsoft\DirectX\UserGpuPreferences' -Name 'DirectXUserGlobalSettings' -Type 'String' -Value '1' -Description 'Reduce latency and use advanced features in compatible games by using DirectX flip presentation model'
-            Set-RegistryValue -Path 'HKCU:\Software\Microsoft\DirectX\UserGpuPreferences' -Name 'DirectXUserGlobalSettings' -Type 'String' -Value '1' -Description 'Enable VRR (G-Sync/FreeSync) optimizations for smoother gameplay. Requires a VRR-compatible monitor; this setting has no effect if your monitor does not support VRR'
-            Set-RegistryValue -Path 'HKCU:\Software\Microsoft\DirectX\UserGpuPreferences' -Name 'DirectXUserGlobalSettings' -Type 'String' -Value '0' -Description 'Automatically convert SDR content to HDR for enhanced colors and brightness. Requires an HDR-capable display with HDR enabled; this setting has no effect if your display does not support HDR'
-            Set-RegistryValue -Path 'HKCU:\System\GameConfigStore' -Name 'GameDVR_FSEBehaviorMode' -Type 'DWord' -Value 0 -Description 'Allow Windows to optimize games running in fullscreen mode. Disabling can fix performance issues or stuttering in some older games that don''t work well with borderless fullscreen optimization'
+            Set-RegistryValue -Path 'HKCU:\Software\Microsoft\DirectX\UserGpuPreferences' -Name 'DirectXUserGlobalSettings' -Type 'String' -Value 'SwapEffectUpgradeEnable=1;VRROptimizeEnable=1;' -Description 'Reduce latency and use advanced features in compatible games by using DirectX flip presentation model and VRR'
+            Set-RegistryValue -Path 'HKCU:\System\GameConfigStore' -Name 'GameDVR_FSEBehaviorMode' -Type 'DWord' -Value 2 -Description 'Allow Windows to optimize games running in fullscreen mode'
+            Set-RegistryValue -Path 'HKCU:\System\GameConfigStore' -Name 'GameDVR_HonorUserFSEBehaviorMode' -Type 'DWord' -Value 1 -Description 'Honor user fullscreen optimizations mode'
+            Set-RegistryValue -Path 'HKCU:\System\GameConfigStore' -Name 'GameDVR_DXGIHonorFSEWindowsCompatible' -Type 'DWord' -Value 1 -Description 'DXGI honor fullscreen compatibility'
+            Set-RegistryValue -Path 'HKCU:\System\GameConfigStore' -Name 'GameDVR_EFSEFeatureFlags' -Type 'DWord' -Value 0 -Description 'GameDVR EFSE Feature Flags'
             Remove-RegistryValue -Path 'HKCU:\Software\Microsoft\Windows\DWM' -Name 'CompositionPolicy' -Description 'Enable visual effects managed by the Desktop Window Manager. Disabling may provide minor performance gains on older hardware but will break Aero effects'
 
             # PowerShell script for: DNS Server
@@ -2229,7 +2295,10 @@ if ($UserCustomizations) {
             Set-RegistryValue -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced' -Name 'TaskbarCompanion' -Type 'DWord' -Value 0 -Description 'Show or hide the newer Copilot companion button on the taskbar'
             Set-RegistryValue -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced' -Name 'CopilotPWAPin' -Type 'DWord' -Value 0 -Description 'Show or hide the Copilot PWA pin on the taskbar'
             Set-RegistryValue -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced' -Name 'RecallPin' -Type 'DWord' -Value 0 -Description 'Show or hide the Recall pin on the taskbar'
-            Set-RegistryValue -Path 'HKCU:\Software\Policies\Microsoft\Dsh' -Name 'AllowNewsAndInterests' -Type 'DWord' -Value 1 -Description 'Show the Widgets button that displays personalized news, weather, calendar, and other information'
+            Set-RegistryValue -Path 'HKCU:\Software\Policies\Microsoft\Dsh' -Name 'AllowNewsAndInterests' -Type 'DWord' -Value 0 -Description 'Disable the Widgets button'
+            Set-RegistryValue -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced' -Name 'TaskbarDa' -Type 'DWord' -Value 0 -Description 'Disable Widgets icon on taskbar'
+            Set-RegistryValue -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced' -Name 'ShowSecondsInSystemClock' -Type 'DWord' -Value 1 -Description 'Show seconds in system clock'
+            Set-RegistryValue -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced' -Name 'LastActiveClick' -Type 'DWord' -Value 1 -Description 'Switch to last active window on taskbar click'
             Set-RegistryValue -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced\TaskbarDeveloperSettings' -Name 'TaskbarEndTask' -Type 'DWord' -Value 1 -Description 'Adds an ''End Task'' option when right-clicking applications on the taskbar for quick termination'
 
             # ============================================================================
