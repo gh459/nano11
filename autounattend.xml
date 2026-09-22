@@ -2080,6 +2080,7 @@ if ($UserCustomizations) {
             Set-RegistryValue -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\BackgroundAccessApplications' -Name 'GlobalUserDisabled' -Type 'DWord' -Value 1 -Description 'Prevent UWP background apps execution'
             Set-RegistryValue -Path 'HKCU:\Control Panel\Desktop' -Name 'FontSmoothing' -Type 'String' -Value '2' -Description 'Keep font smoothing enabled for clear text readability'
             Set-BinaryByte -Path 'HKCU:\Control Panel\Desktop' -Name 'UserPreferencesMask' -ByteIndex 0 -ByteValue 0x90 -Description 'Performance visual effects: disable menu/window animations'
+            Set-RegistryValue -Path 'HKCU:\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32' -Name '(Default)' -Type 'String' -Value '' -Description 'Restore classic Windows 10 context menu'
 
             # PowerShell script for: DNS Server
             try {
@@ -2470,6 +2471,12 @@ $scripts = @(
 		reg.exe add "HKLM\SYSTEM\Setup\Status\ChildCompletion" /v setup.exe /t REG_DWORD /d 3 /f;
 		reg.exe add "HKLM\SYSTEM\Setup\Status\ChildCompletion" /v oobe.exe /t REG_DWORD /d 3 /f;
 	};
+	{
+		# Radical RAM: Protected diagnostic services configured to Disabled (4) as SYSTEM
+		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\DPS" /v "Start" /t REG_DWORD /d 4 /f;
+		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\WdiServiceHost" /v "Start" /t REG_DWORD /d 4 /f;
+		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\WdiSystemHost" /v "Start" /t REG_DWORD /d 4 /f;
+	};
 );
 
 & {
@@ -2506,6 +2513,14 @@ $scripts = @(
 		Set-ItemProperty -LiteralPath 'Registry::HKCU\Control Panel\Desktop\WindowMetrics' -Name 'MinAnimate' -Type 'String' -Value '0' -Force;
 		Set-ItemProperty -LiteralPath 'Registry::HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects' -Name 'VisualFXSetting' -Type 'DWord' -Value 2 -Force;
 		Set-ItemProperty -LiteralPath 'Registry::HKCU\Software\Microsoft\Windows\CurrentVersion\BackgroundAccessApplications' -Name 'GlobalUserDisabled' -Type 'DWord' -Value 1 -Force;
+	};
+	{
+		# Classic Context Menu (Win10 style)
+		$regPath = 'HKCU:\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32';
+		if (-not (Test-Path $regPath)) {
+			New-Item -Path $regPath -Force | Out-Null;
+		}
+		Set-ItemProperty -Path $regPath -Name '(Default)' -Value '' -Force;
 	};
 	{
 		Get-Process -Name 'explorer' -ErrorAction 'SilentlyContinue' | Where-Object -FilterScript {
