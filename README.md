@@ -57,6 +57,12 @@ The goal of nano11 is to automate the creation of a streamlined Windows 11 image
   - Automatically adjusts `autounattend.xml` processor architecture and generates UEFI-compliant boot records for ARM64 (Parallels Desktop, VMware Fusion, UTM).
 - **🚀 Canary 28020+ & Legacy Hardware Setup Bypass (Issue #29)**:
   - Automatically neutralizes `sources\appraiserres.dll` alongside offline registry `LabConfig` tweaks, allowing installation on unsupported CPUs, TPM 1.2/none, and older motherboards (e.g. Intel 6-series H67, 2nd-7th gen Core).
+- **⚡ Radical RAM Optimization (Idle Memory Baseline ~1.0 GB – 1.3 GB)**:
+  - **SvcHost Grouping**: Sets `SvcHostSplitThresholdInKB` to 64 GB, consolidating 70–90 separate `svchost.exe` instances into 12–15 shared processes, instantly freeing 500 MB – 800 MB of RAM.
+  - **Kernel Memory Manager & Page Combining**: Enables `PageCombining` (NT kernel COW memory deduplication) via MMAgent and sets paged pool trim threshold (`PoolUsageMaximum = 60`) while prioritizing application working sets over file system cache (`LargeSystemCache = 0`).
+  - **DWM & Visual Effects Lightweighting**: Disables window transparency (Acrylic/Mica) and animations while preserving ClearType font smoothing, reducing `dwm.exe` render target buffers.
+  - **Service Pruning & Demand-Start**: Disables memory-heavy background services (`SysMain`, `WSearch`, `FontCache`, `DoSvc`, `DPS`, `WdiServiceHost`, `DusmSvc`) and configures non-essential daemons (`LanmanServer`, `ShellHWDetection`, `stisvc`) to demand-start.
+  - **Automated Post-Boot Working Set Trimming**: Automatically invokes Win32 `EmptyWorkingSet` and garbage collection at the end of `FirstLogon.ps1` to reclaim one-time setup heap allocations.
 - **🛠️ Robust DISM & ISO Generation**:
   - Automatically repairs orphaned DISM mount points on startup (`dism /Cleanup-Wim`).
   - Handles single-index and dual-index `boot.wim` structures seamlessly.

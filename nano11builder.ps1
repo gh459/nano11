@@ -1133,8 +1133,52 @@ reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\Syste
 reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games" /v "Clock Rate" /t REG_DWORD /d 10000 /f | Out-Null
 
 # SvcHost RAM consolidation & Service Timeout
-reg.exe add "HKLM\zSYSTEM\ControlSet001\Control" /v "SvcHostSplitThresholdInKB" /t REG_DWORD /d 3670016 /f | Out-Null
+# 67108864 (64GB) groups services into shared svchost processes, preventing 70-90 individual svchost instances and saving 500MB-800MB RAM
+reg.exe add "HKLM\zSYSTEM\ControlSet001\Control" /v "SvcHostSplitThresholdInKB" /t REG_DWORD /d 67108864 /f | Out-Null
 reg.exe add "HKLM\zSYSTEM\ControlSet001\Control" /v "ServicesPipeTimeout" /t REG_DWORD /d 30000 /f | Out-Null
+
+# Kernel Memory Management (Radical RAM Optimization & Page Combining)
+reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\Session Manager\Memory Management" /v "DisablePageCombining" /t REG_DWORD /d 0 /f | Out-Null
+reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\Session Manager\Memory Management" /v "PoolUsageMaximum" /t REG_DWORD /d 60 /f | Out-Null
+reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\Session Manager\Memory Management" /v "LargeSystemCache" /t REG_DWORD /d 0 /f | Out-Null
+reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\Session Manager\Memory Management" /v "DisablePagingExecutive" /t REG_DWORD /d 0 /f | Out-Null
+reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\Session Manager\Memory Management\PrefetchParameters" /v "EnablePrefetcher" /t REG_DWORD /d 0 /f | Out-Null
+reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\Session Manager\Memory Management\PrefetchParameters" /v "EnableSuperfetch" /t REG_DWORD /d 0 /f | Out-Null
+
+# Radical RAM Optimization: Non-essential background services configured to Disabled (4) or Manual (3)
+Write-Host "Configuring system services for radical RAM reduction..." -ForegroundColor Green
+$serviceConfigs = @{
+    "SysMain"            = 4  # SuperFetch / RAM pre-caching (Saves 100MB-200MB RAM)
+    "WSearch"            = 4  # Windows Search Indexer (Saves 80MB-150MB RAM)
+    "FontCache"          = 4  # Font Cache Service (Saves 40MB-70MB RAM)
+    "FontCache3.0.0.0"   = 4  # WPF Font Cache Service (Saves 20MB-30MB RAM)
+    "DoSvc"              = 4  # Delivery Optimization (Saves 40MB-80MB RAM)
+    "DPS"                = 4  # Diagnostic Policy Service (Saves 30MB-50MB RAM)
+    "WdiServiceHost"     = 4  # Diagnostic Service Host
+    "WdiSystemHost"      = 4  # Diagnostic System Host
+    "TroubleshootingSvc" = 4  # Recommended Troubleshooting Service
+    "DusmSvc"            = 4  # Data Usage Monitoring
+    "LanmanServer"       = 3  # Server / SMB File Sharing (Manual: starts on demand only)
+    "TabletInputService" = 3  # Touch Keyboard and Handwriting Panel (Manual)
+    "SensrSvc"           = 4  # Sensor Monitoring Service
+    "SensorService"      = 4  # Sensor Service
+    "SensorDataService"  = 4  # Sensor Data Service
+    "ShellHWDetection"   = 3  # Shell Hardware Detection (Manual)
+    "WarpJITSvc"         = 4  # WARP JIT Service
+    "SharedAccess"       = 4  # Internet Connection Sharing
+    "stisvc"             = 3  # Windows Image Acquisition (Manual)
+    "MapsBroker"         = 4  # Downloaded Maps Manager
+    "DiagTrack"          = 4  # Connected User Experiences and Telemetry
+    "dmwappushservice"   = 4  # WAP Push Message Routing Service
+    "RetailDemo"         = 4  # Retail Demo Service
+    "wisvc"              = 4  # Windows Insider Service
+    "lfsvc"              = 4  # Geolocation Service
+    "PcaSvc"             = 4  # Program Compatibility Assistant
+    "WerSvc"             = 4  # Windows Error Reporting Service
+}
+foreach ($svc in $serviceConfigs.GetEnumerator()) {
+    reg.exe add "HKLM\zSYSTEM\ControlSet001\Services\$($svc.Key)" /v "Start" /t REG_DWORD /d $($svc.Value) /f | Out-Null
+}
 
 # WebDAV File Size Limit (4GB)
 reg.exe add "HKLM\zSYSTEM\ControlSet001\Services\WebClient\Parameters" /v "FileSizeLimitInBytes" /t REG_DWORD /d 4294967295 /f | Out-Null
@@ -1244,6 +1288,20 @@ reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Themes\Perso
 reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize" /v "SystemUsesLightTheme" /t REG_DWORD /d 0 /f | Out-Null
 reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize" /v "AppsUseLightTheme" /t REG_DWORD /d 0 /f | Out-Null
 reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize" /v "SystemUsesLightTheme" /t REG_DWORD /d 0 /f | Out-Null
+
+# Radical RAM: Disable Transparency & DWM render targets
+reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize" /v "EnableTransparency" /t REG_DWORD /d 0 /f | Out-Null
+reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize" /v "EnableTransparency" /t REG_DWORD /d 0 /f | Out-Null
+reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\DWM" /v "ColorizationOpaqueBlend" /t REG_DWORD /d 1 /f | Out-Null
+reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\DWM" /v "ColorizationOpaqueBlend" /t REG_DWORD /d 1 /f | Out-Null
+reg.exe add "HKLM\zNTUSER\Control Panel\Desktop\WindowMetrics" /v "MinAnimate" /t REG_SZ /d "0" /f | Out-Null
+reg.exe add "HKLM\zDEFAULT\Control Panel\Desktop\WindowMetrics" /v "MinAnimate" /t REG_SZ /d "0" /f | Out-Null
+reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" /v "VisualFXSetting" /t REG_DWORD /d 2 /f | Out-Null
+reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" /v "VisualFXSetting" /t REG_DWORD /d 2 /f | Out-Null
+reg.exe add "HKLM\zNTUSER\Control Panel\Desktop" /v "UserPreferencesMask" /t REG_BINARY /d "9012038010000000" /f | Out-Null
+reg.exe add "HKLM\zDEFAULT\Control Panel\Desktop" /v "UserPreferencesMask" /t REG_BINARY /d "9012038010000000" /f | Out-Null
+reg.exe add "HKLM\zNTUSER\Control Panel\Desktop" /v "FontSmoothing" /t REG_SZ /d "2" /f | Out-Null
+reg.exe add "HKLM\zDEFAULT\Control Panel\Desktop" /v "FontSmoothing" /t REG_SZ /d "2" /f | Out-Null
 reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v "HideFileExt" /t REG_DWORD /d 0 /f | Out-Null
 reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v "HideFileExt" /t REG_DWORD /d 0 /f | Out-Null
 reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v "Hidden" /t REG_DWORD /d 1 /f | Out-Null

@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <unattend xmlns="urn:schemas-microsoft-com:unattend" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
   <!-- Integrated nano11 + Winhance Unattended Configuration -->
   <settings pass="offlineServicing">
@@ -1251,7 +1251,12 @@ Write-Log "Bloat removal process completed"
     Set-RegistryValue -Path 'HKLM:\Software\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile' -Name 'SystemResponsiveness' -Type 'DWord' -Value 10 -Description 'Minimize background task interference by allocating more CPU time to your active game or multimedia application'
     Set-RegistryValue -Path 'HKLM:\Software\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games' -Name 'Priority' -Type 'DWord' -Value 6 -Description 'Give games higher CPU scheduling priority to dedicate more processor time to your game'
     Set-RegistryValue -Path 'HKLM:\Software\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games' -Name 'Scheduling Category' -Type 'String' -Value 'High' -Description 'Assign high-priority scheduling category to ensure games receive preferential system resource allocation'
-    Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Control' -Name 'SvcHostSplitThresholdInKB' -Type 'DWord' -Value 3670016 -Description 'Set the memory threshold that determines when Windows splits services into separate svchost.exe processes. Higher values group more services together, reducing process count. Select the value matching your system RAM'
+    Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Control' -Name 'SvcHostSplitThresholdInKB' -Type 'DWord' -Value 67108864 -Description 'Set the memory threshold that determines when Windows splits services into separate svchost.exe processes. 64GB value groups services together, radically reducing svchost process count and idle RAM usage'
+    Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management' -Name 'DisablePageCombining' -Type 'DWord' -Value 0 -Description 'Enable Page Combining memory deduplication to merge identical RAM pages across processes'
+    Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management' -Name 'PoolUsageMaximum' -Type 'DWord' -Value 60 -Description 'Trim paged pool earlier at 60 percent capacity to keep kernel memory compact'
+    Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management' -Name 'LargeSystemCache' -Type 'DWord' -Value 0 -Description 'Prioritize application working sets over file system cache in physical RAM'
+    Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management' -Name 'DisablePagingExecutive' -Type 'DWord' -Value 0 -Description 'Allow paging of idle kernel drivers and code when RAM is needed'
+    Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management\PrefetchParameters' -Name 'EnableSuperfetch' -Type 'DWord' -Value 0 -Description 'Disable Superfetch memory pre-caching'
     Set-RegistryValue -Path 'HKLM:\Software\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games' -Name 'GPU Priority' -Type 'DWord' -Value 8 -Description 'Give games higher GPU scheduling priority to improve graphics performance and frame rates'
     Set-RegistryValue -Path 'HKLM:\System\CurrentControlSet\Control\GraphicsDrivers' -Name 'HwSchMode' -Type 'DWord' -Value 2 -Description 'Let your GPU manage its own memory and scheduling for reduced latency and improved performance'
     Set-RegistryValue -Path 'HKLM:\Software\NVIDIA Corporation\Global\FTS' -Name 'EnableGR535' -Type 'DWord' -Value 0 -Description 'Enable legacy NVIDIA image sharpening filter for enhanced visual clarity. Only works on older NVIDIA drivers; newer drivers should use NVIDIA Control Panel sharpening instead'
@@ -1295,6 +1300,17 @@ Write-Log "Bloat removal process completed"
         Write-Log "Netsh TCP/IP tweaks warning: $($_.Exception.Message)" "WARNING"
     }
 
+    # Radical RAM: MMAgent Memory Management optimizations
+    Write-Log "Applying MMAgent Memory Management optimizations..." "INFO"
+    try {
+        Enable-MMAgent -PageCombining -ErrorAction SilentlyContinue
+        Disable-MMAgent -ApplicationPreLaunch -ErrorAction SilentlyContinue
+        Disable-MMAgent -OperationAPI -ErrorAction SilentlyContinue
+        Write-Log "MMAgent optimizations applied successfully" "SUCCESS"
+    } catch {
+        Write-Log "MMAgent optimizations warning: $($_.Exception.Message)" "WARNING"
+    }
+
     # GPU Driver Class Latency optimizations (Integrated from optimizerDuck &amp; sparkle)
     Write-Log "Applying GPU Display Driver Class Latency optimizations..." "INFO"
     $gpuClassKey = "HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}"
@@ -1333,22 +1349,36 @@ Write-Log "Bloat removal process completed"
     Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Control' -Name 'ServicesPipeTimeout' -Type 'DWord' -Value 30000 -Description 'Reduce the startup timeout for Windows services from 60 to 30 seconds. This can speed up boot time slightly'
     Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\SysMain' -Name 'Start' -Type 'DWord' -Value 4 -Description 'Preload frequently used applications into RAM for faster launch times. Automatic is recommended for HDD or mixed-storage systems; Manual or Disabled is only suitable for SSD-only systems'
     Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management\PrefetchParameters' -Name 'EnablePrefetcher' -Type 'DWord' -Value 0 -Description 'Preload frequently used applications and boot files into memory to speed up launches. Generally recommended for HDDs not SSDs'
-    Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\WSearch' -Name 'Start' -Type 'DWord' -Value 3 -Description 'Indexes files and folders for faster search results. Disabling reduces background CPU and disk activity but breaks Outlook search and makes Start Menu and File Explorer search slow or unreliable'
+    Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\WSearch' -Name 'Start' -Type 'DWord' -Value 4 -Description 'Indexes files and folders for faster search results. Disabled for radical RAM optimization'
+    Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\FontCache' -Name 'Start' -Type 'DWord' -Value 4 -Description 'Windows Font Cache Service disabled to save continuous RAM'
+    Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\FontCache3.0.0.0' -Name 'Start' -Type 'DWord' -Value 4 -Description 'Windows Presentation Foundation Font Cache disabled to save RAM'
+    Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\DoSvc' -Name 'Start' -Type 'DWord' -Value 4 -Description 'Delivery Optimization Service disabled to eliminate background RAM usage'
+    Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\DPS' -Name 'Start' -Type 'DWord' -Value 4 -Description 'Diagnostic Policy Service disabled to stop diagnostic hosts from idling in RAM'
+    Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\WdiServiceHost' -Name 'Start' -Type 'DWord' -Value 4 -Description 'Diagnostic Service Host disabled to save RAM'
+    Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\WdiSystemHost' -Name 'Start' -Type 'DWord' -Value 4 -Description 'Diagnostic System Host disabled to save RAM'
+    Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\TroubleshootingSvc' -Name 'Start' -Type 'DWord' -Value 4 -Description 'Recommended Troubleshooting Service disabled to save RAM'
+    Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\DusmSvc' -Name 'Start' -Type 'DWord' -Value 4 -Description 'Data Usage Service disabled to save background tracking RAM'
+    Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\LanmanServer' -Name 'Start' -Type 'DWord' -Value 3 -Description 'Server service set to Manual demand-start to keep file sharing available without idling in RAM'
+    Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\ShellHWDetection' -Name 'Start' -Type 'DWord' -Value 3 -Description 'Shell Hardware Detection set to Manual'
+    Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\WarpJITSvc' -Name 'Start' -Type 'DWord' -Value 4 -Description 'WARP JIT Service disabled to save RAM'
+    Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\SharedAccess' -Name 'Start' -Type 'DWord' -Value 4 -Description 'Internet Connection Sharing disabled to save RAM'
+    Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\stisvc' -Name 'Start' -Type 'DWord' -Value 3 -Description 'Windows Image Acquisition set to Manual demand-start'
+    Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\dmwappushservice' -Name 'Start' -Type 'DWord' -Value 4 -Description 'WAP Push Message Routing Service disabled'
     Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\Spooler' -Name 'Start' -Type 'DWord' -Value 3 -Description 'Manages print jobs sent to printers. If you don''t use a printer, set to Manual or Disabled to free up system resources'
     Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\DiagTrack' -Name 'Start' -Type 'DWord' -Value 4 -Description 'Sends usage data and diagnostics to Microsoft. Setting to Manual or Disabled reduces background network and CPU usage'
     Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\CDPSvc' -Name 'Start' -Type 'DWord' -Value 3 -Description 'Enables cross-device experiences like phone linking and nearby sharing. Disabling reduces background activity and device interaction logging'
     Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\CDPUserSvc' -Name 'Start' -Type 'DWord' -Value 3 -Description 'Enables cross-device experiences like phone linking and nearby sharing. Disabling reduces background activity and device interaction logging'
     Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\PcaSvc' -Name 'Start' -Type 'DWord' -Value 4 -Description 'Monitors programs for compatibility issues and suggests fixes. Disabling prevents compatibility prompts and saves minor system resources'
     Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\WerSvc' -Name 'Start' -Type 'DWord' -Value 4 -Description 'Collects and sends crash data to Microsoft. Disabling prevents crash reporting, reduces network traffic, and improves privacy with minimal system impact'
-    Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\lfsvc' -Name 'Start' -Type 'DWord' -Value 3 -Description 'Tracks your physical location for apps and services. Disabling improves privacy and prevents location tracking, but apps won''t be able to use location features'
+    Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\lfsvc' -Name 'Start' -Type 'DWord' -Value 4 -Description 'Tracks your physical location for apps and services. Disabling improves privacy and prevents location tracking, but apps won''t be able to use location features'
     Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\RetailDemo' -Name 'Start' -Type 'DWord' -Value 4 -Description 'Controls device activity when in retail demo mode. Safe to disable for personal computers as it only serves retail display purposes'
-    Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\wisvc' -Name 'Start' -Type 'DWord' -Value 3 -Description 'Manages Windows Insider Program features and preview builds. Safe to disable if you''re not participating in the Windows Insider Program'
+    Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\wisvc' -Name 'Start' -Type 'DWord' -Value 4 -Description 'Manages Windows Insider Program features and preview builds. Safe to disable if you''re not participating in the Windows Insider Program'
     Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\PhoneSvc' -Name 'Start' -Type 'DWord' -Value 3 -Description 'Manages telephony state on the device. Safe to disable if you don''t use phone connectivity features or make calls from your PC'
     Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\WalletService' -Name 'Start' -Type 'DWord' -Value 3 -Description 'Provides wallet functionality for payment and NFC scenarios. Safe to disable if you don''t use Microsoft Wallet features'
     Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\SCardSvr' -Name 'Start' -Type 'DWord' -Value 3 -Description 'Enables smart card reader functionality for security authentication. Safe to disable if you don''t use physical smart cards or card readers'
     Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\ScDeviceEnum' -Name 'Start' -Type 'DWord' -Value 3 -Description 'Enables smart card reader functionality for security authentication. Safe to disable if you don''t use physical smart cards or card readers'
     Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\SCPolicySvc' -Name 'Start' -Type 'DWord' -Value 3 -Description 'Enables smart card reader functionality for security authentication. Safe to disable if you don''t use physical smart cards or card readers'
-    Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\MapsBroker' -Name 'Start' -Type 'DWord' -Value 2 -Description 'Provides access to downloaded maps for applications. Set to Manual to allow map access when needed while preventing unnecessary background activity'
+    Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\MapsBroker' -Name 'Start' -Type 'DWord' -Value 4 -Description 'Provides access to downloaded maps for applications. Disabled for RAM saving'
     Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\Fax' -Name 'Start' -Type 'DWord' -Value 4 -Description 'Enables sending and receiving faxes. Safe to disable for most users as fax functionality is rarely used on modern systems'
     Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\WMPNetworkSvc' -Name 'Start' -Type 'DWord' -Value 4 -Description 'Shares Windows Media Player libraries to other networked players and media devices. Safe to disable if you don''t share media over your network'
     Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\MixedRealityOpenXRSvc' -Name 'Start' -Type 'DWord' -Value 3 -Description 'Runs OpenXR applications on Windows Mixed Reality devices. Safe to disable if you don''t use VR or AR headsets'
@@ -1366,7 +1396,7 @@ Write-Log "Bloat removal process completed"
     Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\XblGameSave' -Name 'Start' -Type 'DWord' -Value 4 -Description 'Syncs game saves to Xbox Live cloud. Only needed for Xbox Game Pass and Microsoft Store games with cloud save features'
     Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\XboxNetApiSvc' -Name 'Start' -Type 'DWord' -Value 4 -Description 'Supports Xbox Live multiplayer networking. Required for Xbox multiplayer gaming but not needed for Steam/Epic/other gaming platforms'
     Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\WbioSrvc' -Name 'Start' -Type 'DWord' -Value 3 -Description 'Enables fingerprint and facial recognition login via Windows Hello. Safe to disable on desktop systems without biometric hardware'
-    Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\TabletInputService' -Name 'Start' -Type 'DWord' -Value 4 -Description 'Manages the Windows Input Experience including touch keyboard, pen/stylus input, handwriting panel, emoji panel (Win+.), and Xbox controller keyboard. Disabling will break all virtual/software keyboard input but is safe on desktop systems without touchscreen, pen, or gamepad'
+    Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\TabletInputService' -Name 'Start' -Type 'DWord' -Value 3 -Description 'Manages the Windows Input Experience including touch keyboard, pen/stylus input, handwriting panel, emoji panel (Win+.), and Xbox controller keyboard. Disabling will break all virtual/software keyboard input but is safe on desktop systems without touchscreen, pen, or gamepad'
 
     # PowerShell script for: Touch Keyboard and Handwriting Panel Service
     try {
@@ -1377,16 +1407,17 @@ Write-Log "Bloat removal process completed"
     }
 
     Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\TapiSrv' -Name 'Start' -Type 'DWord' -Value 3 -Description 'Manages telephony (TAPI) for Phone Link audio relay, modems, fax, and VoIP softphones. Leave at Manual (Windows default) unless you use no telephony software'
-    Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\SensrSvc' -Name 'Start' -Type 'DWord' -Value 3 -Description 'Monitors various sensors like ambient light and orientation. Safe to disable on desktop systems without sensor hardware'
-    Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\SensorDataService' -Name 'Start' -Type 'DWord' -Value 3 -Description 'Delivers data from a variety of sensors to applications. Safe to disable on desktop systems without sensor hardware'
+    Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\SensrSvc' -Name 'Start' -Type 'DWord' -Value 4 -Description 'Monitors various sensors like ambient light and orientation. Safe to disable on desktop systems without sensor hardware'
+    Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\SensorService' -Name 'Start' -Type 'DWord' -Value 4 -Description 'Sensor Service disabled'
+    Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\SensorDataService' -Name 'Start' -Type 'DWord' -Value 4 -Description 'Delivers data from a variety of sensors to applications. Safe to disable on desktop systems without sensor hardware'
     Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\WSAIFabricSvc' -Name 'Start' -Type 'DWord' -Value 4 -Description 'Windows AI Fabric Service (WSAIFabricSvc) manages AI workloads. Disable if you don''t use Windows AI features'
 
-    # PowerShell script for: System Protection (Restore Points)
+    # Disable System Restore / Volume Shadow Copy to prevent memory and disk overhead
     try {
-        Enable-ComputerRestore -Drive 'C:\'
-        Write-Log "Allow Windows to automatically create restore points for the C: drive, making it possible to undo system changes if something goes wrong" "SUCCESS"
+        Disable-ComputerRestore -Drive 'C:\' -ErrorAction SilentlyContinue
+        Write-Log "Disabled System Restore for C: drive to conserve memory and disk resources" "SUCCESS"
     } catch {
-        Write-Log "Failed: Allow Windows to automatically create restore points for the C: drive, making it possible to undo system changes if something goes wrong - $($_.Exception.Message)" "ERROR"
+        Write-Log "System restore configure note: $($_.Exception.Message)" "INFO"
     }
 
 
@@ -1408,7 +1439,11 @@ Write-Log "Bloat removal process completed"
         @{ TN="\Microsoft\Windows\Power Efficiency Diagnostics\AnalyzeSystem"; Action="/Disable"; Desc="Analyzes system power consumption and collects energy efficiency data. Disable to reduce telemetry and background analysis" },
         @{ TN="\Microsoft\Windows\WindowsAI\RecallConfiguration"; Action="/Disable"; Desc="Windows AI scheduled tasks including Recall configuration. Disable to prevent AI features from running in the background" },
         @{ TN="\Microsoft\Windows\WindowsAI\RecallPipeline"; Action="/Disable"; Desc="Windows AI scheduled tasks including Recall configuration. Disable to prevent AI features from running in the background" },
-        @{ TN="\Microsoft\Office\Office Actions Server"; Action="/Disable"; Desc="Office AI Actions Server scheduled task. Disable to prevent Office AI from running in the background" }
+        @{ TN="\Microsoft\Office\Office Actions Server"; Action="/Disable"; Desc="Office AI Actions Server scheduled task. Disable to prevent Office AI from running in the background" },
+        @{ TN="\Microsoft\Windows\MemoryDiagnostic\ProcessMemoryDiagnosticEvents"; Action="/Disable"; Desc="Disables periodic memory diagnostic background scanning to save RAM" },
+        @{ TN="\Microsoft\Windows\MemoryDiagnostic\RunFullMemoryDiagnostic"; Action="/Disable"; Desc="Disables periodic memory diagnostic background scanning to save RAM" },
+        @{ TN="\Microsoft\Windows\Maintenance\WinSAT"; Action="/Disable"; Desc="Disables Windows System Assessment Tool background execution to save RAM" },
+        @{ TN="\Microsoft\Windows\DiskFootprint\Diagnostics"; Action="/Disable"; Desc="Disables disk footprint diagnostic tasks to reduce background activity" }
     )
 
     Write-Log "Applying scheduled task settings..." "INFO"
@@ -2037,6 +2072,15 @@ if ($UserCustomizations) {
             Set-RegistryValue -Path 'HKCU:\System\GameConfigStore' -Name 'GameDVR_EFSEFeatureFlags' -Type 'DWord' -Value 0 -Description 'GameDVR EFSE Feature Flags'
             Remove-RegistryValue -Path 'HKCU:\Software\Microsoft\Windows\DWM' -Name 'CompositionPolicy' -Description 'Enable visual effects managed by the Desktop Window Manager. Disabling may provide minor performance gains on older hardware but will break Aero effects'
 
+            # Radical RAM: DWM Surface Textures and Visual Effects lightweighting
+            Set-RegistryValue -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize' -Name 'EnableTransparency' -Type 'DWord' -Value 0 -Description 'Disable window transparency to save DWM render target memory'
+            Set-RegistryValue -Path 'HKCU:\Software\Microsoft\Windows\DWM' -Name 'ColorizationOpaqueBlend' -Type 'DWord' -Value 1 -Description 'Force opaque blending in Desktop Window Manager'
+            Set-RegistryValue -Path 'HKCU:\Control Panel\Desktop\WindowMetrics' -Name 'MinAnimate' -Type 'String' -Value '0' -Description 'Disable minimize and maximize window animations'
+            Set-RegistryValue -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects' -Name 'VisualFXSetting' -Type 'DWord' -Value 2 -Description 'Visual effects adjust for best performance'
+            Set-RegistryValue -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\BackgroundAccessApplications' -Name 'GlobalUserDisabled' -Type 'DWord' -Value 1 -Description 'Prevent UWP background apps execution'
+            Set-RegistryValue -Path 'HKCU:\Control Panel\Desktop' -Name 'FontSmoothing' -Type 'String' -Value '2' -Description 'Keep font smoothing enabled for clear text readability'
+            Set-BinaryByte -Path 'HKCU:\Control Panel\Desktop' -Name 'UserPreferencesMask' -ByteIndex 0 -ByteValue 0x90 -Description 'Performance visual effects: disable menu/window animations'
+
             # PowerShell script for: DNS Server
             try {
                 Get-NetAdapter | ForEach-Object { Set-DnsClientServerAddress -InterfaceIndex $_.InterfaceIndex -ResetServerAddresses }
@@ -2456,6 +2500,14 @@ $scripts = @(
 		Set-ItemProperty -LiteralPath 'Registry::HKCU\Software\Microsoft\Windows\CurrentVersion\Search' -Name 'SearchboxTaskbarMode' -Type 'DWord' -Value 0;
 	};
 	{
+		# Radical RAM: DWM and visual effects per user
+		Set-ItemProperty -LiteralPath 'Registry::HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize' -Name 'EnableTransparency' -Type 'DWord' -Value 0 -Force;
+		Set-ItemProperty -LiteralPath 'Registry::HKCU\Software\Microsoft\Windows\DWM' -Name 'ColorizationOpaqueBlend' -Type 'DWord' -Value 1 -Force;
+		Set-ItemProperty -LiteralPath 'Registry::HKCU\Control Panel\Desktop\WindowMetrics' -Name 'MinAnimate' -Type 'String' -Value '0' -Force;
+		Set-ItemProperty -LiteralPath 'Registry::HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects' -Name 'VisualFXSetting' -Type 'DWord' -Value 2 -Force;
+		Set-ItemProperty -LiteralPath 'Registry::HKCU\Software\Microsoft\Windows\CurrentVersion\BackgroundAccessApplications' -Name 'GlobalUserDisabled' -Type 'DWord' -Value 1 -Force;
+	};
+	{
 		Get-Process -Name 'explorer' -ErrorAction 'SilentlyContinue' | Where-Object -FilterScript {
 			$_.SessionId -eq ( Get-Process -Id $PID ).SessionId;
 		} | Stop-Process -Force;
@@ -2531,6 +2583,12 @@ $scripts = @(
 		reg.exe add "HKU\DefaultUser\Software\Microsoft\Windows\CurrentVersion\Explorer" /v "AltTabSettings" /t REG_DWORD /d 1 /f;
 		reg.exe add "HKU\DefaultUser\Software\Microsoft\Windows\CurrentVersion\BackgroundAccessApplications" /v "GlobalUserDisabled" /t REG_DWORD /d 1 /f;
 		reg.exe add "HKU\DefaultUser\Software\Microsoft\Windows\CurrentVersion\Policies\Attachments" /v "SaveZoneInformation" /t REG_DWORD /d 1 /f;
+		reg.exe add "HKU\DefaultUser\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize" /v "EnableTransparency" /t REG_DWORD /d 0 /f;
+		reg.exe add "HKU\DefaultUser\Software\Microsoft\Windows\DWM" /v "ColorizationOpaqueBlend" /t REG_DWORD /d 1 /f;
+		reg.exe add "HKU\DefaultUser\Control Panel\Desktop\WindowMetrics" /v "MinAnimate" /t REG_SZ /d "0" /f;
+		reg.exe add "HKU\DefaultUser\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" /v "VisualFXSetting" /t REG_DWORD /d 2 /f;
+		reg.exe add "HKU\DefaultUser\Control Panel\Desktop" /v "UserPreferencesMask" /t REG_BINARY /d "9012038010000000" /f;
+		reg.exe add "HKU\DefaultUser\Control Panel\Desktop" /v "FontSmoothing" /t REG_SZ /d "2" /f;
 		reg.exe add "HKU\DefaultUser\Software\Microsoft\Windows\CurrentVersion\RunOnce" /v "UnattendedSetup" /t REG_SZ /d "powershell.exe -ExecutionPolicy Bypass -WindowStyle Normal -NoProfile -Command \""Get-Content -LiteralPath 'C:\Windows\Setup\Scripts\UserOnce.ps1' -Raw | Invoke-Expression;\""" /f;
 	};
 );
@@ -2581,6 +2639,23 @@ $scripts = @(
 				Remove-Item -Path 'C:\Windows\System32\Recovery\winre.wim' -Force -ErrorAction SilentlyContinue;
 			} catch {}
 		}
+	};
+	{
+		# Radical RAM: Empty working set memory from setup processes and reclaim initialization heap
+		try {
+			$sig = @'
+[DllImport("psapi.dll")]
+public static extern int EmptyWorkingSet(IntPtr hwProc);
+'@
+			$psapi = Add-Type -MemberDefinition $sig -Name "PsapiMem" -Namespace "Win32" -PassThru -ErrorAction SilentlyContinue;
+			if ($psapi) {
+				Get-Process -ErrorAction SilentlyContinue | ForEach-Object {
+					try { [Win32.PsapiMem]::EmptyWorkingSet($_.Handle) | Out-Null } catch {}
+				};
+			}
+			[System.GC]::Collect();
+			[System.GC]::WaitForPendingFinalizers();
+		} catch {}
 	};
 );
 
