@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <unattend xmlns="urn:schemas-microsoft-com:unattend" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
   <!-- Integrated nano11 + Winhance Unattended Configuration -->
   <settings pass="offlineServicing">
@@ -845,6 +845,9 @@ $packages = @(
     'Microsoft.ScreenSketch'
     'Microsoft.WindowsStore'
     'Microsoft.DesktopAppInstaller'
+    'Microsoft.CrossDevice'
+    'Microsoft.Getstarted'
+    'Microsoft.WindowsCalculator'
 )
 
 $capabilities = @(

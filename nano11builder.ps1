@@ -485,7 +485,8 @@ $appxPatterns = @(
     '*HEVCVideoExtension*', '*MicrosoftStickyNotes*', '*OutlookForWindows*',
     '*RawImageExtension*', '*VP9VideoExtensions*', '*WebpImageExtension*',
     '*DevHome*', '*Photos*', '*Camera*', '*QuickAssist*',
-    '*Paint*', '*Notepad*'
+    '*Paint*', '*Notepad*', '*CrossDevice*', '*Getstarted*', '*GetStarted*',
+    '*WindowsCalculator*', '*Calculator*'
 )
 # Note: *SecHealthUI*, *CoreAI*, *PeopleExperienceHost*, *PinningConfirmationDialog*, *SecureAssessmentBrowser*
 # are protected system components in newer Windows 11 builds that trigger COMException (0x80073cfa) if removed via DISM.
@@ -702,6 +703,27 @@ Remove-Item -Path "$scratchDir\Windows\System32\OneDriveSetup.exe" -Force -Error
 Get-ChildItem -Path "$scratchDir\Windows\WinSxS" -Filter "*microsoft-windows-onedrive-setup*" -Directory -ErrorAction SilentlyContinue | ForEach-Object {
     Remove-ProtectedDirectory -Path $_.FullName -ScratchPath $scratchDir
 }
+
+# Purge Accessibility and unwanted assistive binaries from System32 (Voice Access, Live Captions, Magnifier, OSK, Narrator)
+Write-Host "Removing unneeded accessibility binaries from System32..." -ForegroundColor Cyan
+$accessBinaries = @(
+    "VoiceAccess.exe",
+    "Livecaptions.exe",
+    "magnify.exe",
+    "osk.exe",
+    "Narrator.exe",
+    "NarratorQuickStart.exe"
+)
+foreach ($bin in $accessBinaries) {
+    $binPath = Join-Path -Path "$scratchDir\Windows\System32" -ChildPath $bin
+    if (Test-Path -LiteralPath $binPath) {
+        Set-ItemOwnershipAndAccess -Path $binPath
+        Remove-Item -LiteralPath $binPath -Force -ErrorAction SilentlyContinue
+    }
+}
+# Purge Windows Backup scheduled tasks
+Remove-Item -LiteralPath "$scratchDir\Windows\System32\Tasks\Microsoft\Windows\AppListBackup" -Recurse -Force -ErrorAction SilentlyContinue
+
 
 # WinRE Handling (Guarantees Setup SafeOS staging succeeds, then cleans up post-install)
 $recoveryDir = Join-Path -Path $scratchDir -ChildPath "Windows\System32\Recovery"
@@ -978,6 +1000,40 @@ reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\Explorer" /v "DisableSear
 reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Teams" /v "DisableInstallation" /t REG_DWORD /d 1 /f | Out-Null
 reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\Windows Mail" /v "PreventRun" /t REG_DWORD /d 1 /f | Out-Null
 
+# Disable Cross-Device / Mobile Devices / Resume & Windows Backup
+Write-Host "Disabling Mobile Devices / Cross-Device Resume & Windows Backup..." -ForegroundColor Green
+reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\System" /v "EnableCdp" /t REG_DWORD /d 0 /f | Out-Null
+reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\System" /v "EnableMmx" /t REG_DWORD /d 0 /f | Out-Null
+reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\System" /v "AllowCrossDeviceClipboard" /t REG_DWORD /d 0 /f | Out-Null
+reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\System" /v "UploadUserActivities" /t REG_DWORD /d 0 /f | Out-Null
+reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\System" /v "PublishUserActivities" /t REG_DWORD /d 0 /f | Out-Null
+reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\CloudContent" /v "DisableWindowsConsumerFeatures" /t REG_DWORD /d 1 /f | Out-Null
+reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\Backup" /v "DisableCloudBackup" /t REG_DWORD /d 1 /f | Out-Null
+reg.exe delete "HKLM\zSOFTWARE\Classes\Directory\Background\shellex\ContextMenuHandlers\SendToPhone" /f > $null 2>&1
+reg.exe delete "HKLM\zSOFTWARE\Classes\DesktopBackground\shellex\ContextMenuHandlers\SendToPhone" /f > $null 2>&1
+
+# Accessibility Hotkey & Feature Suppressions (Voice Access, Live Captions, Narrator)
+Write-Host "Configuring Accessibility & Assistive hotkey suppressions..." -ForegroundColor Green
+reg.exe add "HKLM\zNTUSER\Software\Microsoft\Narrator" /v "WinEnterLaunchNarrator" /t REG_DWORD /d 0 /f | Out-Null
+reg.exe add "HKLM\zNTUSER\Software\Microsoft\VoiceAccess" /v "Enabled" /t REG_DWORD /d 0 /f | Out-Null
+reg.exe add "HKLM\zNTUSER\Software\Microsoft\LiveCaptions" /v "LiveCaptionsDesktopEnabled" /t REG_DWORD /d 0 /f | Out-Null
+reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows NT\CurrentVersion\Accessibility" /v "Configuration" /t REG_SZ /d "" /f | Out-Null
+
+# IFEO (Image File Execution Options) Debugger redirect to systray.exe to prevent crashes/popups on hotkeys or callbacks
+$blockedExes = @(
+    "CrossDeviceResume.exe",
+    "WindowsBackupClient.exe",
+    "VoiceAccess.exe",
+    "Livecaptions.exe",
+    "magnify.exe",
+    "osk.exe",
+    "Narrator.exe",
+    "NarratorQuickStart.exe"
+)
+foreach ($exe in $blockedExes) {
+    reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\$exe" /v "Debugger" /t REG_SZ /d "systray.exe" /f | Out-Null
+}
+
 # Scheduled Tasks Cleanup (Path fixed - no hardcoded C:)
 Write-Host "Cleaning up scheduled telemetry tasks..." -ForegroundColor Cyan
 $tasksPath = Join-Path -Path $scratchDir -ChildPath "Windows\System32\Tasks"
@@ -1009,7 +1065,7 @@ if ($removeDefender) {
 
 # Disabling unneeded background services (Resolves Issue #1 - Keep Bluetooth / Audio)
 Write-Host "Disabling unneeded background services..." -ForegroundColor Cyan
-$servicesToDisable = @('Spooler', 'PrintNotify', 'Fax', 'RemoteRegistry', 'MapsBroker', 'WalletService')
+$servicesToDisable = @('Spooler', 'PrintNotify', 'Fax', 'RemoteRegistry', 'MapsBroker', 'WalletService', 'CDPSvc', 'CDPUserSvc')
 if (-not $keepBT) {
     $servicesToDisable += @('BthAvctpSvc', 'BluetoothUserService')
 }
@@ -1024,6 +1080,18 @@ foreach ($service in $servicesToDisable) {
 $hidePages = [System.Collections.Generic.List[string]]::new()
 if ($removeDefender) { $hidePages.Add("virus") }
 if ($disableWU)      { $hidePages.Add("windowsupdate") }
+$extraHidePages = @(
+    "mobile-devices",
+    "crossdevice",
+    "backup",
+    "easeofaccess-voiceaccess",
+    "easeofaccess-magnifier",
+    "easeofaccess-narrator",
+    "easeofaccess-closedcaptioning"
+)
+foreach ($hp in $extraHidePages) {
+    $hidePages.Add($hp)
+}
 if ($hidePages.Count -gt 0) {
     $hideVal = "hide:" + ($hidePages -join ";")
     reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer" /v "SettingsPageVisibility" /t REG_SZ /d "$hideVal" /f | Out-Null
