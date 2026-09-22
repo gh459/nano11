@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     nano11 Builder - Universal, Language-Independent Windows 11 Image Reducer
 .DESCRIPTION
@@ -1635,32 +1635,76 @@ Get-ChildItem -Path $nano11Dir | Where-Object { $_.Name -notin $keepList } | For
     Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-# 17. Locate or download oscdimg.exe (checks Windows ADK first)
-$oscdimgExe = Join-Path -Path $PSScriptRoot -ChildPath "oscdimg.exe"
-if (-not (Test-Path -LiteralPath $oscdimgExe)) {
-    # Check Windows ADK installed paths
-    $adkCandidates = @(
-        "${env:ProgramFiles(x86)}\Windows Kits\10\Assessment and Deployment Kit\Deployment Tools\amd64\Oscdimg\oscdimg.exe",
-        "${env:ProgramFiles(x86)}\Windows Kits\10\Assessment and Deployment Kit\Deployment Tools\arm64\Oscdimg\oscdimg.exe",
-        "$env:ProgramFiles\Windows Kits\10\Assessment and Deployment Kit\Deployment Tools\amd64\Oscdimg\oscdimg.exe"
-    )
-    foreach ($candidate in $adkCandidates) {
-        if (Test-Path -LiteralPath $candidate) {
-            $oscdimgExe = $candidate
-            Write-Host "Found local oscdimg.exe in Windows ADK: $oscdimgExe" -ForegroundColor Green
-            break
-        }
+# 17. Locate or download oscdimg.exe (checks local dirs, PATH, ADK, and multi-mirror fallback)
+$oscdimgCandidates = @(
+    (Join-Path -Path $PSScriptRoot -ChildPath "oscdimg.exe"),
+    (Join-Path -Path (Get-Location).Path -ChildPath "oscdimg.exe"),
+    (Join-Path -Path "$env:USERPROFILE\Downloads\nano11-main" -ChildPath "oscdimg.exe"),
+    "${env:ProgramFiles(x86)}\Windows Kits\10\Assessment and Deployment Kit\Deployment Tools\amd64\Oscdimg\oscdimg.exe",
+    "${env:ProgramFiles(x86)}\Windows Kits\10\Assessment and Deployment Kit\Deployment Tools\arm64\Oscdimg\oscdimg.exe",
+    "$env:ProgramFiles\Windows Kits\10\Assessment and Deployment Kit\Deployment Tools\amd64\Oscdimg\oscdimg.exe",
+    "$env:ProgramFiles\Windows Kits\10\Assessment and Deployment Kit\Deployment Tools\arm64\Oscdimg\oscdimg.exe"
+)
+
+# Also check if oscdimg is available in PATH
+$pathOscd = Get-Command "oscdimg.exe" -ErrorAction SilentlyContinue
+if ($pathOscd -and $pathOscd.Source) {
+    $oscdimgCandidates += $pathOscd.Source
+}
+
+$oscdimgExe = $null
+foreach ($candidate in $oscdimgCandidates) {
+    if ($candidate -and (Test-Path -LiteralPath $candidate)) {
+        $oscdimgExe = $candidate
+        Write-Host "Found local oscdimg.exe: $oscdimgExe" -ForegroundColor Green
+        break
     }
 }
 
-if (-not (Test-Path -LiteralPath $oscdimgExe)) {
+if (-not $oscdimgExe) {
+    $targetOscdPath = Join-Path -Path $PSScriptRoot -ChildPath "oscdimg.exe"
     Write-Host "Downloading oscdimg.exe..." -ForegroundColor Cyan
-    $oscdimgUrl = "https://msdl.microsoft.com/download/symbols/oscdimg.exe/3D44737265000/oscdimg.exe"
-    try {
-        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-        Invoke-WebRequest -Uri $oscdimgUrl -OutFile $oscdimgExe -UseBasicParsing
-    } catch {
-        Write-Host "Failed to download oscdimg.exe automatically: $_" -ForegroundColor Red
+    
+    $mirrors = @(
+        "https://raw.githubusercontent.com/gh459/nano11/main/oscdimg.exe",
+        "https://github.com/gh459/nano11/raw/main/oscdimg.exe",
+        "https://msdl.microsoft.com/download/symbols/oscdimg.exe/3D44737265000/oscdimg.exe"
+    )
+    
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13
+    
+    foreach ($url in $mirrors) {
+        try {
+            Write-Host "  - Attempting download from: $url" -ForegroundColor Gray
+            Invoke-WebRequest -Uri $url -OutFile $targetOscdPath -UseBasicParsing -TimeoutSec 15
+            if ((Test-Path -LiteralPath $targetOscdPath) -and ((Get-Item -LiteralPath $targetOscdPath).Length -gt 50KB)) {
+                $oscdimgExe = $targetOscdPath
+                Write-Host "  - oscdimg.exe downloaded successfully!" -ForegroundColor Green
+                break
+            }
+        } catch {
+            Write-Host "  - Mirror failed: $($_.Exception.Message)" -ForegroundColor Yellow
+        }
+    }
+
+    # If still not found (e.g. system DNS failed to resolve hostnames), try public DNS resolution fallback
+    if (-not $oscdimgExe) {
+        try {
+            Write-Host "  - Attempting public DNS fallback resolution (8.8.8.8)..." -ForegroundColor Gray
+            $dnsEntry = Resolve-DnsName -Name "raw.githubusercontent.com" -Server 8.8.8.8 -ErrorAction SilentlyContinue | Where-Object { $_.IP4Address } | Select-Object -First 1
+            if ($dnsEntry -and $dnsEntry.IP4Address) {
+                $wc = New-Object System.Net.WebClient
+                $wc.Headers.Add("Host", "raw.githubusercontent.com")
+                $wc.Headers.Add("User-Agent", "Mozilla/5.0")
+                $wc.DownloadFile("https://$($dnsEntry.IP4Address)/gh459/nano11/main/oscdimg.exe", $targetOscdPath)
+                if ((Test-Path -LiteralPath $targetOscdPath) -and ((Get-Item -LiteralPath $targetOscdPath).Length -gt 50KB)) {
+                    $oscdimgExe = $targetOscdPath
+                    Write-Host "  - oscdimg.exe downloaded successfully via public DNS fallback!" -ForegroundColor Green
+                }
+            }
+        } catch {
+            Write-Host "  - Public DNS fallback download failed: $($_.Exception.Message)" -ForegroundColor Yellow
+        }
     }
 }
 
@@ -1740,7 +1784,7 @@ if ($efiSys -and $etfsBoot -and ($architecture -ne 'arm64')) {
 }
 
 $isoCreatedSuccessfully = $false
-if (Test-Path -LiteralPath $oscdimgExe) {
+if ($oscdimgExe -and (Test-Path -LiteralPath $oscdimgExe)) {
     $oscdimgArgs = @("-m", "-o", "-u2", "-udfver102", "-l`"nano11`"")
     if ($bootData) {
         $oscdimgArgs += "-bootdata:$bootData"
