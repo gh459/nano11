@@ -28,17 +28,34 @@ The goal of nano11 is to automate the creation of a streamlined Windows 11 image
   - **Windows Update**: Option to keep Windows Update enabled or disabled.
   - **Bluetooth & Audio**: Preserves Bluetooth audio transport and peripheral services by default so wireless headphones and controllers function properly.
   - **Recovery Environment (WinRE)**: Retain Windows RE with `-KeepRecovery` or `-KeepWinRE`. By default, WinRE is kept intact during installation so Windows Setup SafeOS staging succeeds 100%, then safely disabled and deleted online on first logon.
-- **🔧 Windows 11 Installation Failure Fixed (Resolves Issue #11 & Setup Rollbacks)**:
+- **🔧 Critical Installation & Setup Fixes**:
+  - **🔄 Post-Reboot Setup Crash & Loop Fixed (`ChildCompletion`)**: Solved the fatal *"The computer restarted unexpectedly or encountered an unexpected error"* dialog (`setup.exe = 1`). Root cause was a duplicate local account creation collision (`net.exe user User` in `Specialize.ps1` colliding with `<LocalAccount wcm:action="add">` in `oobeSystem` throwing `ERROR_USER_EXISTS` 0x80070524). Account creation is now cleanly centralized in `oobeSystem`.
+  - **🛡️ Automated Self-Healing Failsafe (`ErrorHandler.cmd`)**: Injected an official Windows Setup error recovery handler at `C:\Windows\Setup\Scripts\ErrorHandler.cmd` in the unattend file. If any unexpected setup error ever occurs, Windows Setup automatically invokes this script to reset `ChildCompletion\setup.exe = 3` and reboot, eliminating the need to manually press Shift + F10.
+  - **🖱️ Mouse Cursor & Pointer Display Guarantee**: Preserves essential Windows cursor bitmaps in `C:\Windows\Cursors` (~5 MB), ensuring the mouse pointer (`aero_arrow.cur`) is always rendered and fully functional throughout setup and on the installed desktop.
   - **Setup Pre-Finalize SafeOS Crash Fixed**: Solved the `0x80070002` / `0x8007000B` error where Windows Setup crashes at ~100% when attempting to stage missing or corrupt `winre.wim`. `winre.wim` is preserved at build time and removed cleanly via online `reagentc /disable` during `FirstLogon.ps1`.
   - **SafeDebloat Component Store Mode (Default)**: Protects CBS servicing integrity and localized (`ja-JP`) resources using official DISM `StartComponentCleanup /ResetBase` + cache pruning. Aggressive pruning mode (`-AggressiveWinSxS`) is also available with comprehensive core system and language preservation.
   - **Administrator Account Auto-Activation**: Explicitly activates the built-in Administrator account in `Specialize.ps1` for seamless unattended setup across Windows 11 Home and Pro editions.
   - **Setup Script Pre-Extraction**: Unattend scripts (`Specialize.ps1`, `DefaultUser.ps1`, etc.) are pre-extracted directly into the image during build time with robust `try/catch` error shielding, preventing specialize pass aborts.
   - **Bootable WIM Exports**: Added `/Bootable` flag to all `boot.wim` exports to prevent `0xc1510115` errors across all UEFI/BIOS firmware.
-- **💿 Robust ISO Generation & Boot Sector Auto-Recovery**:
-  - **Auto-Discovery & Fallback**: Searches for `etfsboot.com` and `efisys.bin` / `efisys_noprompt.bin` across candidate paths, automatically copying from source installation media if missing.
-  - **Dynamic Bootdata**: Seamlessly builds Dual-Boot (BIOS + UEFI), UEFI-only, or BIOS-only boot parameters based on available bootloaders.
+- **💿 Bundled `oscdimg.exe` & Resilient ISO Generation**:
+  - **Pre-Bundled Deployment Tool**: `oscdimg.exe` is bundled directly within the repository root for offline, reliable ISO generation out-of-the-box.
+  - **Multi-Mirror & DNS Fallback**: If `oscdimg.exe` is ever missing, the builder automatically falls back through multiple international CDN mirrors and Google DNS (`8.8.8.8`) resolution to resolve `msdl.microsoft.com` network lookup failures.
+  - **Dynamic Bootdata (Dual BIOS + UEFI)**: Seamlessly discovers `etfsboot.com` and `efisys.bin` across candidate paths, building Dual-Boot, UEFI-only, or BIOS-only boot parameters based on available bootloaders.
   - **Robocopy Mirroring**: Uses `robocopy` with `Copy-Item` fallback to ensure 100% of directory structures and boot files are preserved from read-only ISO media.
   - **Build Integrity & Safe Cleanup**: Validates output ISO existence and size (> 1 MB), captures `oscdimg` exit codes, displays SHA256 checksums, and preserves the working directory upon error for troubleshooting.
+- **⚡ Advanced Performance, Latency & Registry Optimization**:
+  - **Integrated optimizerDuck & sparkle**: Applies system latency and responsiveness optimizations, including `Win32PrioritySeparation` quantum boost (0x26), Multimedia Class Scheduler Service (MMCSS) gaming priority & GPU scheduling, and network throttling index disabling.
+  - **Integrated Revo Registry Cleaner Tuner**: Full integration of all 6 optimization categories:
+    - *Explorer*: Auto-complete URL/path suggestions, show drive letters first, disable info tips.
+    - *Desktop & Start Menu*: Reduce hover delay times, enable classic Alt+Tab, kill hung apps faster (`WaitToKillAppTimeout = 2000`).
+    - *System & Services*: `ServicesPipeTimeout` optimization, network file sharing responsiveness.
+    - *Visual Effects*: Disable Mica/Acrylic transparency while keeping font smoothing enabled.
+- **⚡ Radical RAM Optimization (Idle Memory Baseline ~1.0 GB – 1.3 GB)**:
+  - **SvcHost Grouping**: Sets `SvcHostSplitThresholdInKB` to 64 GB, consolidating 70–90 separate `svchost.exe` instances into 12–15 shared processes, instantly freeing 500 MB – 800 MB of RAM.
+  - **Kernel Memory Manager & Page Combining**: Enables `PageCombining` (NT kernel COW memory deduplication) via MMAgent and sets paged pool trim threshold (`PoolUsageMaximum = 60`) while prioritizing application working sets over file system cache (`LargeSystemCache = 0`).
+  - **DWM & Visual Effects Lightweighting**: Disables window transparency and animations while preserving ClearType font smoothing, reducing `dwm.exe` render target buffers.
+  - **Service Pruning & Demand-Start**: Disables memory-heavy background services (`SysMain`, `WSearch`, `FontCache`, `DoSvc`, `DPS`, `WdiServiceHost`, `DusmSvc`) and configures non-essential daemons (`LanmanServer`, `ShellHWDetection`, `stisvc`) to demand-start.
+  - **Automated Post-Boot Working Set Trimming**: Automatically invokes Win32 `EmptyWorkingSet` and garbage collection at the end of `FirstLogon.ps1` to reclaim one-time setup heap allocations.
 - **🐧 WSL2 & Virtualization Support (Issue #5)**:
   - Optional `-EnableWSL` flag pre-enables `VirtualMachinePlatform` and `Microsoft-Windows-Subsystem-Linux` before WinSxS stripping, allowing full WSL2, Docker, and Linux containers on a lightweight nano11 installation.
 - **💾 Custom Working Directory Support (Issues #27, #23)**:
@@ -57,16 +74,6 @@ The goal of nano11 is to automate the creation of a streamlined Windows 11 image
   - Automatically adjusts `autounattend.xml` processor architecture and generates UEFI-compliant boot records for ARM64 (Parallels Desktop, VMware Fusion, UTM).
 - **🚀 Canary 28020+ & Legacy Hardware Setup Bypass (Issue #29)**:
   - Automatically neutralizes `sources\appraiserres.dll` alongside offline registry `LabConfig` tweaks, allowing installation on unsupported CPUs, TPM 1.2/none, and older motherboards (e.g. Intel 6-series H67, 2nd-7th gen Core).
-- **⚡ Radical RAM Optimization (Idle Memory Baseline ~1.0 GB – 1.3 GB)**:
-  - **SvcHost Grouping**: Sets `SvcHostSplitThresholdInKB` to 64 GB, consolidating 70–90 separate `svchost.exe` instances into 12–15 shared processes, instantly freeing 500 MB – 800 MB of RAM.
-  - **Kernel Memory Manager & Page Combining**: Enables `PageCombining` (NT kernel COW memory deduplication) via MMAgent and sets paged pool trim threshold (`PoolUsageMaximum = 60`) while prioritizing application working sets over file system cache (`LargeSystemCache = 0`).
-  - **DWM & Visual Effects Lightweighting**: Disables window transparency (Acrylic/Mica) and animations while preserving ClearType font smoothing, reducing `dwm.exe` render target buffers.
-  - **Service Pruning & Demand-Start**: Disables memory-heavy background services (`SysMain`, `WSearch`, `FontCache`, `DoSvc`, `DPS`, `WdiServiceHost`, `DusmSvc`) and configures non-essential daemons (`LanmanServer`, `ShellHWDetection`, `stisvc`) to demand-start.
-  - **Automated Post-Boot Working Set Trimming**: Automatically invokes Win32 `EmptyWorkingSet` and garbage collection at the end of `FirstLogon.ps1` to reclaim one-time setup heap allocations.
-- **🛠️ Robust DISM & ISO Generation**:
-  - Automatically repairs orphaned DISM mount points on startup (`dism /Cleanup-Wim`).
-  - Handles single-index and dual-index `boot.wim` structures seamlessly.
-  - Generates ISO with proper volume label (`-l"nano11"`) and outputs SHA256 verification hash.
 - **📄 MIT License Included (Issue #14)**:
   - Fully compliant open-source license.
 
@@ -83,7 +90,14 @@ The resulting minimal OS is **not serviceable via cumulative updates** when WinS
 
 ## **What can be removed?**
 
-- **Bloatware & UWP Apps:** Clipchamp, News, Weather, Xbox, Solitaire, Copilot, DevHome, Teams, OneDrive, etc.
+- **Bloatware & UWP Apps:**
+  - Clipchamp, News, Weather, Xbox & Xbox Game Bar (`GameBarPresenceWriter.exe`), Solitaire, Copilot, DevHome, Teams, OneDrive.
+  - Windows Calculator, Getting Started (`Tips`), Windows Backup (`AppListBackup`).
+  - Mobile Devices & Cross-Device Resume (`crossdeviceresume`).
+- **Heavy Assistive & Accessibility Binaries (Optional/Slimmed):**
+  - Voice Access (`VoiceAccess.exe`), Live Captions (`Livecaptions.exe`), Magnifier (`magnify.exe`), On-Screen Keyboard (`osk.exe`), Narrator (`Narrator.exe`).
+- **Web Browsers & Cloud Runtimes:**
+  - Microsoft Edge, Edge Update, Edge Core, and Edge WebView2 runtimes from Program Files and WinSxS.
 - **System Components & FoDs:**
   - Internet Explorer, WordPad, Steps Recorder, XPS Viewer, PowerShell ISE.
   - Diagnostics, telemetry, scheduled CEIP tasks, sponsored apps.
@@ -125,6 +139,9 @@ You can also run the builder non-interactively with customized flags:
 
 # Full aggressive debloat without prompts:
 .\nano11builder.ps1 -NonInteractive
+
+# UltraSlim mode with ultra-small ISO footprint (~3.0 GB):
+.\nano11builder.ps1 -NonInteractive -UltraSlim
 ```
 
 ### **Available Parameters:**
