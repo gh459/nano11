@@ -1,312 +1,367 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
 <unattend xmlns="urn:schemas-microsoft-com:unattend" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
-	<!-- Integrated nano11 + Winhance Unattended Configuration -->
-	<settings pass="offlineServicing"></settings>
-	<settings pass="windowsPE">
-		<component name="Microsoft-Windows-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
-			<UserData>
-				<ProductKey>
-					<WillShowUI>OnError</WillShowUI>
-				</ProductKey>
-				<AcceptEula>true</AcceptEula>
-			</UserData>
-			<UseConfigurationSet>false</UseConfigurationSet>
-			<RunSynchronous>
-				<RunSynchronousCommand wcm:action="add">
-					<Order>1</Order>
-					<Path>reg.exe add "HKLM\SYSTEM\Setup\LabConfig" /v BypassTPMCheck /t REG_DWORD /d 1 /f</Path>
-				</RunSynchronousCommand>
-				<RunSynchronousCommand wcm:action="add">
-					<Order>2</Order>
-					<Path>reg.exe add "HKLM\SYSTEM\Setup\LabConfig" /v BypassSecureBootCheck /t REG_DWORD /d 1 /f</Path>
-				</RunSynchronousCommand>
-				<RunSynchronousCommand wcm:action="add">
-					<Order>3</Order>
-					<Path>reg.exe add "HKLM\SYSTEM\Setup\LabConfig" /v BypassRAMCheck /t REG_DWORD /d 1 /f</Path>
-				</RunSynchronousCommand>
-				<RunSynchronousCommand wcm:action="add">
-					<Order>4</Order>
-					<Path>reg.exe add "HKLM\SYSTEM\Setup\LabConfig" /v BypassCPUCheck /t REG_DWORD /d 1 /f</Path>
-				</RunSynchronousCommand>
-				<RunSynchronousCommand wcm:action="add">
-					<Order>5</Order>
-					<Path>reg.exe add "HKLM\SYSTEM\Setup\LabConfig" /v BypassStorageCheck /t REG_DWORD /d 1 /f</Path>
-				</RunSynchronousCommand>
-				<RunSynchronousCommand wcm:action="add">
-					<Order>6</Order>
-					<Path>reg.exe add "HKLM\SYSTEM\Setup\LabConfig" /v BypassDiskCheck /t REG_DWORD /d 1 /f</Path>
-				</RunSynchronousCommand>
-			</RunSynchronous>
-		</component>
-		<component name="Microsoft-Windows-Setup" processorArchitecture="x86" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
-			<UserData>
-				<ProductKey>
-					<WillShowUI>OnError</WillShowUI>
-				</ProductKey>
-				<AcceptEula>true</AcceptEula>
-			</UserData>
-			<UseConfigurationSet>false</UseConfigurationSet>
-			<RunSynchronous>
-				<RunSynchronousCommand wcm:action="add">
-					<Order>1</Order>
-					<Path>reg.exe add "HKLM\SYSTEM\Setup\LabConfig" /v BypassTPMCheck /t REG_DWORD /d 1 /f</Path>
-				</RunSynchronousCommand>
-				<RunSynchronousCommand wcm:action="add">
-					<Order>2</Order>
-					<Path>reg.exe add "HKLM\SYSTEM\Setup\LabConfig" /v BypassSecureBootCheck /t REG_DWORD /d 1 /f</Path>
-				</RunSynchronousCommand>
-				<RunSynchronousCommand wcm:action="add">
-					<Order>3</Order>
-					<Path>reg.exe add "HKLM\SYSTEM\Setup\LabConfig" /v BypassRAMCheck /t REG_DWORD /d 1 /f</Path>
-				</RunSynchronousCommand>
-				<RunSynchronousCommand wcm:action="add">
-					<Order>4</Order>
-					<Path>reg.exe add "HKLM\SYSTEM\Setup\LabConfig" /v BypassCPUCheck /t REG_DWORD /d 1 /f</Path>
-				</RunSynchronousCommand>
-				<RunSynchronousCommand wcm:action="add">
-					<Order>5</Order>
-					<Path>reg.exe add "HKLM\SYSTEM\Setup\LabConfig" /v BypassStorageCheck /t REG_DWORD /d 1 /f</Path>
-				</RunSynchronousCommand>
-				<RunSynchronousCommand wcm:action="add">
-					<Order>6</Order>
-					<Path>reg.exe add "HKLM\SYSTEM\Setup\LabConfig" /v BypassDiskCheck /t REG_DWORD /d 1 /f</Path>
-				</RunSynchronousCommand>
-			</RunSynchronous>
-		</component>
-		<component name="Microsoft-Windows-Setup" processorArchitecture="arm64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
-			<UserData>
-				<ProductKey>
-					<WillShowUI>OnError</WillShowUI>
-				</ProductKey>
-				<AcceptEula>true</AcceptEula>
-			</UserData>
-			<UseConfigurationSet>false</UseConfigurationSet>
-			<RunSynchronous>
-				<RunSynchronousCommand wcm:action="add">
-					<Order>1</Order>
-					<Path>reg.exe add "HKLM\SYSTEM\Setup\LabConfig" /v BypassTPMCheck /t REG_DWORD /d 1 /f</Path>
-				</RunSynchronousCommand>
-				<RunSynchronousCommand wcm:action="add">
-					<Order>2</Order>
-					<Path>reg.exe add "HKLM\SYSTEM\Setup\LabConfig" /v BypassSecureBootCheck /t REG_DWORD /d 1 /f</Path>
-				</RunSynchronousCommand>
-				<RunSynchronousCommand wcm:action="add">
-					<Order>3</Order>
-					<Path>reg.exe add "HKLM\SYSTEM\Setup\LabConfig" /v BypassRAMCheck /t REG_DWORD /d 1 /f</Path>
-				</RunSynchronousCommand>
-				<RunSynchronousCommand wcm:action="add">
-					<Order>4</Order>
-					<Path>reg.exe add "HKLM\SYSTEM\Setup\LabConfig" /v BypassCPUCheck /t REG_DWORD /d 1 /f</Path>
-				</RunSynchronousCommand>
-				<RunSynchronousCommand wcm:action="add">
-					<Order>5</Order>
-					<Path>reg.exe add "HKLM\SYSTEM\Setup\LabConfig" /v BypassStorageCheck /t REG_DWORD /d 1 /f</Path>
-				</RunSynchronousCommand>
-				<RunSynchronousCommand wcm:action="add">
-					<Order>6</Order>
-					<Path>reg.exe add "HKLM\SYSTEM\Setup\LabConfig" /v BypassDiskCheck /t REG_DWORD /d 1 /f</Path>
-				</RunSynchronousCommand>
-			</RunSynchronous>
-		</component>
-	</settings>
-	<settings pass="generalize"></settings>
-	<settings pass="specialize">
-		<component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
-			<ComputerName>nano11</ComputerName>
-		</component>
-		<component name="Microsoft-Windows-Deployment" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
-			<RunSynchronous>
-				<RunSynchronousCommand wcm:action="add">
-					<Order>1</Order>
-					<Path>powershell.exe -ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -Command "try { $candidates = @('C:\Windows\Panther\unattend.xml', 'C:\Windows\Panther\autounattend.xml', 'C:\Windows\System32\Sysprep\autounattend.xml', 'C:\Windows\System32\Sysprep\unattend.xml'); foreach ($p in $candidates) { if (Test-Path $p) { $xml = [xml]::new(); $xml.Load($p); if ($xml.unattend.Extensions.ExtractScript) { $sb = [scriptblock]::Create( $xml.unattend.Extensions.ExtractScript ); Invoke-Command -ScriptBlock $sb -ArgumentList $xml; break } } } } catch {}"</Path>
-				</RunSynchronousCommand>
-				<RunSynchronousCommand wcm:action="add">
-					<Order>2</Order>
-					<Path>reg.exe add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\OOBE" /v BypassNRO /t REG_DWORD /d 1 /f</Path>
-				</RunSynchronousCommand>
-				<RunSynchronousCommand wcm:action="add">
-					<Order>3</Order>
-					<Path>powershell.exe -ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -Command "Get-NetAdapter | Disable-NetAdapter -Confirm:$false"</Path>
-				</RunSynchronousCommand>
-				<RunSynchronousCommand wcm:action="add">
-					<Order>4</Order>
-					<Path>powershell.exe -ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -Command "foreach($d in 'C','D','E','F','G','H','I','J','K') { $src = Join-Path ($d + ':') 'sources\sxs'; if (Test-Path $src\*.cab) { dism /Online /Enable-Feature /FeatureName:NetFx3 /All /LimitAccess /Source:$src; break } }"</Path>
-				</RunSynchronousCommand>
-				<RunSynchronousCommand wcm:action="add">
-					<Order>5</Order>
-					<Path>powershell.exe -ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -File "C:\ProgramData\Winhance\Unattend\Scripts\Winhancements.ps1"</Path>
-				</RunSynchronousCommand>
-				<RunSynchronousCommand wcm:action="add">
-					<Order>6</Order>
-					<Path>powershell.exe -ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -Command "try { if (Test-Path 'C:\Windows\Setup\Scripts\Specialize.ps1') { &amp; 'C:\Windows\Setup\Scripts\Specialize.ps1' } } catch {}"</Path>
-				</RunSynchronousCommand>
-				<RunSynchronousCommand wcm:action="add">
-					<Order>7</Order>
-					<Path>cmd.exe /c "reg.exe load HKU\DefaultUser C:\Users\Default\NTUSER.DAT || exit 0"</Path>
-				</RunSynchronousCommand>
-				<RunSynchronousCommand wcm:action="add">
-					<Order>8</Order>
-					<Path>powershell.exe -ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -Command "try { if (Test-Path 'C:\Windows\Setup\Scripts\DefaultUser.ps1') { &amp; 'C:\Windows\Setup\Scripts\DefaultUser.ps1' } } catch {}"</Path>
-				</RunSynchronousCommand>
-				<RunSynchronousCommand wcm:action="add">
-					<Order>9</Order>
-					<Path>cmd.exe /c "for /l %i in (1,1,5) do (reg.exe unload HKU\DefaultUser &amp;&amp; exit /b 0 || timeout /t 1 >nul)"</Path>
-				</RunSynchronousCommand>
-			</RunSynchronous>
-		</component>
-		<component name="Microsoft-Windows-Shell-Setup" processorArchitecture="x86" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
-			<ComputerName>nano11</ComputerName>
-		</component>
-		<component name="Microsoft-Windows-Deployment" processorArchitecture="x86" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
-			<RunSynchronous>
-				<RunSynchronousCommand wcm:action="add">
-					<Order>1</Order>
-					<Path>powershell.exe -ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -Command "try { $candidates = @('C:\Windows\Panther\unattend.xml', 'C:\Windows\Panther\autounattend.xml', 'C:\Windows\System32\Sysprep\autounattend.xml', 'C:\Windows\System32\Sysprep\unattend.xml'); foreach ($p in $candidates) { if (Test-Path $p) { $xml = [xml]::new(); $xml.Load($p); if ($xml.unattend.Extensions.ExtractScript) { $sb = [scriptblock]::Create( $xml.unattend.Extensions.ExtractScript ); Invoke-Command -ScriptBlock $sb -ArgumentList $xml; break } } } } catch {}"</Path>
-				</RunSynchronousCommand>
-				<RunSynchronousCommand wcm:action="add">
-					<Order>2</Order>
-					<Path>reg.exe add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\OOBE" /v BypassNRO /t REG_DWORD /d 1 /f</Path>
-				</RunSynchronousCommand>
-				<RunSynchronousCommand wcm:action="add">
-					<Order>3</Order>
-					<Path>powershell.exe -ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -Command "Get-NetAdapter | Disable-NetAdapter -Confirm:$false"</Path>
-				</RunSynchronousCommand>
-				<RunSynchronousCommand wcm:action="add">
-					<Order>4</Order>
-					<Path>powershell.exe -ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -Command "foreach($d in 'C','D','E','F','G','H','I','J','K') { $src = Join-Path ($d + ':') 'sources\sxs'; if (Test-Path $src\*.cab) { dism /Online /Enable-Feature /FeatureName:NetFx3 /All /LimitAccess /Source:$src; break } }"</Path>
-				</RunSynchronousCommand>
-				<RunSynchronousCommand wcm:action="add">
-					<Order>5</Order>
-					<Path>powershell.exe -ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -File "C:\ProgramData\Winhance\Unattend\Scripts\Winhancements.ps1"</Path>
-				</RunSynchronousCommand>
-				<RunSynchronousCommand wcm:action="add">
-					<Order>6</Order>
-					<Path>powershell.exe -ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -Command "try { if (Test-Path 'C:\Windows\Setup\Scripts\Specialize.ps1') { &amp; 'C:\Windows\Setup\Scripts\Specialize.ps1' } } catch {}"</Path>
-				</RunSynchronousCommand>
-				<RunSynchronousCommand wcm:action="add">
-					<Order>7</Order>
-					<Path>cmd.exe /c "reg.exe load HKU\DefaultUser C:\Users\Default\NTUSER.DAT || exit 0"</Path>
-				</RunSynchronousCommand>
-				<RunSynchronousCommand wcm:action="add">
-					<Order>8</Order>
-					<Path>powershell.exe -ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -Command "try { if (Test-Path 'C:\Windows\Setup\Scripts\DefaultUser.ps1') { &amp; 'C:\Windows\Setup\Scripts\DefaultUser.ps1' } } catch {}"</Path>
-				</RunSynchronousCommand>
-				<RunSynchronousCommand wcm:action="add">
-					<Order>9</Order>
-					<Path>cmd.exe /c "for /l %i in (1,1,5) do (reg.exe unload HKU\DefaultUser &amp;&amp; exit /b 0 || timeout /t 1 >nul)"</Path>
-				</RunSynchronousCommand>
-			</RunSynchronous>
-		</component>
-		<component name="Microsoft-Windows-Shell-Setup" processorArchitecture="arm64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
-			<ComputerName>nano11</ComputerName>
-		</component>
-		<component name="Microsoft-Windows-Deployment" processorArchitecture="arm64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
-			<RunSynchronous>
-				<RunSynchronousCommand wcm:action="add">
-					<Order>1</Order>
-					<Path>powershell.exe -ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -Command "try { $candidates = @('C:\Windows\Panther\unattend.xml', 'C:\Windows\Panther\autounattend.xml', 'C:\Windows\System32\Sysprep\autounattend.xml', 'C:\Windows\System32\Sysprep\unattend.xml'); foreach ($p in $candidates) { if (Test-Path $p) { $xml = [xml]::new(); $xml.Load($p); if ($xml.unattend.Extensions.ExtractScript) { $sb = [scriptblock]::Create( $xml.unattend.Extensions.ExtractScript ); Invoke-Command -ScriptBlock $sb -ArgumentList $xml; break } } } } catch {}"</Path>
-				</RunSynchronousCommand>
-				<RunSynchronousCommand wcm:action="add">
-					<Order>2</Order>
-					<Path>reg.exe add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\OOBE" /v BypassNRO /t REG_DWORD /d 1 /f</Path>
-				</RunSynchronousCommand>
-				<RunSynchronousCommand wcm:action="add">
-					<Order>3</Order>
-					<Path>powershell.exe -ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -Command "Get-NetAdapter | Disable-NetAdapter -Confirm:$false"</Path>
-				</RunSynchronousCommand>
-				<RunSynchronousCommand wcm:action="add">
-					<Order>4</Order>
-					<Path>powershell.exe -ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -Command "foreach($d in 'C','D','E','F','G','H','I','J','K') { $src = Join-Path ($d + ':') 'sources\sxs'; if (Test-Path $src\*.cab) { dism /Online /Enable-Feature /FeatureName:NetFx3 /All /LimitAccess /Source:$src; break } }"</Path>
-				</RunSynchronousCommand>
-				<RunSynchronousCommand wcm:action="add">
-					<Order>5</Order>
-					<Path>powershell.exe -ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -File "C:\ProgramData\Winhance\Unattend\Scripts\Winhancements.ps1"</Path>
-				</RunSynchronousCommand>
-				<RunSynchronousCommand wcm:action="add">
-					<Order>6</Order>
-					<Path>powershell.exe -ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -Command "try { if (Test-Path 'C:\Windows\Setup\Scripts\Specialize.ps1') { &amp; 'C:\Windows\Setup\Scripts\Specialize.ps1' } } catch {}"</Path>
-				</RunSynchronousCommand>
-				<RunSynchronousCommand wcm:action="add">
-					<Order>7</Order>
-					<Path>cmd.exe /c "reg.exe load HKU\DefaultUser C:\Users\Default\NTUSER.DAT || exit 0"</Path>
-				</RunSynchronousCommand>
-				<RunSynchronousCommand wcm:action="add">
-					<Order>8</Order>
-					<Path>powershell.exe -ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -Command "try { if (Test-Path 'C:\Windows\Setup\Scripts\DefaultUser.ps1') { &amp; 'C:\Windows\Setup\Scripts\DefaultUser.ps1' } } catch {}"</Path>
-				</RunSynchronousCommand>
-				<RunSynchronousCommand wcm:action="add">
-					<Order>9</Order>
-					<Path>cmd.exe /c "for /l %i in (1,1,5) do (reg.exe unload HKU\DefaultUser &amp;&amp; exit /b 0 || timeout /t 1 >nul)"</Path>
-				</RunSynchronousCommand>
-			</RunSynchronous>
-		</component>
-	</settings>
-	<settings pass="auditSystem"></settings>
-	<settings pass="auditUser"></settings>
-	<settings pass="oobeSystem">
-		<component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
-			<OOBE>
-				<HideEULAPage>true</HideEULAPage>
-				<HideOEMRegistrationScreen>true</HideOEMRegistrationScreen>
-				<HideOnlineAccountScreens>true</HideOnlineAccountScreens>
-				<HideWirelessSetupInOOBE>true</HideWirelessSetupInOOBE>
-				<NetworkLocation>Work</NetworkLocation>
-				<ProtectYourPC>3</ProtectYourPC>
-			</OOBE>
-			<FirstLogonCommands>
-				<SynchronousCommand wcm:action="add">
-					<Order>1</Order>
-					<CommandLine>powershell.exe -ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -Command "Get-NetAdapter | Enable-NetAdapter -Confirm:$false"</CommandLine>
-				</SynchronousCommand>
-				<SynchronousCommand wcm:action="add">
-					<Order>2</Order>
-					<CommandLine>powershell.exe -ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -Command "try { if (Test-Path 'C:\Windows\Setup\Scripts\FirstLogon.ps1') { &amp; 'C:\Windows\Setup\Scripts\FirstLogon.ps1' } } catch {}"</CommandLine>
-				</SynchronousCommand>
-			</FirstLogonCommands>
-		</component>
-		<component name="Microsoft-Windows-Shell-Setup" processorArchitecture="x86" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
-			<OOBE>
-				<HideEULAPage>true</HideEULAPage>
-				<HideOEMRegistrationScreen>true</HideOEMRegistrationScreen>
-				<HideOnlineAccountScreens>true</HideOnlineAccountScreens>
-				<HideWirelessSetupInOOBE>true</HideWirelessSetupInOOBE>
-				<NetworkLocation>Work</NetworkLocation>
-				<ProtectYourPC>3</ProtectYourPC>
-			</OOBE>
-			<FirstLogonCommands>
-				<SynchronousCommand wcm:action="add">
-					<Order>1</Order>
-					<CommandLine>powershell.exe -ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -Command "Get-NetAdapter | Enable-NetAdapter -Confirm:$false"</CommandLine>
-				</SynchronousCommand>
-				<SynchronousCommand wcm:action="add">
-					<Order>2</Order>
-					<CommandLine>powershell.exe -ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -Command "try { if (Test-Path 'C:\Windows\Setup\Scripts\FirstLogon.ps1') { &amp; 'C:\Windows\Setup\Scripts\FirstLogon.ps1' } } catch {}"</CommandLine>
-				</SynchronousCommand>
-			</FirstLogonCommands>
-		</component>
-		<component name="Microsoft-Windows-Shell-Setup" processorArchitecture="arm64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
-			<OOBE>
-				<HideEULAPage>true</HideEULAPage>
-				<HideOEMRegistrationScreen>true</HideOEMRegistrationScreen>
-				<HideOnlineAccountScreens>true</HideOnlineAccountScreens>
-				<HideWirelessSetupInOOBE>true</HideWirelessSetupInOOBE>
-				<NetworkLocation>Work</NetworkLocation>
-				<ProtectYourPC>3</ProtectYourPC>
-			</OOBE>
-			<FirstLogonCommands>
-				<SynchronousCommand wcm:action="add">
-					<Order>1</Order>
-					<CommandLine>powershell.exe -ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -Command "Get-NetAdapter | Enable-NetAdapter -Confirm:$false"</CommandLine>
-				</SynchronousCommand>
-				<SynchronousCommand wcm:action="add">
-					<Order>2</Order>
-					<CommandLine>powershell.exe -ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -Command "try { if (Test-Path 'C:\Windows\Setup\Scripts\FirstLogon.ps1') { &amp; 'C:\Windows\Setup\Scripts\FirstLogon.ps1' } } catch {}"</CommandLine>
-				</SynchronousCommand>
-			</FirstLogonCommands>
-		</component>
-	</settings>
-	<Extensions xmlns="https://schneegans.de/windows/unattend-generator/">
-		<ExtractScript>
+  <!-- Integrated nano11 + Winhance Unattended Configuration -->
+  <settings pass="offlineServicing">
+  </settings>
+  <settings pass="windowsPE">
+    <component name="Microsoft-Windows-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+      <UserData>
+        <ProductKey>
+          <WillShowUI>OnError</WillShowUI>
+        </ProductKey>
+        <AcceptEula>true</AcceptEula>
+      </UserData>
+      <UseConfigurationSet>false</UseConfigurationSet>
+      <RunSynchronous>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>1</Order>
+          <Path>reg.exe add "HKLM\SYSTEM\Setup\LabConfig" /v BypassTPMCheck /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>2</Order>
+          <Path>reg.exe add "HKLM\SYSTEM\Setup\LabConfig" /v BypassSecureBootCheck /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>3</Order>
+          <Path>reg.exe add "HKLM\SYSTEM\Setup\LabConfig" /v BypassRAMCheck /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>4</Order>
+          <Path>reg.exe add "HKLM\SYSTEM\Setup\LabConfig" /v BypassCPUCheck /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>5</Order>
+          <Path>reg.exe add "HKLM\SYSTEM\Setup\LabConfig" /v BypassStorageCheck /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>6</Order>
+          <Path>reg.exe add "HKLM\SYSTEM\Setup\LabConfig" /v BypassDiskCheck /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
+      </RunSynchronous>
+    </component>
+    <component name="Microsoft-Windows-Setup" processorArchitecture="x86" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+      <UserData>
+        <ProductKey>
+          <WillShowUI>OnError</WillShowUI>
+        </ProductKey>
+        <AcceptEula>true</AcceptEula>
+      </UserData>
+      <UseConfigurationSet>false</UseConfigurationSet>
+      <RunSynchronous>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>1</Order>
+          <Path>reg.exe add "HKLM\SYSTEM\Setup\LabConfig" /v BypassTPMCheck /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>2</Order>
+          <Path>reg.exe add "HKLM\SYSTEM\Setup\LabConfig" /v BypassSecureBootCheck /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>3</Order>
+          <Path>reg.exe add "HKLM\SYSTEM\Setup\LabConfig" /v BypassRAMCheck /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>4</Order>
+          <Path>reg.exe add "HKLM\SYSTEM\Setup\LabConfig" /v BypassCPUCheck /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>5</Order>
+          <Path>reg.exe add "HKLM\SYSTEM\Setup\LabConfig" /v BypassStorageCheck /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>6</Order>
+          <Path>reg.exe add "HKLM\SYSTEM\Setup\LabConfig" /v BypassDiskCheck /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
+      </RunSynchronous>
+    </component>
+    <component name="Microsoft-Windows-Setup" processorArchitecture="arm64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+      <UserData>
+        <ProductKey>
+          <WillShowUI>OnError</WillShowUI>
+        </ProductKey>
+        <AcceptEula>true</AcceptEula>
+      </UserData>
+      <UseConfigurationSet>false</UseConfigurationSet>
+      <RunSynchronous>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>1</Order>
+          <Path>reg.exe add "HKLM\SYSTEM\Setup\LabConfig" /v BypassTPMCheck /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>2</Order>
+          <Path>reg.exe add "HKLM\SYSTEM\Setup\LabConfig" /v BypassSecureBootCheck /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>3</Order>
+          <Path>reg.exe add "HKLM\SYSTEM\Setup\LabConfig" /v BypassRAMCheck /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>4</Order>
+          <Path>reg.exe add "HKLM\SYSTEM\Setup\LabConfig" /v BypassCPUCheck /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>5</Order>
+          <Path>reg.exe add "HKLM\SYSTEM\Setup\LabConfig" /v BypassStorageCheck /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>6</Order>
+          <Path>reg.exe add "HKLM\SYSTEM\Setup\LabConfig" /v BypassDiskCheck /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
+      </RunSynchronous>
+    </component>
+  </settings>
+  <settings pass="generalize">
+  </settings>
+  <settings pass="specialize">
+    <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+      <ComputerName>nano11</ComputerName>
+    </component>
+    <component name="Microsoft-Windows-Deployment" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+      <RunSynchronous xmlns="urn:schemas-microsoft-com:unattend" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+        <RunSynchronousCommand wcm:action="add">
+          <Order>1</Order>
+          <Path>powershell.exe -ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -Command "try { $candidates = @('C:\Windows\Panther\unattend.xml', 'C:\Windows\Panther\autounattend.xml', 'C:\Windows\System32\Sysprep\autounattend.xml', 'C:\Windows\System32\Sysprep\unattend.xml'); foreach ($p in $candidates) { if (Test-Path $p) { $xml = [xml]::new(); $xml.Load($p); if ($xml.unattend.Extensions.ExtractScript) { $sb = [scriptblock]::Create( $xml.unattend.Extensions.ExtractScript ); Invoke-Command -ScriptBlock $sb -ArgumentList $xml; break } } } } catch {}"</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>2</Order>
+          <Path>reg.exe add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\OOBE" /v BypassNRO /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>3</Order>
+          <Path>powershell.exe -ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -Command "try { foreach($d in 'C','D','E','F','G','H','I','J','K') { $src = Join-Path ($d + ':') 'sources\sxs'; if (Test-Path $src\*.cab) { dism /Online /Enable-Feature /FeatureName:NetFx3 /All /LimitAccess /NoRestart /Source:$src; break } } } catch {}"</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>4</Order>
+          <Path>powershell.exe -ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -Command "try { if (Test-Path 'C:\Windows\Setup\Scripts\Specialize.ps1') { &amp; 'C:\Windows\Setup\Scripts\Specialize.ps1' } } catch {}"</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>5</Order>
+          <Path>cmd.exe /c "reg.exe load HKU\DefaultUser C:\Users\Default\NTUSER.DAT || exit 0"</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>6</Order>
+          <Path>powershell.exe -ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -Command "try { if (Test-Path 'C:\Windows\Setup\Scripts\DefaultUser.ps1') { &amp; 'C:\Windows\Setup\Scripts\DefaultUser.ps1' } } catch {}"</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>7</Order>
+          <Path>cmd.exe /c "for /l %i in (1,1,5) do (reg.exe unload HKU\DefaultUser &amp;&amp; exit /b 0 || timeout /t 1 &gt;nul)"</Path>
+        </RunSynchronousCommand>
+      </RunSynchronous>
+    </component>
+    <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="x86" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+      <ComputerName>nano11</ComputerName>
+    </component>
+    <component name="Microsoft-Windows-Deployment" processorArchitecture="x86" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+      <RunSynchronous xmlns="urn:schemas-microsoft-com:unattend" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+        <RunSynchronousCommand wcm:action="add">
+          <Order>1</Order>
+          <Path>powershell.exe -ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -Command "try { $candidates = @('C:\Windows\Panther\unattend.xml', 'C:\Windows\Panther\autounattend.xml', 'C:\Windows\System32\Sysprep\autounattend.xml', 'C:\Windows\System32\Sysprep\unattend.xml'); foreach ($p in $candidates) { if (Test-Path $p) { $xml = [xml]::new(); $xml.Load($p); if ($xml.unattend.Extensions.ExtractScript) { $sb = [scriptblock]::Create( $xml.unattend.Extensions.ExtractScript ); Invoke-Command -ScriptBlock $sb -ArgumentList $xml; break } } } } catch {}"</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>2</Order>
+          <Path>reg.exe add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\OOBE" /v BypassNRO /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>3</Order>
+          <Path>powershell.exe -ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -Command "try { foreach($d in 'C','D','E','F','G','H','I','J','K') { $src = Join-Path ($d + ':') 'sources\sxs'; if (Test-Path $src\*.cab) { dism /Online /Enable-Feature /FeatureName:NetFx3 /All /LimitAccess /NoRestart /Source:$src; break } } } catch {}"</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>4</Order>
+          <Path>powershell.exe -ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -Command "try { if (Test-Path 'C:\Windows\Setup\Scripts\Specialize.ps1') { &amp; 'C:\Windows\Setup\Scripts\Specialize.ps1' } } catch {}"</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>5</Order>
+          <Path>cmd.exe /c "reg.exe load HKU\DefaultUser C:\Users\Default\NTUSER.DAT || exit 0"</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>6</Order>
+          <Path>powershell.exe -ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -Command "try { if (Test-Path 'C:\Windows\Setup\Scripts\DefaultUser.ps1') { &amp; 'C:\Windows\Setup\Scripts\DefaultUser.ps1' } } catch {}"</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>7</Order>
+          <Path>cmd.exe /c "for /l %i in (1,1,5) do (reg.exe unload HKU\DefaultUser &amp;&amp; exit /b 0 || timeout /t 1 &gt;nul)"</Path>
+        </RunSynchronousCommand>
+      </RunSynchronous>
+    </component>
+    <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="arm64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+      <ComputerName>nano11</ComputerName>
+    </component>
+    <component name="Microsoft-Windows-Deployment" processorArchitecture="arm64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+      <RunSynchronous xmlns="urn:schemas-microsoft-com:unattend" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+        <RunSynchronousCommand wcm:action="add">
+          <Order>1</Order>
+          <Path>powershell.exe -ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -Command "try { $candidates = @('C:\Windows\Panther\unattend.xml', 'C:\Windows\Panther\autounattend.xml', 'C:\Windows\System32\Sysprep\autounattend.xml', 'C:\Windows\System32\Sysprep\unattend.xml'); foreach ($p in $candidates) { if (Test-Path $p) { $xml = [xml]::new(); $xml.Load($p); if ($xml.unattend.Extensions.ExtractScript) { $sb = [scriptblock]::Create( $xml.unattend.Extensions.ExtractScript ); Invoke-Command -ScriptBlock $sb -ArgumentList $xml; break } } } } catch {}"</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>2</Order>
+          <Path>reg.exe add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\OOBE" /v BypassNRO /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>3</Order>
+          <Path>powershell.exe -ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -Command "try { foreach($d in 'C','D','E','F','G','H','I','J','K') { $src = Join-Path ($d + ':') 'sources\sxs'; if (Test-Path $src\*.cab) { dism /Online /Enable-Feature /FeatureName:NetFx3 /All /LimitAccess /NoRestart /Source:$src; break } } } catch {}"</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>4</Order>
+          <Path>powershell.exe -ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -Command "try { if (Test-Path 'C:\Windows\Setup\Scripts\Specialize.ps1') { &amp; 'C:\Windows\Setup\Scripts\Specialize.ps1' } } catch {}"</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>5</Order>
+          <Path>cmd.exe /c "reg.exe load HKU\DefaultUser C:\Users\Default\NTUSER.DAT || exit 0"</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>6</Order>
+          <Path>powershell.exe -ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -Command "try { if (Test-Path 'C:\Windows\Setup\Scripts\DefaultUser.ps1') { &amp; 'C:\Windows\Setup\Scripts\DefaultUser.ps1' } } catch {}"</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>7</Order>
+          <Path>cmd.exe /c "for /l %i in (1,1,5) do (reg.exe unload HKU\DefaultUser &amp;&amp; exit /b 0 || timeout /t 1 &gt;nul)"</Path>
+        </RunSynchronousCommand>
+      </RunSynchronous>
+    </component>
+  </settings>
+  <settings pass="auditSystem">
+  </settings>
+  <settings pass="auditUser">
+  </settings>
+  <settings pass="oobeSystem">
+    <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns="urn:schemas-microsoft-com:unattend" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+      <UserAccounts>
+        <AdministratorPassword>
+          <Value />
+          <PlainText>true</PlainText>
+        </AdministratorPassword>
+        <LocalAccounts>
+          <LocalAccount wcm:action="add">
+            <Name>User</Name>
+            <DisplayName>User</DisplayName>
+            <Group>Administrators</Group>
+            <Password>
+              <Value />
+              <PlainText>true</PlainText>
+            </Password>
+          </LocalAccount>
+        </LocalAccounts>
+      </UserAccounts>
+      <AutoLogon>
+        <Username>User</Username>
+        <Enabled>true</Enabled>
+        <LogonCount>1</LogonCount>
+        <Password>
+          <Value />
+          <PlainText>true</PlainText>
+        </Password>
+      </AutoLogon>
+      <OOBE>
+        <HideEULAPage>true</HideEULAPage>
+        <HideOEMRegistrationScreen>true</HideOEMRegistrationScreen>
+        <HideOnlineAccountScreens>true</HideOnlineAccountScreens>
+        <HideWirelessSetupInOOBE>true</HideWirelessSetupInOOBE>
+        <ProtectYourPC>3</ProtectYourPC>
+      </OOBE>
+      <FirstLogonCommands>
+        <SynchronousCommand wcm:action="add">
+          <Order>1</Order>
+          <CommandLine>powershell.exe -ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -Command "try { if (Test-Path 'C:\ProgramData\Winhance\Unattend\Scripts\Winhancements.ps1') { &amp; 'C:\ProgramData\Winhance\Unattend\Scripts\Winhancements.ps1' } } catch {}"</CommandLine>
+        </SynchronousCommand>
+        <SynchronousCommand wcm:action="add">
+          <Order>2</Order>
+          <CommandLine>powershell.exe -ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -Command "try { if (Test-Path 'C:\Windows\Setup\Scripts\FirstLogon.ps1') { &amp; 'C:\Windows\Setup\Scripts\FirstLogon.ps1' } } catch {}"</CommandLine>
+        </SynchronousCommand>
+      </FirstLogonCommands>
+    </component>
+    <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="x86" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns="urn:schemas-microsoft-com:unattend" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+      <UserAccounts>
+        <AdministratorPassword>
+          <Value />
+          <PlainText>true</PlainText>
+        </AdministratorPassword>
+        <LocalAccounts>
+          <LocalAccount wcm:action="add">
+            <Name>User</Name>
+            <DisplayName>User</DisplayName>
+            <Group>Administrators</Group>
+            <Password>
+              <Value />
+              <PlainText>true</PlainText>
+            </Password>
+          </LocalAccount>
+        </LocalAccounts>
+      </UserAccounts>
+      <AutoLogon>
+        <Username>User</Username>
+        <Enabled>true</Enabled>
+        <LogonCount>1</LogonCount>
+        <Password>
+          <Value />
+          <PlainText>true</PlainText>
+        </Password>
+      </AutoLogon>
+      <OOBE>
+        <HideEULAPage>true</HideEULAPage>
+        <HideOEMRegistrationScreen>true</HideOEMRegistrationScreen>
+        <HideOnlineAccountScreens>true</HideOnlineAccountScreens>
+        <HideWirelessSetupInOOBE>true</HideWirelessSetupInOOBE>
+        <ProtectYourPC>3</ProtectYourPC>
+      </OOBE>
+      <FirstLogonCommands>
+        <SynchronousCommand wcm:action="add">
+          <Order>1</Order>
+          <CommandLine>powershell.exe -ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -Command "try { if (Test-Path 'C:\ProgramData\Winhance\Unattend\Scripts\Winhancements.ps1') { &amp; 'C:\ProgramData\Winhance\Unattend\Scripts\Winhancements.ps1' } } catch {}"</CommandLine>
+        </SynchronousCommand>
+        <SynchronousCommand wcm:action="add">
+          <Order>2</Order>
+          <CommandLine>powershell.exe -ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -Command "try { if (Test-Path 'C:\Windows\Setup\Scripts\FirstLogon.ps1') { &amp; 'C:\Windows\Setup\Scripts\FirstLogon.ps1' } } catch {}"</CommandLine>
+        </SynchronousCommand>
+      </FirstLogonCommands>
+    </component>
+    <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="arm64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns="urn:schemas-microsoft-com:unattend" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+      <UserAccounts>
+        <AdministratorPassword>
+          <Value />
+          <PlainText>true</PlainText>
+        </AdministratorPassword>
+        <LocalAccounts>
+          <LocalAccount wcm:action="add">
+            <Name>User</Name>
+            <DisplayName>User</DisplayName>
+            <Group>Administrators</Group>
+            <Password>
+              <Value />
+              <PlainText>true</PlainText>
+            </Password>
+          </LocalAccount>
+        </LocalAccounts>
+      </UserAccounts>
+      <AutoLogon>
+        <Username>User</Username>
+        <Enabled>true</Enabled>
+        <LogonCount>1</LogonCount>
+        <Password>
+          <Value />
+          <PlainText>true</PlainText>
+        </Password>
+      </AutoLogon>
+      <OOBE>
+        <HideEULAPage>true</HideEULAPage>
+        <HideOEMRegistrationScreen>true</HideOEMRegistrationScreen>
+        <HideOnlineAccountScreens>true</HideOnlineAccountScreens>
+        <HideWirelessSetupInOOBE>true</HideWirelessSetupInOOBE>
+        <ProtectYourPC>3</ProtectYourPC>
+      </OOBE>
+      <FirstLogonCommands>
+        <SynchronousCommand wcm:action="add">
+          <Order>1</Order>
+          <CommandLine>powershell.exe -ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -Command "try { if (Test-Path 'C:\ProgramData\Winhance\Unattend\Scripts\Winhancements.ps1') { &amp; 'C:\ProgramData\Winhance\Unattend\Scripts\Winhancements.ps1' } } catch {}"</CommandLine>
+        </SynchronousCommand>
+        <SynchronousCommand wcm:action="add">
+          <Order>2</Order>
+          <CommandLine>powershell.exe -ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -Command "try { if (Test-Path 'C:\Windows\Setup\Scripts\FirstLogon.ps1') { &amp; 'C:\Windows\Setup\Scripts\FirstLogon.ps1' } } catch {}"</CommandLine>
+        </SynchronousCommand>
+      </FirstLogonCommands>
+    </component>
+  </settings>
+  <Extensions xmlns="https://schneegans.de/windows/unattend-generator/">
+    <ExtractScript>
 param(
     [xml] $Document
 );
@@ -325,7 +380,7 @@ foreach( $file in $Document.unattend.Extensions.File ) {
     [System.IO.File]::WriteAllBytes( $path, ( $encoding.GetPreamble() + $encoding.GetBytes( $file.InnerText.Trim() ) ) );
 }
 		</ExtractScript>
-		<File path="C:\ProgramData\Winhance\Unattend\Scripts\Winhancements.ps1"><![CDATA[
+    <File path="C:\ProgramData\Winhance\Unattend\Scripts\Winhancements.ps1"><![CDATA[
 <#
 .SYNOPSIS
     Winhance Windows 10/11 Customization and Optimization Script
@@ -2259,7 +2314,7 @@ Write-Log "=====================================================================
 Write-Log "Winhance Windows Optimization & Customization Script Completed" "SUCCESS"
 Write-Log "================================================================================" "INFO"
 ]]></File>
-		<File path="C:\Windows\Setup\Scripts\Specialize.ps1"><![CDATA[
+    <File path="C:\Windows\Setup\Scripts\Specialize.ps1"><![CDATA[
 $scripts = @(
 	{
 		net.exe accounts /maxpwage:UNLIMITED;
@@ -2312,7 +2367,7 @@ $scripts = @(
   }
 } *>&1 >> "C:\Windows\Setup\Scripts\Specialize.log";
 ]]></File>
-		<File path="C:\Windows\Setup\Scripts\UserOnce.ps1"><![CDATA[
+    <File path="C:\Windows\Setup\Scripts\UserOnce.ps1"><![CDATA[
 $scripts = @(
 	{
 		Set-ItemProperty -LiteralPath 'Registry::HKCU\Software\Microsoft\Windows\CurrentVersion\Search' -Name 'SearchboxTaskbarMode' -Type 'DWord' -Value 0;
@@ -2346,7 +2401,7 @@ $scripts = @(
   }
 } *>&1 >> "$env:TEMP\UserOnce.log";
 ]]></File>
-		<File path="C:\Windows\Setup\Scripts\DefaultUser.ps1"><![CDATA[
+    <File path="C:\Windows\Setup\Scripts\DefaultUser.ps1"><![CDATA[
 $scripts = @(
 	{
 		$names = @(
@@ -2400,7 +2455,7 @@ $scripts = @(
   }
 } *>&1 >> "C:\Windows\Setup\Scripts\DefaultUser.log";
 ]]></File>
-		<File path="C:\Windows\Setup\Scripts\FirstLogon.ps1"><![CDATA[
+    <File path="C:\Windows\Setup\Scripts\FirstLogon.ps1"><![CDATA[
 $scripts = @(
 	{
 		Set-ItemProperty -LiteralPath 'Registry::HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon' -Name 'AutoLogonCount' -Type 'DWord' -Force -Value 0;
@@ -2449,5 +2504,5 @@ $scripts = @(
   }
 } *>&1 >> "C:\Windows\Setup\Scripts\FirstLogon.log";
 ]]></File>
-	</Extensions>
+  </Extensions>
 </unattend>

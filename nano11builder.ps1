@@ -651,17 +651,22 @@ if (-not $keepAsianIME) {
     Remove-Item -Path (Join-Path -Path $winDir -ChildPath "Speech\Engines\TTS") -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-# Speech & Text-to-Speech Engines (UltraSlim cleanup)
+# Speech & Text-to-Speech Models (UltraSlim cleanup: trim heavy voice models, preserve core OneCore runtime for OOBE)
 if ($ultraSlimMode) {
-    Write-Host "Removing heavy Speech recognition and TTS engines..." -ForegroundColor Cyan
-    Remove-ProtectedDirectory -Path (Join-Path -Path $winDir -ChildPath "Speech") -ScratchPath $scratchDir
-    Remove-ProtectedDirectory -Path (Join-Path -Path $winDir -ChildPath "Speech_OneCore") -ScratchPath $scratchDir
-    Get-ChildItem -Path "$scratchDir\Windows\WinSxS" -Filter "*speechrecognizer*" -Directory -ErrorAction SilentlyContinue | ForEach-Object {
-        Remove-ProtectedDirectory -Path $_.FullName -ScratchPath $scratchDir
+    Write-Host "Trimming heavy Speech recognition and TTS voice models (preserving OOBE core)..." -ForegroundColor Cyan
+    $ttsPaths = @(
+        (Join-Path -Path $winDir -ChildPath "Speech\Engines\TTS"),
+        (Join-Path -Path $winDir -ChildPath "Speech_OneCore\Engines\TTS")
+    )
+    foreach ($tp in $ttsPaths) {
+        if (Test-Path -LiteralPath $tp) {
+            Get-ChildItem -Path $tp -Include "*.dat", "*.lex", "*.bin" -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object {
+                Set-ItemOwnershipAndAccess -Path $_.FullName
+                Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue
+            }
+        }
     }
-    Get-ChildItem -Path "$scratchDir\Windows\WinSxS" -Filter "*speech-onecore*" -Directory -ErrorAction SilentlyContinue | ForEach-Object {
-        Remove-ProtectedDirectory -Path $_.FullName -ScratchPath $scratchDir
-    }
+    # Windows\Speech_OneCore directory and WinSxS speech-onecore manifests are preserved to prevent OOBE narrator crashes.
 }
 
 # Windows Defender definitions and binaries cleanup (optional)
@@ -1000,7 +1005,7 @@ if ($removeDefender) {
 
 # Disabling unneeded background services (Resolves Issue #1 - Keep Bluetooth / Audio)
 Write-Host "Disabling unneeded background services..." -ForegroundColor Cyan
-$servicesToDisable = @('Spooler', 'PrintNotify', 'Fax', 'RemoteRegistry', 'diagsvc', 'WerSvc', 'PcaSvc', 'MapsBroker', 'WalletService')
+$servicesToDisable = @('Spooler', 'PrintNotify', 'Fax', 'RemoteRegistry', 'MapsBroker', 'WalletService')
 if (-not $keepBT) {
     $servicesToDisable += @('BthAvctpSvc', 'BluetoothUserService')
 }
