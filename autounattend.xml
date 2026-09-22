@@ -848,6 +848,12 @@ $packages = @(
     'Microsoft.CrossDevice'
     'Microsoft.Getstarted'
     'Microsoft.WindowsCalculator'
+    'Microsoft.XboxGamingOverlay'
+    'Microsoft.XboxGameOverlay'
+    'Microsoft.XboxIdentityProvider'
+    'Microsoft.XboxSpeechToTextOverlay'
+    'Microsoft.Xbox.TCUI'
+    'Microsoft.GamingApp'
 )
 
 $capabilities = @(

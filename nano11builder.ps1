@@ -486,7 +486,7 @@ $appxPatterns = @(
     '*RawImageExtension*', '*VP9VideoExtensions*', '*WebpImageExtension*',
     '*DevHome*', '*Photos*', '*Camera*', '*QuickAssist*',
     '*Paint*', '*Notepad*', '*CrossDevice*', '*Getstarted*', '*GetStarted*',
-    '*WindowsCalculator*', '*Calculator*'
+    '*WindowsCalculator*', '*Calculator*', '*Xbox*'
 )
 # Note: *SecHealthUI*, *CoreAI*, *PeopleExperienceHost*, *PinningConfirmationDialog*, *SecureAssessmentBrowser*
 # are protected system components in newer Windows 11 builds that trigger COMException (0x80073cfa) if removed via DISM.
@@ -704,15 +704,16 @@ Get-ChildItem -Path "$scratchDir\Windows\WinSxS" -Filter "*microsoft-windows-one
     Remove-ProtectedDirectory -Path $_.FullName -ScratchPath $scratchDir
 }
 
-# Purge Accessibility and unwanted assistive binaries from System32 (Voice Access, Live Captions, Magnifier, OSK, Narrator)
-Write-Host "Removing unneeded accessibility binaries from System32..." -ForegroundColor Cyan
+# Purge Accessibility, unwanted assistive, and Game Bar binaries from System32
+Write-Host "Removing unneeded accessibility and Game Bar binaries from System32..." -ForegroundColor Cyan
 $accessBinaries = @(
     "VoiceAccess.exe",
     "Livecaptions.exe",
     "magnify.exe",
     "osk.exe",
     "Narrator.exe",
-    "NarratorQuickStart.exe"
+    "NarratorQuickStart.exe",
+    "GameBarPresenceWriter.exe"
 )
 foreach ($bin in $accessBinaries) {
     $binPath = Join-Path -Path "$scratchDir\Windows\System32" -ChildPath $bin
@@ -1019,6 +1020,17 @@ reg.exe add "HKLM\zNTUSER\Software\Microsoft\VoiceAccess" /v "Enabled" /t REG_DW
 reg.exe add "HKLM\zNTUSER\Software\Microsoft\LiveCaptions" /v "LiveCaptionsDesktopEnabled" /t REG_DWORD /d 0 /f | Out-Null
 reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows NT\CurrentVersion\Accessibility" /v "Configuration" /t REG_SZ /d "" /f | Out-Null
 
+# Disable Xbox Game Bar & GameDVR
+Write-Host "Disabling Xbox Game Bar & GameDVR..." -ForegroundColor Green
+reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\GameDVR" /v "AllowGameDVR" /t REG_DWORD /d 0 /f | Out-Null
+reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\GameDVR" /v "AppCaptureEnabled" /t REG_DWORD /d 0 /f | Out-Null
+reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\GameDVR" /v "AppCaptureEnabled" /t REG_DWORD /d 0 /f | Out-Null
+reg.exe add "HKLM\zNTUSER\System\GameConfigStore" /v "GameDVR_Enabled" /t REG_DWORD /d 0 /f | Out-Null
+reg.exe add "HKLM\zNTUSER\System\GameConfigStore" /v "GameDVR_FSEBehaviorMode" /t REG_DWORD /d 2 /f | Out-Null
+reg.exe add "HKLM\zNTUSER\System\GameConfigStore" /v "GameDVR_HonorUserFSEBehaviorMode" /t REG_DWORD /d 1 /f | Out-Null
+reg.exe add "HKLM\zNTUSER\System\GameConfigStore" /v "GameDVR_DXGIHonorFSEWindowsCompatible" /t REG_DWORD /d 1 /f | Out-Null
+reg.exe add "HKLM\zNTUSER\System\GameConfigStore" /v "GameDVR_EFSEFeatureFlags" /t REG_DWORD /d 0 /f | Out-Null
+
 # IFEO (Image File Execution Options) Debugger redirect to systray.exe to prevent crashes/popups on hotkeys or callbacks
 $blockedExes = @(
     "CrossDeviceResume.exe",
@@ -1028,7 +1040,10 @@ $blockedExes = @(
     "magnify.exe",
     "osk.exe",
     "Narrator.exe",
-    "NarratorQuickStart.exe"
+    "NarratorQuickStart.exe",
+    "GameBar.exe",
+    "GameBarFTServer.exe",
+    "GameBarPresenceWriter.exe"
 )
 foreach ($exe in $blockedExes) {
     reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\$exe" /v "Debugger" /t REG_SZ /d "systray.exe" /f | Out-Null
@@ -1042,6 +1057,7 @@ Remove-Item -LiteralPath "$tasksPath\Microsoft\Windows\Customer Experience Impro
 Remove-Item -LiteralPath "$tasksPath\Microsoft\Windows\Application Experience\ProgramDataUpdater" -Force -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath "$tasksPath\Microsoft\Windows\Chkdsk\Proxy" -Force -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath "$tasksPath\Microsoft\Windows\Windows Error Reporting\QueueReporting" -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath "$tasksPath\Microsoft\XblGameSave" -Recurse -Force -ErrorAction SilentlyContinue
 
 # Windows Update (optional)
 if ($disableWU) {
@@ -1065,7 +1081,11 @@ if ($removeDefender) {
 
 # Disabling unneeded background services (Resolves Issue #1 - Keep Bluetooth / Audio)
 Write-Host "Disabling unneeded background services..." -ForegroundColor Cyan
-$servicesToDisable = @('Spooler', 'PrintNotify', 'Fax', 'RemoteRegistry', 'MapsBroker', 'WalletService', 'CDPSvc', 'CDPUserSvc')
+$servicesToDisable = @(
+    'Spooler', 'PrintNotify', 'Fax', 'RemoteRegistry', 'MapsBroker', 'WalletService',
+    'CDPSvc', 'CDPUserSvc',
+    'XblAuthManager', 'XblGameSave', 'XboxGipSvc', 'XboxNetApiSvc', 'BcastDVRUserService'
+)
 if (-not $keepBT) {
     $servicesToDisable += @('BthAvctpSvc', 'BluetoothUserService')
 }
@@ -1087,7 +1107,10 @@ $extraHidePages = @(
     "easeofaccess-voiceaccess",
     "easeofaccess-magnifier",
     "easeofaccess-narrator",
-    "easeofaccess-closedcaptioning"
+    "easeofaccess-closedcaptioning",
+    "gaming-gamebar",
+    "gaming-gamedvr",
+    "gaming-broadcasting"
 )
 foreach ($hp in $extraHidePages) {
     $hidePages.Add($hp)
