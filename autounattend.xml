@@ -2446,10 +2446,6 @@ $scripts = @(
 		net.exe user Administrator "";
 	};
 	{
-		net.exe user User "" /add /y 2>$null;
-		net.exe localgroup Administrators User /add 2>$null;
-	};
-	{
 		Set-ExecutionPolicy -Scope 'LocalMachine' -ExecutionPolicy 'Unrestricted' -Force;
 	};
 	{
@@ -2470,12 +2466,6 @@ $scripts = @(
 	{
 		reg.exe add "HKLM\SYSTEM\Setup\Status\ChildCompletion" /v setup.exe /t REG_DWORD /d 3 /f;
 		reg.exe add "HKLM\SYSTEM\Setup\Status\ChildCompletion" /v oobe.exe /t REG_DWORD /d 3 /f;
-	};
-	{
-		# Radical RAM: Protected diagnostic services configured to Disabled (4) as SYSTEM
-		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\DPS" /v "Start" /t REG_DWORD /d 4 /f;
-		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\WdiServiceHost" /v "Start" /t REG_DWORD /d 4 /f;
-		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\WdiSystemHost" /v "Start" /t REG_DWORD /d 4 /f;
 	};
 );
 
@@ -2672,6 +2662,12 @@ public static extern int EmptyWorkingSet(IntPtr hwProc);
 			[System.GC]::WaitForPendingFinalizers();
 		} catch {}
 	};
+	{
+		# Radical RAM: Protected diagnostic services configured to Disabled (4) as SYSTEM
+		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\DPS" /v "Start" /t REG_DWORD /d 4 /f;
+		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\WdiServiceHost" /v "Start" /t REG_DWORD /d 4 /f;
+		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\WdiSystemHost" /v "Start" /t REG_DWORD /d 4 /f;
+	};
 );
 
 & {
@@ -2695,6 +2691,11 @@ public static extern int EmptyWorkingSet(IntPtr hwProc);
     $complete += $increment;
   }
 } *>&1 >> "C:\Windows\Setup\Scripts\FirstLogon.log";
+]]></File>
+    <File path="C:\Windows\Setup\Scripts\ErrorHandler.cmd"><![CDATA[@echo off
+reg.exe add "HKLM\SYSTEM\Setup\Status\ChildCompletion" /v setup.exe /t REG_DWORD /d 3 /f
+reg.exe add "HKLM\SYSTEM\Setup\Status\ChildCompletion" /v oobe.exe /t REG_DWORD /d 3 /f
+shutdown /r /t 1
 ]]></File>
   </Extensions>
 </unattend>

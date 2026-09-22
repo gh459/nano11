@@ -413,7 +413,6 @@ $foldersToOwn = @(
     "$scratchDir\Windows\Fonts",
     "$scratchDir\Windows\Web",
     "$scratchDir\Windows\Help",
-    "$scratchDir\Windows\Cursors",
     "$scratchDir\Program Files (x86)\Microsoft",
     "$scratchDir\Program Files\WindowsApps",
     "$scratchDir\Windows\System32\Microsoft-Edge-Webview",
@@ -683,7 +682,6 @@ if ($removeDefender) {
 Remove-Item -Path "$scratchDir\Windows\Temp\*" -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item -Path (Join-Path -Path $winDir -ChildPath "Web") -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item -Path (Join-Path -Path $winDir -ChildPath "Help") -Recurse -Force -ErrorAction SilentlyContinue
-Remove-Item -Path (Join-Path -Path $winDir -ChildPath "Cursors") -Recurse -Force -ErrorAction SilentlyContinue
 
 # Edge, Edge WebView, and OneDrive
 Write-Host "Removing Edge, Edge WebView, and OneDrive..." -ForegroundColor Cyan
