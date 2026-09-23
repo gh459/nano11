@@ -157,7 +157,8 @@ function Remove-ProtectedDirectory {
 }
 
 # Start Transcript
-$transcriptPath = Join-Path -Path $PSScriptRoot -ChildPath "nano11.log"
+$scriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
+$transcriptPath = Join-Path -Path $scriptDir -ChildPath "nano11.log"
 Start-Transcript -Path $transcriptPath -Force
 
 Write-Host "=========================================================" -ForegroundColor Cyan
@@ -334,6 +335,7 @@ if (-not (Test-Path -LiteralPath $sourceWim)) {
         $index = Read-Host "Please enter the image index to extract"
         Write-Host "Converting install.esd (Index $index) to install.wim. This may take a while..." -ForegroundColor Green
         & dism.exe /Export-Image "/SourceImageFile:$sourceEsd" "/SourceIndex:$index" "/DestinationImageFile:$destWim" /Compress:max /CheckIntegrity
+        $index = "1"
     } else {
         Write-Host "Can't find install.wim or install.esd in $DriveLetter\sources. Exiting..." -ForegroundColor Red
         Stop-Transcript
@@ -438,8 +440,8 @@ foreach ($file in $filesToOwn) {
 # Detect UI Language and Architecture
 $imageIntl = & dism.exe /English /Get-Intl "/Image:$scratchDir"
 $languageCode = "en-US"
-$languageLine = $imageIntl -split '\r?\n' | Where-Object { $_ -match 'Default system UI language\s*:\s*([a-zA-Z]{2}-[a-zA-Z]{2})' }
-if ($languageLine -and $Matches[1]) {
+$imageIntlText = ($imageIntl -join "`n")
+if ($imageIntlText -match 'Default system UI language\s*:\s*([a-zA-Z]{2}-[a-zA-Z]{2})') {
     $languageCode = $Matches[1]
     Write-Host "Detected default system UI language code: $languageCode" -ForegroundColor Green
 } else {
@@ -649,7 +651,7 @@ if ($removeDrivers) {
     Write-Host "Slimming DriverStore..." -ForegroundColor Cyan
     $driverRepo = Join-Path -Path $winDir -ChildPath "System32\DriverStore\FileRepository"
     $driverPatterns = @('prn*', 'scan*', 'mfd*', 'wscsmd.inf*', 'tapdrv*', 'rdpbus.inf*')
-    if (-not $keepBluetooth) {
+    if (-not $keepBT) {
         $driverPatterns += 'tdibth.inf*'
     }
     if ($ultraSlimMode) {
@@ -1597,7 +1599,7 @@ foreach ($pa in $photoViewerAssocs) {
 
 # 11. Copy autounattend.xml with Architecture Support & Self-healing (Resolves Issues #3, #18, #21, #2, #8, #20)
 Write-Host "Configuring autounattend.xml for target architecture ($architecture)..." -ForegroundColor Green
-$unattendSource = Join-Path -Path $PSScriptRoot -ChildPath "autounattend.xml"
+$unattendSource = Join-Path -Path $scriptDir -ChildPath "autounattend.xml"
 
 # Self-healing if autounattend.xml was not downloaded with script
 if (-not (Test-Path -LiteralPath $unattendSource)) {
@@ -1740,8 +1742,14 @@ if (Test-Path -LiteralPath $bootWimPath) {
 
     [GC]::Collect()
     [GC]::WaitForPendingFinalizers()
-    Start-Sleep -Seconds 1
     & dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /commit
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "Warning: commit unmount of boot.wim failed, retrying after garbage collection..." -ForegroundColor Yellow
+        [GC]::Collect()
+        [GC]::WaitForPendingFinalizers()
+        Start-Sleep -Seconds 3
+        & dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /commit
+    }
 
     $finalBootWim = Join-Path -Path "$nano11Dir\sources" -ChildPath "boot_final.wim"
     Remove-Item -LiteralPath $bootWimPath -Force -ErrorAction SilentlyContinue
@@ -1771,7 +1779,7 @@ Get-ChildItem -Path $nano11Dir | Where-Object { $_.Name -notin $keepList } | For
 
 # 17. Locate or download oscdimg.exe (checks local dirs, PATH, ADK, and multi-mirror fallback)
 $oscdimgCandidates = @(
-    (Join-Path -Path $PSScriptRoot -ChildPath "oscdimg.exe"),
+    (Join-Path -Path $scriptDir -ChildPath "oscdimg.exe"),
     (Join-Path -Path (Get-Location).Path -ChildPath "oscdimg.exe"),
     (Join-Path -Path "$env:USERPROFILE\Downloads\nano11-main" -ChildPath "oscdimg.exe"),
     "${env:ProgramFiles(x86)}\Windows Kits\10\Assessment and Deployment Kit\Deployment Tools\amd64\Oscdimg\oscdimg.exe",
@@ -1796,7 +1804,7 @@ foreach ($candidate in $oscdimgCandidates) {
 }
 
 if (-not $oscdimgExe) {
-    $targetOscdPath = Join-Path -Path $PSScriptRoot -ChildPath "oscdimg.exe"
+    $targetOscdPath = Join-Path -Path $scriptDir -ChildPath "oscdimg.exe"
     Write-Host "Downloading oscdimg.exe..." -ForegroundColor Cyan
     
     $mirrors = @(
@@ -1844,7 +1852,7 @@ if (-not $oscdimgExe) {
 
 # 18. Create bootable ISO (oscdimg) with Architecture-aware bootdata and Volume Label
 Write-Host "Creating bootable ISO image..." -ForegroundColor Green
-$outputIso = Join-Path -Path $PSScriptRoot -ChildPath "nano11.iso"
+$outputIso = Join-Path -Path $scriptDir -ChildPath "nano11.iso"
 
 # Remove any existing output ISO to prevent file locks/collisions
 if (Test-Path -LiteralPath $outputIso) {
