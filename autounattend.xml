@@ -2730,12 +2730,14 @@ $scripts = @(
 	{
 		# Radical RAM: One-shot empty working set memory from setup processes and reclaim initialization heap
 		try {
-			$sig = @'
+			if (-not ('Win32.PsapiMem' -as [type])) {
+				$sig = @'
 [DllImport("psapi.dll")]
 public static extern int EmptyWorkingSet(IntPtr hwProc);
 '@
-			$psapi = Add-Type -MemberDefinition $sig -Name "PsapiMem" -Namespace "Win32" -PassThru -ErrorAction SilentlyContinue;
-			if ($psapi) {
+				Add-Type -MemberDefinition $sig -Name "PsapiMem" -Namespace "Win32" -ErrorAction SilentlyContinue;
+			}
+			if ('Win32.PsapiMem' -as [type]) {
 				Get-Process -ErrorAction SilentlyContinue | ForEach-Object {
 					try { [Win32.PsapiMem]::EmptyWorkingSet($_.Handle) | Out-Null } catch {}
 				};

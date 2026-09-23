@@ -31,7 +31,7 @@ param(
     [switch]$EnableWSL,
     [switch]$KeepRecovery,
     [switch]$KeepWinRE,
-    [switch]$SafeDebloat = $true,
+    [switch]$SafeDebloat,
     [switch]$AggressiveWinSxS,
     [switch]$TrimWinSxS,
     [switch]$UltraSlim
@@ -61,8 +61,10 @@ if (-not $myWindowsPrincipal.IsInRole([System.Security.Principal.WindowsBuiltInR
     $paramList = [System.Collections.Generic.List[string]]::new()
     foreach ($key in $PSBoundParameters.Keys) {
         $val = $PSBoundParameters[$key]
-        if ($val -is [switch] -or $val -is [bool]) {
-            if ($val) { $paramList.Add("-$key") }
+        if ($val -is [System.Management.Automation.SwitchParameter]) {
+            if ($val.IsPresent) { $paramList.Add("-$key") }
+        } elseif ($val -is [bool]) {
+            if ($val) { $paramList.Add("-$key") } else { $paramList.Add("-$key`:$false") }
         } else {
             $paramList.Add("-$key `"$val`"")
         }
@@ -79,15 +81,40 @@ if (-not $myWindowsPrincipal.IsInRole([System.Security.Principal.WindowsBuiltInR
     exit 0
 }
 
-# 3. Clean up any orphaned DISM mount points from previous failed runs
-Write-Host "Checking for and repairing any orphaned DISM mount points..." -ForegroundColor Cyan
+# Helper function: Safely unmount offline registry hive with retry and garbage collection
+function Unmount-RegistryHiveWithRetry {
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$Name,
+        [int]$Retries = 3
+    )
+    $path = "HKLM:\$Name"
+    for ($i = 0; $i -le $Retries; $i++) {
+        if (-not (Test-Path -LiteralPath $path)) {
+            return $true
+        }
+        [GC]::Collect()
+        [GC]::WaitForPendingFinalizers()
+        Start-Sleep -Milliseconds 250
+        & reg.exe unload "HKLM\$Name" > $null 2>&1
+        if ($LASTEXITCODE -eq 0) {
+            return $true
+        }
+    }
+    return $false
+}
+
+# 3. Clean up any orphaned DISM mount points and leftover registry hives from previous failed runs
+Write-Host "Checking for and repairing any orphaned DISM mount points and registry hives..." -ForegroundColor Cyan
 & dism.exe /English /Cleanup-Wim > $null 2>&1
+@('zCOMPONENTS', 'zDEFAULT', 'zNTUSER', 'zSOFTWARE', 'zSYSTEM') | ForEach-Object {
+    [void](Unmount-RegistryHiveWithRetry -Name $_)
+}
 
 # 4. Language-independent Administrators group via Well-Known SID (S-1-5-32-544)
 $adminGroupSid = New-Object System.Security.Principal.SecurityIdentifier([System.Security.Principal.WellKnownSidType]::BuiltinAdministratorsSid, $null)
-$adminGroup = $adminGroupSid.Translate([System.Security.Principal.NTAccount])
 
-# Helper function: Take ownership and grant FullControl using PowerShell .NET ACL (Locale-independent)
+# Helper function: Take ownership and grant FullControl using PowerShell .NET ACL (Locale-independent via direct SID)
 function Set-ItemOwnershipAndAccess {
     param(
         [Parameter(Mandatory=$true)]
@@ -100,12 +127,12 @@ function Set-ItemOwnershipAndAccess {
     try {
         $acl = Get-Acl -LiteralPath $Path -ErrorAction Stop
         try {
-            $acl.SetOwner($adminGroup)
+            $acl.SetOwner($adminGroupSid)
         } catch {}
 
         if ($Recurse) {
             $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
-                $adminGroup,
+                $adminGroupSid,
                 [System.Security.AccessControl.FileSystemRights]::FullControl,
                 "ContainerInherit, ObjectInherit",
                 "None",
@@ -113,7 +140,7 @@ function Set-ItemOwnershipAndAccess {
             )
         } else {
             $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
-                $adminGroup,
+                $adminGroupSid,
                 [System.Security.AccessControl.FileSystemRights]::FullControl,
                 "Allow"
             )
@@ -346,8 +373,12 @@ if (-not (Test-Path -LiteralPath $sourceWim)) {
 Write-Host "Copying Windows installation files to $nano11Dir..." -ForegroundColor Green
 $sourcePath = $DriveLetter.TrimEnd('\') + "\"
 $copySuccess = $false
+$robocopyArgs = @("$sourcePath", "$nano11Dir", "/E", "/R:1", "/W:1", "/NP", "/NFL", "/NDL", "/NJH", "/NJS")
+if (-not (Test-Path -LiteralPath $sourceWim)) {
+    $robocopyArgs += @("/XF", "install.esd")
+}
 try {
-    & robocopy.exe "$sourcePath" "$nano11Dir" /E /R:1 /W:1 /NP /NFL /NDL /NJH /NJS > $null 2>&1
+    & robocopy.exe @robocopyArgs > $null 2>&1
     if ($LASTEXITCODE -lt 8) {
         $copySuccess = $true
     }
@@ -1023,7 +1054,7 @@ reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\CloudContent" /v "Disable
 reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\CloudContent" /v "DisableCloudOptimizedContent" /t REG_DWORD /d 1 /f > $null 2>&1
 reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\PushToInstall" /v "DisablePushToInstall" /t REG_DWORD /d 1 /f > $null 2>&1
 reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\MRT" /v "DontOfferThroughWUAU" /t REG_DWORD /d 1 /f > $null 2>&1
-reg.exe add "HKLM\zSOFTWARE\Microsoft\PolicyManager\current\device\Start" /v "ConfigureStartPins" /t REG_SZ /d '{"pinnedList": [{}]}' /f > $null 2>&1
+reg.exe add "HKLM\zSOFTWARE\Microsoft\PolicyManager\current\device\Start" /v "ConfigureStartPins" /t REG_SZ /d "{\`"pinnedList\`": [{}]}" /f > $null 2>&1
 
 # OOBE & Local Accounts (Resolves Issue #15)
 Write-Host "Enabling Local Account bypass on OOBE..." -ForegroundColor Green
@@ -1666,13 +1697,9 @@ if (Test-Path -LiteralPath $unattendSource) {
 
 # Unmount Registry Hives
 Write-Host "Unmounting offline registry hives..." -ForegroundColor Cyan
-[GC]::Collect()
-[GC]::WaitForPendingFinalizers()
-reg.exe unload HKLM\zCOMPONENTS > $null 2>&1
-reg.exe unload HKLM\zDEFAULT    > $null 2>&1
-reg.exe unload HKLM\zNTUSER     > $null 2>&1
-reg.exe unload HKLM\zSOFTWARE   > $null 2>&1
-reg.exe unload HKLM\zSYSTEM     > $null 2>&1
+@('zCOMPONENTS', 'zDEFAULT', 'zNTUSER', 'zSOFTWARE', 'zSYSTEM') | ForEach-Object {
+    [void](Unmount-RegistryHiveWithRetry -Name $_)
+}
 
 # 12. Unmount and export install image
 Write-Host "Unmounting install image..." -ForegroundColor Green
