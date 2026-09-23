@@ -68,6 +68,16 @@ The goal of nano11 is to automate the creation of a streamlined Windows 11 image
   - **Scheduled Task Trimming**: Disables heavy maintenance tasks (`ProcessMemoryDiagnosticEvents`, `RunFullMemoryDiagnostic`, `WinSAT`, `DiskFootprint\Diagnostics`) that wake up and consume RAM in the background.
   - **Guaranteed Stability (Zero Dangerous Hacks)**: Strictly rejects harmful placebo tweaks identified during research (Pagefile is kept system-managed; NDU network monitoring driver is preserved; `LargeSystemCache` is not forced to server mode).
   - **Automated Post-Boot Working Set Trimming**: Automatically invokes Win32 `EmptyWorkingSet` and garbage collection as a one-shot operation at the end of `FirstLogon.ps1` to flush transitional setup heap allocations.
+- **📉 Radical Background & Windows Process Reduction (Perplexity-Verified Safe)**:
+  - **Japanese IME (`ctfmon.exe`) Fully Preserved**: Unlike unsafe debloat scripts that disable the Text Services Framework and render Japanese typing broken, `ctfmon.exe` and input frameworks are strictly safeguarded.
+  - **No Dangerous Executable Deletions**: Strictly avoids removing or killing `RuntimeBroker.exe`, `SearchHost.exe`, or core DCOM/RPC infrastructure, preserving Start Menu, Settings, and WinRT app stability.
+  - **OneDrive Background Engine Suppressed**: Disables `OneDrive.exe` background file sync engine and autostart (`DisableFileSyncNGSC = 1`).
+  - **GameBar & Screen Capture Stopped**: Completely stops `GameBarPresenceWriter.exe` and `bcastdvr.exe` from hooking into foreground windows and games (`AllowGameDVR = 0`, `AppCaptureEnabled = 0`, `GameDVR_Enabled = 0`).
+  - **Telemetry & Census Runners Suppressed**: Disables scheduled tasks that periodically launch `CompatTelRunner.exe` and `DeviceCensus.exe` (Compatibility Appraiser, ProgramDataUpdater, UsbCeip, CEIP Consolidator, Device, DiskDiagnosticDataCollector, SIUF DmClient).
+  - **Edge Background Mode & Startup Boost Disabled**: Neutralizes pre-launch background processes (`StartupBoostEnabled = 0`, `BackgroundModeEnabled = 0`, `AllowPrelaunch = 0`, `WebWidgetIsEnabled = 0`).
+  - **Windows Error Reporting (WER) Disabled**: Halts `wermgr.exe` crash reporting daemon (`Disabled = 1`, `DontSendAdditionalData = 1`).
+  - **Phone Link / CrossDevice Background Host Disabled**: Suppresses `PhoneExperienceHost.exe` background runtime (`EnableMmx = 0`, `AllowCrossDeviceExperience = 0`).
+  - **UWP RuntimeBroker Instances Controlled**: Denies global background app access (`GlobalUserDisabled = 1`, `LetAppsRunInBackground = 2`), preventing Store apps from spawning multiple `RuntimeBroker.exe` child processes while maintaining 100% WinRT compatibility.
 - **🐧 WSL2 & Virtualization Support (Issue #5)**:
   - Optional `-EnableWSL` flag pre-enables `VirtualMachinePlatform` and `Microsoft-Windows-Subsystem-Linux` before WinSxS stripping, allowing full WSL2, Docker, and Linux containers on a lightweight nano11 installation.
 - **💾 Custom Working Directory Support (Issues #27, #23)**:

@@ -2449,6 +2449,20 @@ $scripts = @(
 		reg.exe add "HKLM\SOFTWARE\Policies\Microsoft\Windows\Windows Search" /v "DisableWebSearch" /t REG_DWORD /d 1 /f;
 		reg.exe add "HKLM\SOFTWARE\Policies\Microsoft\Windows\Windows Search" /v "ConnectedSearchUseWeb" /t REG_DWORD /d 0 /f;
 	};
+	{
+		# Background Process Reduction: Edge, OneDrive, GameDVR, Error Reporting, CrossDevice
+		reg.exe add "HKLM\SOFTWARE\Policies\Microsoft\Edge" /v "StartupBoostEnabled" /t REG_DWORD /d 0 /f;
+		reg.exe add "HKLM\SOFTWARE\Policies\Microsoft\Edge" /v "BackgroundModeEnabled" /t REG_DWORD /d 0 /f;
+		reg.exe add "HKLM\SOFTWARE\Policies\Microsoft\Edge" /v "WebWidgetIsEnabled" /t REG_DWORD /d 0 /f;
+		reg.exe add "HKLM\SOFTWARE\Policies\Microsoft\MicrosoftEdge\Main" /v "AllowPrelaunch" /t REG_DWORD /d 0 /f;
+		reg.exe add "HKLM\SOFTWARE\Policies\Microsoft\Windows\OneDrive" /v "DisableFileSyncNGSC" /t REG_DWORD /d 1 /f;
+		reg.exe add "HKLM\SOFTWARE\Policies\Microsoft\Windows\GameDVR" /v "AllowGameDVR" /t REG_DWORD /d 0 /f;
+		reg.exe add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\GameDVR" /v "AppCaptureEnabled" /t REG_DWORD /d 0 /f;
+		reg.exe add "HKLM\SOFTWARE\Policies\Microsoft\Windows\Windows Error Reporting" /v "Disabled" /t REG_DWORD /d 1 /f;
+		reg.exe add "HKLM\SOFTWARE\Policies\Microsoft\Windows\Windows Error Reporting" /v "DontSendAdditionalData" /t REG_DWORD /d 1 /f;
+		reg.exe add "HKLM\SOFTWARE\Policies\Microsoft\Windows\System" /v "EnableMmx" /t REG_DWORD /d 0 /f;
+		reg.exe add "HKLM\SOFTWARE\Policies\Microsoft\Windows\CrossDevice" /v "AllowCrossDeviceExperience" /t REG_DWORD /d 0 /f;
+	};
 );
 
 & {
@@ -2488,6 +2502,13 @@ $scripts = @(
 		Set-ItemProperty -LiteralPath 'Registry::HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced' -Name 'TaskbarDa' -Type 'DWord' -Value 0 -Force;
 		Set-ItemProperty -LiteralPath 'Registry::HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced' -Name 'TaskbarMn' -Type 'DWord' -Value 0 -Force;
 		Set-ItemProperty -LiteralPath 'Registry::HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced' -Name 'ShowTaskViewButton' -Type 'DWord' -Value 0 -Force;
+	};
+	{
+		# Background Process Reduction: disable GameDVR capture and OneDrive run per user
+		Set-ItemProperty -LiteralPath 'Registry::HKCU\Software\Microsoft\Windows\CurrentVersion\GameDVR' -Name 'AppCaptureEnabled' -Type 'DWord' -Value 0 -Force;
+		Set-ItemProperty -LiteralPath 'Registry::HKCU\System\GameConfigStore' -Name 'GameDVR_Enabled' -Type 'DWord' -Value 0 -Force;
+		Remove-ItemProperty -LiteralPath 'Registry::HKCU\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'OneDrive' -Force -ErrorAction SilentlyContinue;
+		Remove-ItemProperty -LiteralPath 'Registry::HKCU\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'OneDriveSetup' -Force -ErrorAction SilentlyContinue;
 	};
 	{
 		# Accessibility suppressions: hotkeys and auto-starts disabled per user
@@ -2591,6 +2612,10 @@ $scripts = @(
 		reg.exe add "HKU\DefaultUser\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v "TaskbarDa" /t REG_DWORD /d 0 /f;
 		reg.exe add "HKU\DefaultUser\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v "TaskbarMn" /t REG_DWORD /d 0 /f;
 		reg.exe add "HKU\DefaultUser\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v "ShowTaskViewButton" /t REG_DWORD /d 0 /f;
+		reg.exe add "HKU\DefaultUser\Software\Microsoft\Windows\CurrentVersion\GameDVR" /v "AppCaptureEnabled" /t REG_DWORD /d 0 /f;
+		reg.exe add "HKU\DefaultUser\System\GameConfigStore" /v "GameDVR_Enabled" /t REG_DWORD /d 0 /f;
+		reg.exe delete "HKU\DefaultUser\Software\Microsoft\Windows\CurrentVersion\Run" /v "OneDrive" /f 2>$null;
+		reg.exe delete "HKU\DefaultUser\Software\Microsoft\Windows\CurrentVersion\Run" /v "OneDriveSetup" /f 2>$null;
 		reg.exe add "HKU\DefaultUser\Control Panel\Desktop" /v "UserPreferencesMask" /t REG_BINARY /d "9012038010000000" /f;
 		reg.exe add "HKU\DefaultUser\Control Panel\Desktop" /v "FontSmoothing" /t REG_SZ /d "2" /f;
 		reg.exe add "HKU\DefaultUser\Software\Microsoft\Windows\CurrentVersion\RunOnce" /v "UnattendedSetup" /t REG_SZ /d "powershell.exe -ExecutionPolicy Bypass -WindowStyle Normal -NoProfile -Command \""Get-Content -LiteralPath 'C:\Windows\Setup\Scripts\UserOnce.ps1' -Raw | Invoke-Expression;\""" /f;
@@ -2665,11 +2690,20 @@ $scripts = @(
 		} catch {}
 	};
 	{
-		# Radical RAM: Disable high-memory and unneeded background diagnostic / maintenance scheduled tasks
+		# Radical RAM & Background Process Reduction: Disable high-memory, diagnostic, and census scheduled tasks
 		schtasks.exe /change /tn "\Microsoft\Windows\MemoryDiagnostic\ProcessMemoryDiagnosticEvents" /disable 2>$null;
 		schtasks.exe /change /tn "\Microsoft\Windows\MemoryDiagnostic\RunFullMemoryDiagnostic" /disable 2>$null;
 		schtasks.exe /change /tn "\Microsoft\Windows\Maintenance\WinSAT" /disable 2>$null;
 		schtasks.exe /change /tn "\Microsoft\Windows\DiskFootprint\Diagnostics" /disable 2>$null;
+		schtasks.exe /change /tn "\Microsoft\Windows\Application Experience\Microsoft Compatibility Appraiser" /disable 2>$null;
+		schtasks.exe /change /tn "\Microsoft\Windows\Application Experience\ProgramDataUpdater" /disable 2>$null;
+		schtasks.exe /change /tn "\Microsoft\Windows\Application Experience\StartupAppTask" /disable 2>$null;
+		schtasks.exe /change /tn "\Microsoft\Windows\Customer Experience Improvement Program\Consolidator" /disable 2>$null;
+		schtasks.exe /change /tn "\Microsoft\Windows\Customer Experience Improvement Program\UsbCeip" /disable 2>$null;
+		schtasks.exe /change /tn "\Microsoft\Windows\Device Information\Device" /disable 2>$null;
+		schtasks.exe /change /tn "\Microsoft\Windows\DiskDiagnostic\Microsoft-Windows-DiskDiagnosticDataCollector" /disable 2>$null;
+		schtasks.exe /change /tn "\Microsoft\Windows\Feedback\Siuf\DmClient" /disable 2>$null;
+		schtasks.exe /change /tn "\Microsoft\Windows\Feedback\Siuf\DmClientOnScenarioDownload" /disable 2>$null;
 	};
 	{
 		# Windows Security & Defender: disable SecurityHealthService and remove startup tray entry
