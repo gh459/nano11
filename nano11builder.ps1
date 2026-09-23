@@ -104,9 +104,77 @@ function Unmount-RegistryHiveWithRetry {
     return $false
 }
 
+# Helper function: Detect and discard conflicting/orphaned DISM mounts (Resolves Error 0xc1420127)
+function Clear-DismMountConflicts {
+    param(
+        [string]$TargetMountDir,
+        [string]$TargetWimFile
+    )
+    $mountedOutput = & dism.exe /English /Get-MountedImageInfo 2>&1
+    if ($LASTEXITCODE -eq 0 -and $mountedOutput) {
+        $normMount = if ($TargetMountDir) { try { [System.IO.Path]::GetFullPath($TargetMountDir).TrimEnd('\') } catch { $null } } else { $null }
+        $normWim   = if ($TargetWimFile)  { try { [System.IO.Path]::GetFullPath($TargetWimFile).TrimEnd('\') } catch { $null } } else { $null }
+
+        $records = @()
+        $currentRecord = [ordered]@{}
+        foreach ($line in $mountedOutput) {
+            $t = [string]$line
+            if ([string]::IsNullOrWhiteSpace($t)) {
+                if ($currentRecord.Count -gt 0) {
+                    $records += [pscustomobject]$currentRecord
+                    $currentRecord = [ordered]@{}
+                }
+                continue
+            }
+            if ($t -match '^\s*([^:]+?)\s*:\s*(.*)$') {
+                $currentRecord[$matches[1].Trim()] = $matches[2].Trim()
+            }
+        }
+        if ($currentRecord.Count -gt 0) {
+            $records += [pscustomobject]$currentRecord
+        }
+
+        foreach ($rec in $records) {
+            $mDir = $rec.'Mount Dir'
+            $iFile = $rec.'Image File'
+            $status = $rec.'Status'
+            if (-not $mDir) { continue }
+
+            $isConflict = $false
+            if ($normMount) {
+                try {
+                    if ([System.IO.Path]::GetFullPath($mDir).TrimEnd('\') -ieq $normMount) { $isConflict = $true }
+                } catch {}
+            }
+            if (-not $isConflict -and $normWim -and $iFile) {
+                try {
+                    if ([System.IO.Path]::GetFullPath($iFile).TrimEnd('\') -ieq $normWim) { $isConflict = $true }
+                } catch {}
+            }
+            # Auto-cleanup orphaned nano11 scratch mounts if running generic sweep
+            if (-not $isConflict -and (-not $TargetMountDir) -and (-not $TargetWimFile)) {
+                if ($mDir -like "*scratchdir*" -or $mDir -like "*nano11*" -or $iFile -like "*nano11*") {
+                    $isConflict = $true
+                }
+            }
+
+            if ($isConflict) {
+                Write-Host "Found conflicting/orphaned DISM mount at '$mDir' (Status: $status). Discarding..." -ForegroundColor Yellow
+                if ($status -eq "Needs Remount") {
+                    & dism.exe /English /Remount-Image "/MountDir:$mDir" > $null 2>&1
+                }
+                & dism.exe /English /Unmount-Image "/MountDir:$mDir" /discard > $null 2>&1
+            }
+        }
+    }
+
+    & dism.exe /English /Cleanup-Wim > $null 2>&1
+    & dism.exe /English /Cleanup-Mountpoints > $null 2>&1
+}
+
 # 3. Clean up any orphaned DISM mount points and leftover registry hives from previous failed runs
 Write-Host "Checking for and repairing any orphaned DISM mount points and registry hives..." -ForegroundColor Cyan
-& dism.exe /English /Cleanup-Wim > $null 2>&1
+Clear-DismMountConflicts
 @('zCOMPONENTS', 'zDEFAULT', 'zNTUSER', 'zSOFTWARE', 'zSYSTEM') | ForEach-Object {
     [void](Unmount-RegistryHiveWithRetry -Name $_)
 }
@@ -427,14 +495,38 @@ Write-Host "Mounting Windows image (Index: $index)... This may take several minu
 Set-ItemOwnershipAndAccess -Path $destWim
 try { Set-ItemProperty -LiteralPath $destWim -Name IsReadOnly -Value $false -ErrorAction Stop } catch {}
 
+# Clear any conflicting or stale mounts on scratchDir or destWim (Resolves Error 0xc1420127)
+Clear-DismMountConflicts -TargetMountDir $scratchDir -TargetWimFile $destWim
+
 if (Test-Path -LiteralPath $scratchDir) {
     Remove-Item -LiteralPath $scratchDir -Recurse -Force -ErrorAction SilentlyContinue
 }
 New-Item -ItemType Directory -Force -Path $scratchDir | Out-Null
 
-& dism.exe /English /Mount-Image "/ImageFile:$destWim" "/Index:$index" "/MountDir:$scratchDir"
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "Failed to mount install.wim. Exiting..." -ForegroundColor Red
+$mountSuccess = $false
+for ($attempt = 1; $attempt -le 2; $attempt++) {
+    & dism.exe /English /Mount-Image "/ImageFile:$destWim" "/Index:$index" "/MountDir:$scratchDir"
+    if ($LASTEXITCODE -eq 0) {
+        $mountSuccess = $true
+        break
+    }
+
+    Write-Host "Mount attempt $attempt failed (Exit code: $LASTEXITCODE). Attempting aggressive DISM mount recovery..." -ForegroundColor Yellow
+    Clear-DismMountConflicts -TargetMountDir $scratchDir -TargetWimFile $destWim
+    & dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /discard > $null 2>&1
+    & dism.exe /English /Cleanup-Wim > $null 2>&1
+    & dism.exe /English /Cleanup-Mountpoints > $null 2>&1
+    [GC]::Collect()
+    [GC]::WaitForPendingFinalizers()
+    Start-Sleep -Seconds 3
+    if (Test-Path -LiteralPath $scratchDir) {
+        Remove-Item -LiteralPath $scratchDir -Recurse -Force -ErrorAction SilentlyContinue
+        New-Item -ItemType Directory -Force -Path $scratchDir | Out-Null
+    }
+}
+
+if (-not $mountSuccess) {
+    Write-Host "Failed to mount install.wim after recovery. Exiting..." -ForegroundColor Red
     Stop-Transcript
     exit 1
 }
@@ -1757,6 +1849,7 @@ if (Test-Path -LiteralPath $bootWimPath) {
 
     $newBootWim = Join-Path -Path "$nano11Dir\sources" -ChildPath "boot_new.wim"
     & dism.exe /English /Export-Image "/SourceImageFile:$bootWimPath" "/SourceIndex:$setupIndex" "/DestinationImageFile:$newBootWim" /Bootable
+    Clear-DismMountConflicts -TargetMountDir $scratchDir -TargetWimFile $newBootWim
     & dism.exe /English /Mount-Image "/ImageFile:$newBootWim" /Index:1 "/MountDir:$scratchDir"
 
     reg.exe load HKLM\zSYSTEM "$scratchDir\Windows\System32\config\SYSTEM" | Out-Null
