@@ -1093,7 +1093,8 @@ $servicesToDisable = @(
     'CDPSvc', 'CDPUserSvc',
     'XblAuthManager', 'XblGameSave', 'XboxGipSvc', 'XboxNetApiSvc', 'BcastDVRUserService',
     'AJRouter', 'AppVClient', 'AssignedAccessManagerSvc', 'DialogBlockingService', 'NetTcpPortSharing',
-    'HomeGroupListener', 'HomeGroupProvider', 'RetailDemo', 'WerSvc', 'PcaSvc', 'WSAIFabricSvc'
+    'HomeGroupListener', 'HomeGroupProvider', 'RetailDemo', 'WerSvc', 'PcaSvc', 'WSAIFabricSvc',
+    'SCardSvr', 'ScDeviceEnum', 'icssvc', 'CertPropSvc', 'CscService'
 )
 if (-not $keepBT) {
     $servicesToDisable += @('BthAvctpSvc', 'BluetoothUserService')
@@ -1108,13 +1109,13 @@ foreach ($service in $servicesToDisable) {
 # Set infrequently used background services to Manual (Start = 3) instead of Automatic
 Write-Host "Configuring non-essential background services to Demand Start (Manual)..." -ForegroundColor Cyan
 $servicesToManual = @(
-    'AxInstSV', 'BDESVC', 'CertPropSvc', 'CscService', 'DevQueryBroker', 'DeviceInstall',
+    'AxInstSV', 'BDESVC', 'DevQueryBroker', 'DeviceInstall',
     'DisplayEnhancementService', 'DmEnrollmentSvc', 'DsSvc', 'DsmSvc', 'EFS', 'EapHost',
     'EntAppSvc', 'FDResPub', 'FrameServer', 'GraphicsPerfSvc', 'IEEtwCollectorService',
     'IKEEXT', 'InstallService', 'InventorySvc', 'IpxlatCfgSvc', 'KtmRm', 'LicenseManager',
     'LxpSvc', 'MSDTC', 'MSiSCSI', 'McpManagementService', 'MixedRealityOpenXRSvc',
     'NaturalAuthentication', 'NcaSvc', 'NcbService', 'NcdAutoSetup', 'NetSetupSvc',
-    'Netman', 'NgcCtnrSvc', 'SensrSvc', 'SensorDataService', 'SmsRouter', 'svsvc',
+    'Netman', 'Netlogon', 'NgcCtnrSvc', 'SensrSvc', 'SensorDataService', 'SmsRouter', 'svsvc',
     'TapiSrv', 'WbioSrvc', 'wisvc'
 )
 foreach ($svc in $servicesToManual) {
@@ -1180,6 +1181,12 @@ $serviceConfigs = @{
     "lfsvc"              = 4  # Geolocation Service
     "PcaSvc"             = 4  # Program Compatibility Assistant
     "WerSvc"             = 4  # Windows Error Reporting Service
+    "SCardSvr"           = 4  # Smart Card Service
+    "ScDeviceEnum"       = 4  # Smart Card Device Enumeration Service
+    "icssvc"             = 4  # Mobile Hotspot Service
+    "CertPropSvc"        = 4  # Certificate Propagation
+    "CscService"         = 4  # Offline Files
+    "Netlogon"           = 3  # Netlogon (Manual demand-start)
 }
 foreach ($svc in $serviceConfigs.GetEnumerator()) {
     reg.exe add "HKLM\zSYSTEM\ControlSet001\Services\$($svc.Key)" /v "Start" /t REG_DWORD /d $($svc.Value) /f > $null 2>&1
@@ -1313,6 +1320,8 @@ reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Explorer\Adv
 reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v "ShowSecondsInSystemClock" /t REG_DWORD /d 1 /f > $null 2>&1
 reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v "TaskbarDa" /t REG_DWORD /d 0 /f > $null 2>&1
 reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v "TaskbarDa" /t REG_DWORD /d 0 /f > $null 2>&1
+reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v "TaskbarMn" /t REG_DWORD /d 0 /f > $null 2>&1
+reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v "TaskbarMn" /t REG_DWORD /d 0 /f > $null 2>&1
 reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v "ShowTaskViewButton" /t REG_DWORD /d 0 /f > $null 2>&1
 reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v "ShowTaskViewButton" /t REG_DWORD /d 0 /f > $null 2>&1
 reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v "LastActiveClick" /t REG_DWORD /d 1 /f > $null 2>&1

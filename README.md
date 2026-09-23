@@ -59,12 +59,15 @@ The goal of nano11 is to automate the creation of a streamlined Windows 11 image
     - *Desktop & Start Menu*: Reduce hover delay times, enable classic Alt+Tab, kill hung apps faster (`WaitToKillAppTimeout = 2000`).
     - *System & Services*: `ServicesPipeTimeout` optimization, network file sharing responsiveness.
     - *Visual Effects*: Disable Mica/Acrylic transparency while keeping font smoothing enabled.
-- **⚡ Radical RAM Optimization (Idle Memory Baseline ~1.0 GB – 1.3 GB)**:
+- **⚡ Radical RAM Optimization (Idle Memory Baseline ~1.0 GB – 1.3 GB, Perplexity-Verified Safe)**:
   - **SvcHost Grouping**: Sets `SvcHostSplitThresholdInKB` to 64 GB, consolidating 70–90 separate `svchost.exe` instances into 12–15 shared processes, instantly freeing 500 MB – 800 MB of RAM.
-  - **Kernel Memory Manager & Page Combining**: Enables `PageCombining` (NT kernel COW memory deduplication) via MMAgent and sets paged pool trim threshold (`PoolUsageMaximum = 60`) while prioritizing application working sets over file system cache (`LargeSystemCache = 0`).
-  - **DWM & Visual Effects Lightweighting**: Disables window transparency and animations while preserving ClearType font smoothing, reducing `dwm.exe` render target buffers.
-  - **Service Pruning & Demand-Start**: Disables memory-heavy background services (`SysMain`, `WSearch`, `FontCache`, `DoSvc`, `DPS`, `WdiServiceHost`, `DusmSvc`) and configures non-essential daemons (`LanmanServer`, `ShellHWDetection`, `stisvc`) to demand-start.
-  - **Automated Post-Boot Working Set Trimming**: Automatically invokes Win32 `EmptyWorkingSet` and garbage collection at the end of `FirstLogon.ps1` to reclaim one-time setup heap allocations.
+  - **Kernel Memory Manager & Page Combining**: Enables NT Kernel `PageCombining` (copy-on-write memory deduplication) via MMAgent and sets paged pool trim threshold (`PoolUsageMaximum = 60`) while prioritizing application working sets over file system cache (`LargeSystemCache = 0`, `DisablePagingExecutive = 0`).
+  - **DWM & Visual Effects Lightweighting**: Disables window transparency, acrylic blur, and animations (`MinAnimate = 0`, `VisualFXSetting = 2`) while preserving ClearType font smoothing, reducing `dwm.exe` render target buffers.
+  - **Shell Surface Trimming**: Disables Widgets (`TaskbarDa = 0`), Teams/Chat (`TaskbarMn = 0`), and Task View (`ShowTaskViewButton = 0`), stopping background webviews and shell caching.
+  - **Service Pruning & Demand-Start**: Disables unneeded background services (`SysMain`, `WSearch`, `FontCache`, `DoSvc`, `DPS`, `WdiServiceHost`, `DusmSvc`, `SCardSvr`, `ScDeviceEnum`, `icssvc`, `CertPropSvc`, `CscService`) and configures non-essential daemons (`LanmanServer`, `ShellHWDetection`, `stisvc`, `Netlogon`) to demand-start (Manual).
+  - **Scheduled Task Trimming**: Disables heavy maintenance tasks (`ProcessMemoryDiagnosticEvents`, `RunFullMemoryDiagnostic`, `WinSAT`, `DiskFootprint\Diagnostics`) that wake up and consume RAM in the background.
+  - **Guaranteed Stability (Zero Dangerous Hacks)**: Strictly rejects harmful placebo tweaks identified during research (Pagefile is kept system-managed; NDU network monitoring driver is preserved; `LargeSystemCache` is not forced to server mode).
+  - **Automated Post-Boot Working Set Trimming**: Automatically invokes Win32 `EmptyWorkingSet` and garbage collection as a one-shot operation at the end of `FirstLogon.ps1` to flush transitional setup heap allocations.
 - **🐧 WSL2 & Virtualization Support (Issue #5)**:
   - Optional `-EnableWSL` flag pre-enables `VirtualMachinePlatform` and `Microsoft-Windows-Subsystem-Linux` before WinSxS stripping, allowing full WSL2, Docker, and Linux containers on a lightweight nano11 installation.
 - **💾 Custom Working Directory Support (Issues #27, #23)**:

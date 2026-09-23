@@ -2442,6 +2442,13 @@ $scripts = @(
 	{
 		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Control\BitLocker" /v "PreventDeviceEncryption" /t REG_DWORD /d 1 /f;
 	};
+	{
+		# Radical RAM: SvcHost consolidation (groups services into shared svchost instances, saving 500MB-800MB RAM)
+		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Control" /v "SvcHostSplitThresholdInKB" /t REG_DWORD /d 67108864 /f;
+		reg.exe add "HKLM\SOFTWARE\Policies\Microsoft\Windows\Windows Search" /v "AllowCortana" /t REG_DWORD /d 0 /f;
+		reg.exe add "HKLM\SOFTWARE\Policies\Microsoft\Windows\Windows Search" /v "DisableWebSearch" /t REG_DWORD /d 1 /f;
+		reg.exe add "HKLM\SOFTWARE\Policies\Microsoft\Windows\Windows Search" /v "ConnectedSearchUseWeb" /t REG_DWORD /d 0 /f;
+	};
 );
 
 & {
@@ -2478,6 +2485,9 @@ $scripts = @(
 		Set-ItemProperty -LiteralPath 'Registry::HKCU\Control Panel\Desktop\WindowMetrics' -Name 'MinAnimate' -Type 'String' -Value '0' -Force;
 		Set-ItemProperty -LiteralPath 'Registry::HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects' -Name 'VisualFXSetting' -Type 'DWord' -Value 2 -Force;
 		Set-ItemProperty -LiteralPath 'Registry::HKCU\Software\Microsoft\Windows\CurrentVersion\BackgroundAccessApplications' -Name 'GlobalUserDisabled' -Type 'DWord' -Value 1 -Force;
+		Set-ItemProperty -LiteralPath 'Registry::HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced' -Name 'TaskbarDa' -Type 'DWord' -Value 0 -Force;
+		Set-ItemProperty -LiteralPath 'Registry::HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced' -Name 'TaskbarMn' -Type 'DWord' -Value 0 -Force;
+		Set-ItemProperty -LiteralPath 'Registry::HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced' -Name 'ShowTaskViewButton' -Type 'DWord' -Value 0 -Force;
 	};
 	{
 		# Accessibility suppressions: hotkeys and auto-starts disabled per user
@@ -2578,6 +2588,9 @@ $scripts = @(
 		reg.exe add "HKU\DefaultUser\Software\Microsoft\Windows\DWM" /v "ColorizationOpaqueBlend" /t REG_DWORD /d 1 /f;
 		reg.exe add "HKU\DefaultUser\Control Panel\Desktop\WindowMetrics" /v "MinAnimate" /t REG_SZ /d "0" /f;
 		reg.exe add "HKU\DefaultUser\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" /v "VisualFXSetting" /t REG_DWORD /d 2 /f;
+		reg.exe add "HKU\DefaultUser\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v "TaskbarDa" /t REG_DWORD /d 0 /f;
+		reg.exe add "HKU\DefaultUser\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v "TaskbarMn" /t REG_DWORD /d 0 /f;
+		reg.exe add "HKU\DefaultUser\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v "ShowTaskViewButton" /t REG_DWORD /d 0 /f;
 		reg.exe add "HKU\DefaultUser\Control Panel\Desktop" /v "UserPreferencesMask" /t REG_BINARY /d "9012038010000000" /f;
 		reg.exe add "HKU\DefaultUser\Control Panel\Desktop" /v "FontSmoothing" /t REG_SZ /d "2" /f;
 		reg.exe add "HKU\DefaultUser\Software\Microsoft\Windows\CurrentVersion\RunOnce" /v "UnattendedSetup" /t REG_SZ /d "powershell.exe -ExecutionPolicy Bypass -WindowStyle Normal -NoProfile -Command \""Get-Content -LiteralPath 'C:\Windows\Setup\Scripts\UserOnce.ps1' -Raw | Invoke-Expression;\""" /f;
@@ -2632,29 +2645,31 @@ $scripts = @(
 		}
 	};
 	{
-		# Radical RAM: Empty working set memory from setup processes and reclaim initialization heap
-		try {
-			$sig = @'
-[DllImport("psapi.dll")]
-public static extern int EmptyWorkingSet(IntPtr hwProc);
-'@
-			$psapi = Add-Type -MemberDefinition $sig -Name "PsapiMem" -Namespace "Win32" -PassThru -ErrorAction SilentlyContinue;
-			if ($psapi) {
-				Get-Process -ErrorAction SilentlyContinue | ForEach-Object {
-					try { [Win32.PsapiMem]::EmptyWorkingSet($_.Handle) | Out-Null } catch {}
-				};
-			}
-			[System.GC]::Collect();
-			[System.GC]::WaitForPendingFinalizers();
-		} catch {}
-	};
-	{
-		# Radical RAM: Protected diagnostic and font cache services configured to Disabled (4) as SYSTEM
+		# Radical RAM: Protected diagnostic, telemetry, and background services configured to Disabled (4) / Manual (3) as SYSTEM
 		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\DPS" /v "Start" /t REG_DWORD /d 4 /f;
 		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\WdiServiceHost" /v "Start" /t REG_DWORD /d 4 /f;
 		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\WdiSystemHost" /v "Start" /t REG_DWORD /d 4 /f;
 		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\FontCache" /v "Start" /t REG_DWORD /d 4 /f;
 		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\FontCache3.0.0.0" /v "Start" /t REG_DWORD /d 4 /f;
+		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\SCardSvr" /v "Start" /t REG_DWORD /d 4 /f;
+		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\ScDeviceEnum" /v "Start" /t REG_DWORD /d 4 /f;
+		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\icssvc" /v "Start" /t REG_DWORD /d 4 /f;
+		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\CertPropSvc" /v "Start" /t REG_DWORD /d 4 /f;
+		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\CscService" /v "Start" /t REG_DWORD /d 4 /f;
+		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\Netlogon" /v "Start" /t REG_DWORD /d 3 /f;
+	};
+	{
+		# Radical RAM: Enable NT Kernel Page Combining (physical memory page deduplication)
+		try {
+			Enable-MMAgent -PageCombining -ErrorAction SilentlyContinue | Out-Null;
+		} catch {}
+	};
+	{
+		# Radical RAM: Disable high-memory and unneeded background diagnostic / maintenance scheduled tasks
+		schtasks.exe /change /tn "\Microsoft\Windows\MemoryDiagnostic\ProcessMemoryDiagnosticEvents" /disable 2>$null;
+		schtasks.exe /change /tn "\Microsoft\Windows\MemoryDiagnostic\RunFullMemoryDiagnostic" /disable 2>$null;
+		schtasks.exe /change /tn "\Microsoft\Windows\Maintenance\WinSAT" /disable 2>$null;
+		schtasks.exe /change /tn "\Microsoft\Windows\DiskFootprint\Diagnostics" /disable 2>$null;
 	};
 	{
 		# Windows Security & Defender: disable SecurityHealthService and remove startup tray entry
@@ -2677,6 +2692,23 @@ public static extern int EmptyWorkingSet(IntPtr hwProc);
 		# Get Started (はじめに) & Tips: purge remaining AppX packages for all users
 		Get-AppxPackage -AllUsers -Name *Getstarted* -ErrorAction SilentlyContinue | Remove-AppxPackage -AllUsers -ErrorAction SilentlyContinue;
 		Get-AppxPackage -AllUsers -Name *Tips* -ErrorAction SilentlyContinue | Remove-AppxPackage -AllUsers -ErrorAction SilentlyContinue;
+	};
+	{
+		# Radical RAM: One-shot empty working set memory from setup processes and reclaim initialization heap
+		try {
+			$sig = @'
+[DllImport("psapi.dll")]
+public static extern int EmptyWorkingSet(IntPtr hwProc);
+'@
+			$psapi = Add-Type -MemberDefinition $sig -Name "PsapiMem" -Namespace "Win32" -PassThru -ErrorAction SilentlyContinue;
+			if ($psapi) {
+				Get-Process -ErrorAction SilentlyContinue | ForEach-Object {
+					try { [Win32.PsapiMem]::EmptyWorkingSet($_.Handle) | Out-Null } catch {}
+				};
+			}
+			[System.GC]::Collect();
+			[System.GC]::WaitForPendingFinalizers();
+		} catch {}
 	};
 );
 
