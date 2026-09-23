@@ -254,8 +254,8 @@ if ($NonInteractive) {
         $safeDebloatMode = $true
     }
 
-    # 10. UltraSlim (~3.0 GB ISO Target Mode)
-    $opt = Read-Host "10. Enable UltraSlim mode (~3.0 GB ISO target: prunes Edge WebView, non-JP CJK fonts, WinSxS dead weight)? [Y/n] (Default: Y)"
+    # 10. UltraSlim (~3.2 GB ISO Target Mode)
+    $opt = Read-Host "10. Enable UltraSlim mode (~3.2 GB ISO target: prunes Edge browser, non-JP CJK fonts, WinSxS dead weight, preserves WebView2 for OOBE)? [Y/n] (Default: Y)"
     if ($opt -and ($opt.Trim().ToLower() -in @('no', 'n'))) {
         $ultraSlimMode = $false
     } else {
@@ -415,7 +415,6 @@ $foldersToOwn = @(
     "$scratchDir\Windows\Help",
     "$scratchDir\Program Files (x86)\Microsoft",
     "$scratchDir\Program Files\WindowsApps",
-    "$scratchDir\Windows\System32\Microsoft-Edge-Webview",
     "$scratchDir\Windows\System32\Recovery",
     "$scratchDir\Windows\WinSxS",
     "$scratchDir\Windows\assembly",
@@ -683,18 +682,11 @@ Remove-Item -Path "$scratchDir\Windows\Temp\*" -Recurse -Force -ErrorAction Sile
 Remove-Item -Path (Join-Path -Path $winDir -ChildPath "Web") -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item -Path (Join-Path -Path $winDir -ChildPath "Help") -Recurse -Force -ErrorAction SilentlyContinue
 
-# Edge, Edge WebView, and OneDrive
-Write-Host "Removing Edge, Edge WebView, and OneDrive..." -ForegroundColor Cyan
+# Edge Browser and OneDrive (Preserve System32 WebView2 runtime for Windows 11 OOBE stability)
+Write-Host "Removing Edge browser and OneDrive..." -ForegroundColor Cyan
 Remove-ProtectedDirectory -Path "$scratchDir\Program Files (x86)\Microsoft\Edge" -ScratchPath $scratchDir
 Remove-ProtectedDirectory -Path "$scratchDir\Program Files (x86)\Microsoft\EdgeUpdate" -ScratchPath $scratchDir
 Remove-ProtectedDirectory -Path "$scratchDir\Program Files (x86)\Microsoft\EdgeCore" -ScratchPath $scratchDir
-Remove-ProtectedDirectory -Path "$scratchDir\Windows\System32\Microsoft-Edge-WebView" -ScratchPath $scratchDir
-Remove-ProtectedDirectory -Path "$scratchDir\Windows\System32\Microsoft-Edge-Webview" -ScratchPath $scratchDir
-
-# Purge Edge WebView from WinSxS
-Get-ChildItem -Path "$scratchDir\Windows\WinSxS" -Filter "*microsoft-edge-webview*" -Directory -ErrorAction SilentlyContinue | ForEach-Object {
-    Remove-ProtectedDirectory -Path $_.FullName -ScratchPath $scratchDir
-}
 
 # Purge OneDrive setup payload (197 MB) and executable
 Remove-Item -Path "$scratchDir\Windows\System32\OneDriveSetup.exe" -Force -ErrorAction SilentlyContinue
@@ -702,15 +694,11 @@ Get-ChildItem -Path "$scratchDir\Windows\WinSxS" -Filter "*microsoft-windows-one
     Remove-ProtectedDirectory -Path $_.FullName -ScratchPath $scratchDir
 }
 
-# Purge Accessibility, unwanted assistive, and Game Bar binaries from System32
-Write-Host "Removing unneeded accessibility and Game Bar binaries from System32..." -ForegroundColor Cyan
+# Purge non-critical assistive and Game Bar binaries from System32 (Preserve core osk, Narrator, magnify for OOBE initialization)
+Write-Host "Removing unneeded assistive and Game Bar binaries from System32..." -ForegroundColor Cyan
 $accessBinaries = @(
     "VoiceAccess.exe",
     "Livecaptions.exe",
-    "magnify.exe",
-    "osk.exe",
-    "Narrator.exe",
-    "NarratorQuickStart.exe",
     "GameBarPresenceWriter.exe"
 )
 foreach ($bin in $accessBinaries) {
@@ -921,10 +909,6 @@ foreach ($key in $labConfigKeys) {
     reg.exe add "HKLM\zSYSTEM\Setup\LabConfig" /v $key /t REG_DWORD /d 1 /f > $null 2>&1
 }
 reg.exe add "HKLM\zSYSTEM\Setup\MoSetup" /v "AllowUpgradesWithUnsupportedTPMOrCPU" /t REG_DWORD /d 1 /f > $null 2>&1
-
-# Pre-configure ChildCompletion to 3 (Complete) to eliminate post-reboot setup crash loop
-reg.exe add "HKLM\zSYSTEM\Setup\Status\ChildCompletion" /v "setup.exe" /t REG_DWORD /d 3 /f > $null 2>&1
-reg.exe add "HKLM\zSYSTEM\Setup\Status\ChildCompletion" /v "oobe.exe" /t REG_DWORD /d 3 /f > $null 2>&1
 reg.exe add "HKLM\zDEFAULT\Control Panel\UnsupportedHardwareNotificationCache" /v "SV1" /t REG_DWORD /d 0 /f > $null 2>&1
 reg.exe add "HKLM\zDEFAULT\Control Panel\UnsupportedHardwareNotificationCache" /v "SV2" /t REG_DWORD /d 0 /f > $null 2>&1
 reg.exe add "HKLM\zNTUSER\Control Panel\UnsupportedHardwareNotificationCache" /v "SV1" /t REG_DWORD /d 0 /f > $null 2>&1
@@ -1148,8 +1132,6 @@ Write-Host "Configuring system services for radical RAM reduction..." -Foregroun
 $serviceConfigs = @{
     "SysMain"            = 4  # SuperFetch / RAM pre-caching (Saves 100MB-200MB RAM)
     "WSearch"            = 4  # Windows Search Indexer (Saves 80MB-150MB RAM)
-    "FontCache"          = 4  # Font Cache Service (Saves 40MB-70MB RAM)
-    "FontCache3.0.0.0"   = 4  # WPF Font Cache Service (Saves 20MB-30MB RAM)
     "DoSvc"              = 4  # Delivery Optimization (Saves 40MB-80MB RAM)
     "DPS"                = 4  # Diagnostic Policy Service (Saves 30MB-50MB RAM)
     "WdiServiceHost"     = 4  # Diagnostic Service Host

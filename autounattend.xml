@@ -138,10 +138,6 @@
           <Order>5</Order>
           <Path>powershell.exe -ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -Command "try { reg.exe load HKU\DefaultUser C:\Users\Default\NTUSER.DAT; if (Test-Path 'C:\Windows\Setup\Scripts\DefaultUser.ps1') { &amp; 'C:\Windows\Setup\Scripts\DefaultUser.ps1' }; [GC]::Collect(); [GC]::WaitForPendingFinalizers(); Start-Sleep -Seconds 1; for ($i = 0; $i -lt 5; $i++) { reg.exe unload HKU\DefaultUser; if ($LASTEXITCODE -eq 0) { break }; Start-Sleep -Seconds 1 } } catch {}; exit 0"</Path>
         </RunSynchronousCommand>
-        <RunSynchronousCommand wcm:action="add">
-          <Order>6</Order>
-          <Path>powershell.exe -ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -Command "reg.exe add \"HKLM\SYSTEM\Setup\Status\ChildCompletion\" /v setup.exe /t REG_DWORD /d 3 /f; reg.exe add \"HKLM\SYSTEM\Setup\Status\ChildCompletion\" /v oobe.exe /t REG_DWORD /d 3 /f; exit 0"</Path>
-        </RunSynchronousCommand>
       </RunSynchronous>
     </component>
     <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="x86" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
@@ -168,10 +164,6 @@
         <RunSynchronousCommand wcm:action="add">
           <Order>5</Order>
           <Path>powershell.exe -ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -Command "try { reg.exe load HKU\DefaultUser C:\Users\Default\NTUSER.DAT; if (Test-Path 'C:\Windows\Setup\Scripts\DefaultUser.ps1') { &amp; 'C:\Windows\Setup\Scripts\DefaultUser.ps1' }; [GC]::Collect(); [GC]::WaitForPendingFinalizers(); Start-Sleep -Seconds 1; for ($i = 0; $i -lt 5; $i++) { reg.exe unload HKU\DefaultUser; if ($LASTEXITCODE -eq 0) { break }; Start-Sleep -Seconds 1 } } catch {}; exit 0"</Path>
-        </RunSynchronousCommand>
-        <RunSynchronousCommand wcm:action="add">
-          <Order>6</Order>
-          <Path>powershell.exe -ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -Command "reg.exe add \"HKLM\SYSTEM\Setup\Status\ChildCompletion\" /v setup.exe /t REG_DWORD /d 3 /f; reg.exe add \"HKLM\SYSTEM\Setup\Status\ChildCompletion\" /v oobe.exe /t REG_DWORD /d 3 /f; exit 0"</Path>
         </RunSynchronousCommand>
       </RunSynchronous>
     </component>
@@ -200,10 +192,6 @@
           <Order>5</Order>
           <Path>powershell.exe -ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -Command "try { reg.exe load HKU\DefaultUser C:\Users\Default\NTUSER.DAT; if (Test-Path 'C:\Windows\Setup\Scripts\DefaultUser.ps1') { &amp; 'C:\Windows\Setup\Scripts\DefaultUser.ps1' }; [GC]::Collect(); [GC]::WaitForPendingFinalizers(); Start-Sleep -Seconds 1; for ($i = 0; $i -lt 5; $i++) { reg.exe unload HKU\DefaultUser; if ($LASTEXITCODE -eq 0) { break }; Start-Sleep -Seconds 1 } } catch {}; exit 0"</Path>
         </RunSynchronousCommand>
-        <RunSynchronousCommand wcm:action="add">
-          <Order>6</Order>
-          <Path>powershell.exe -ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -Command "reg.exe add \"HKLM\SYSTEM\Setup\Status\ChildCompletion\" /v setup.exe /t REG_DWORD /d 3 /f; reg.exe add \"HKLM\SYSTEM\Setup\Status\ChildCompletion\" /v oobe.exe /t REG_DWORD /d 3 /f; exit 0"</Path>
-        </RunSynchronousCommand>
       </RunSynchronous>
     </component>
   </settings>
@@ -215,8 +203,7 @@
     <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns="urn:schemas-microsoft-com:unattend" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
       <UserAccounts>
         <AdministratorPassword>
-          <Value>
-          </Value>
+          <Value></Value>
           <PlainText>true</PlainText>
         </AdministratorPassword>
         <LocalAccounts>
@@ -225,8 +212,7 @@
             <DisplayName>User</DisplayName>
             <Group>Administrators</Group>
             <Password>
-              <Value>
-              </Value>
+              <Value></Value>
               <PlainText>true</PlainText>
             </Password>
           </LocalAccount>
@@ -237,8 +223,7 @@
         <Enabled>true</Enabled>
         <LogonCount>1</LogonCount>
         <Password>
-          <Value>
-          </Value>
+          <Value></Value>
           <PlainText>true</PlainText>
         </Password>
       </AutoLogon>
@@ -263,8 +248,7 @@
     <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="x86" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns="urn:schemas-microsoft-com:unattend" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
       <UserAccounts>
         <AdministratorPassword>
-          <Value>
-          </Value>
+          <Value></Value>
           <PlainText>true</PlainText>
         </AdministratorPassword>
         <LocalAccounts>
@@ -273,8 +257,7 @@
             <DisplayName>User</DisplayName>
             <Group>Administrators</Group>
             <Password>
-              <Value>
-              </Value>
+              <Value></Value>
               <PlainText>true</PlainText>
             </Password>
           </LocalAccount>
@@ -285,8 +268,7 @@
         <Enabled>true</Enabled>
         <LogonCount>1</LogonCount>
         <Password>
-          <Value>
-          </Value>
+          <Value></Value>
           <PlainText>true</PlainText>
         </Password>
       </AutoLogon>
@@ -311,8 +293,7 @@
     <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="arm64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns="urn:schemas-microsoft-com:unattend" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
       <UserAccounts>
         <AdministratorPassword>
-          <Value>
-          </Value>
+          <Value></Value>
           <PlainText>true</PlainText>
         </AdministratorPassword>
         <LocalAccounts>
@@ -321,8 +302,7 @@
             <DisplayName>User</DisplayName>
             <Group>Administrators</Group>
             <Password>
-              <Value>
-              </Value>
+              <Value></Value>
               <PlainText>true</PlainText>
             </Password>
           </LocalAccount>
@@ -333,8 +313,7 @@
         <Enabled>true</Enabled>
         <LogonCount>1</LogonCount>
         <Password>
-          <Value>
-          </Value>
+          <Value></Value>
           <PlainText>true</PlainText>
         </Password>
       </AutoLogon>
@@ -2463,10 +2442,6 @@ $scripts = @(
 	{
 		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Control\BitLocker" /v "PreventDeviceEncryption" /t REG_DWORD /d 1 /f;
 	};
-	{
-		reg.exe add "HKLM\SYSTEM\Setup\Status\ChildCompletion" /v setup.exe /t REG_DWORD /d 3 /f;
-		reg.exe add "HKLM\SYSTEM\Setup\Status\ChildCompletion" /v oobe.exe /t REG_DWORD /d 3 /f;
-	};
 );
 
 & {
@@ -2663,10 +2638,12 @@ public static extern int EmptyWorkingSet(IntPtr hwProc);
 		} catch {}
 	};
 	{
-		# Radical RAM: Protected diagnostic services configured to Disabled (4) as SYSTEM
+		# Radical RAM: Protected diagnostic and font cache services configured to Disabled (4) as SYSTEM
 		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\DPS" /v "Start" /t REG_DWORD /d 4 /f;
 		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\WdiServiceHost" /v "Start" /t REG_DWORD /d 4 /f;
 		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\WdiSystemHost" /v "Start" /t REG_DWORD /d 4 /f;
+		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\FontCache" /v "Start" /t REG_DWORD /d 4 /f;
+		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\FontCache3.0.0.0" /v "Start" /t REG_DWORD /d 4 /f;
 	};
 );
 
@@ -2691,11 +2668,6 @@ public static extern int EmptyWorkingSet(IntPtr hwProc);
     $complete += $increment;
   }
 } *>&1 >> "C:\Windows\Setup\Scripts\FirstLogon.log";
-]]></File>
-    <File path="C:\Windows\Setup\Scripts\ErrorHandler.cmd"><![CDATA[@echo off
-reg.exe add "HKLM\SYSTEM\Setup\Status\ChildCompletion" /v setup.exe /t REG_DWORD /d 3 /f
-reg.exe add "HKLM\SYSTEM\Setup\Status\ChildCompletion" /v oobe.exe /t REG_DWORD /d 3 /f
-shutdown /r /t 1
 ]]></File>
   </Extensions>
 </unattend>
