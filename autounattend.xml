@@ -2768,35 +2768,5 @@ public static extern int EmptyWorkingSet(IntPtr hwProc);
   }
 } *>&1 >> "C:\Windows\Setup\Scripts\FirstLogon.log";
 ]]></File>
-    <File path="C:\Windows\Setup\Scripts\ErrorHandler.cmd"><![CDATA[@echo off
-setlocal
-
-set "MARKER=%WINDIR%\Setup\Scripts\ErrorHandler.once"
-set "LOG=%WINDIR%\Temp\ErrorHandler.log"
-
-if exist "%MARKER%" (
-    echo [%DATE% %TIME%] ErrorHandler already executed once. Refusing to act or reboot. >> "%LOG%"
-    exit /b 0
-)
-
-> "%MARKER%" echo ErrorHandler invoked on %DATE% %TIME%
-echo [%DATE% %TIME%] ErrorHandler invoked for the first time. >> "%LOG%"
-
-copy /y "%WINDIR%\Panther\setupact.log" "%WINDIR%\Temp\setupact.log" >nul 2>&1
-copy /y "%WINDIR%\Panther\setuperr.log" "%WINDIR%\Temp\setuperr.log" >nul 2>&1
-
-set "VAL="
-for /f "tokens=3" %%A in ('reg query "HKLM\SYSTEM\Setup\Status\ChildCompletion" /v setup.exe 2^>nul ^| find /i "setup.exe"') do set "VAL=%%A"
-
-if /i "%VAL%"=="0x1" (
-    echo [%DATE% %TIME%] ChildCompletion\setup.exe is 0x1. Attempting one-shot continuation fix to 3. >> "%LOG%"
-    reg.exe add "HKLM\SYSTEM\Setup\Status\ChildCompletion" /v setup.exe /t REG_DWORD /d 3 /f >nul 2>&1
-    shutdown /r /t 2
-    exit /b 0
-)
-
-echo [%DATE% %TIME%] ChildCompletion\setup.exe is not 0x1 (Value: %VAL%). No action taken. >> "%LOG%"
-exit /b 0
-]]></File>
   </Extensions>
 </unattend>
