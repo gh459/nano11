@@ -156,6 +156,7 @@ The resulting minimal OS is **not serviceable via cumulative updates** when WinS
    .\nano11builder.ps1
    ```
 4. Follow the interactive prompts to choose your debloat preferences and input the drive letter.
+5. Once `nano11.iso` is generated, follow the [Installation & Setup Guide](#️-installation--setup-guide-推奨デフォルトインストール手順) below to complete Windows setup smoothly using our default setup completion method.
 
 ### **3. Non-Interactive / CLI Automation**
 You can also run the builder non-interactively with customized flags:
@@ -191,6 +192,63 @@ You can also run the builder non-interactively with customized flags:
 | `-UltraSlim` | Enables UltraSlim mode to achieve ~3.0 GB ISO (prunes Edge WebView, non-JP CJK fonts, WinSxS dead weight, compresses WinRE) |
 
 When finished, your bootable ISO will be generated in the script directory as `nano11.iso` with SHA256 verification hash displayed!
+
+---
+
+## 🛠️ Installation & Setup Guide (推奨・デフォルトインストール手順)
+
+nano11 creates an ultra-minimal, high-performance Windows 11 installation by stripping redundant cloud bloatware, telemetry, and Microsoft Account requirements.
+
+Because cloud-dependent OOBE components are stripped to maintain the lightest possible footprint, Windows Setup may pause at a prompt or error dialog during the final configuration phase:
+> *"Windows could not complete the installation. To install Windows on this computer, restart the installation."*  
+> (または「Windows could not complete the installation. コンピュータを再起動してインストールを再開してください」)
+
+**nano11 では、この状態から再インストールを行わずにそのままデスクトップを起動させる以下の手順を【推奨・デフォルトのインストール完了方法】として案内しています。**  
+Windows のコアファイルは既に 100% 展開・インストール済みであるため、1分足らずの簡単なキー操作でセットアップ検証を通過し、デスクトップへ直行できます。
+
+---
+
+### 🚀 Default Setup Completion Procedure (セットアップ完了手順)
+
+#### **1. ISO からの通常起動とインストール**
+- 生成された `nano11.iso` を Rufus や Ventoy 等で USB メモリに書き込み（または仮想マシンにマウントして）PC を起動します。
+- `autounattend.xml` により、パーティション作成、CompactOS 適用、ファイル展開が自動的に進行します。
+
+#### **2. エラーダイアログが表示されたら**
+- 画面上に「Windows could not complete the installation（インストールを完了できませんでした）」というエラーダイアログが表示されて停止したら、**まだ [OK] ボタンを押さないでください**。
+
+#### **3. コマンドプロンプトを開く**
+- エラー画面のまま、キーボードの **`Shift + F10`** を押します。  
+  *(※ノートPC や一部のキーボードでは **`Shift + Fn + F10`** を押してください)*
+- 黒いコマンドプロンプト画面（`cmd.exe`）が前面に開きます。
+
+#### **4. セットアップ状態（ChildCompletion）を 3 に変更する**
+以下のいずれかの方法（GUI または コマンド1行）で設定を変更します：
+
+- **方法 A: レジストリエディターを使う場合（GUI）**
+  1. コマンドプロンプトに `regedit` と入力して Enter キーを押し、レジストリエディターを開きます。
+  2. 左側のツリーから以下のキーに移動します：
+     ```
+     HKEY_LOCAL_MACHINE\SYSTEM\Setup\Status\ChildCompletion
+     ```
+  3. 右側のペインにある **`setup.exe`** をダブルクリックします。
+  4. 「値のデータ」を **`1`** から **`3`** に変更して「OK」をクリックします。
+  5. レジストリエディターとコマンドプロンプトのウィンドウを閉じます。
+
+- **方法 B: コマンド1行で即時変更する場合（最速）**
+  コマンドプロンプトで以下のコマンドを入力（または右クリックで貼り付け）して Enter キーを押します：
+  ```cmd
+  reg add "HKLM\SYSTEM\Setup\Status\ChildCompletion" /v setup.exe /t REG_DWORD /d 3 /f
+  ```
+  「この操作を正しく完了しました」と表示されたら、`exit` と入力してコマンドプロンプトを閉じます。
+
+#### **5. セットアップを完了してデスクトップを起動**
+- 元のエラーダイアログの **[OK]** ボタンをクリックします。
+- 自動的に PC が再起動し、セットアップの完了チェックを通過して、そのまま正常に Administrator デスクトップ画面が起動します！
+
+> [!NOTE]
+> **仕組み・技術的背景**:  
+> `ChildCompletion\setup.exe` の値 `1` は「セットアップの子プロセスが処理中・未完了」であることを示しています。これを `3`（完了ステータス: `STATUS_SUCCESS`）に書き換えることで、Windows Setup に対して「全セットアップ工程が正常に完了した」と通知し、未構成のクラウド OOBE への不要なリダイレクトやリブートトラップを完全に回避してデスクトップへ遷移させます。
 
 ---
 
