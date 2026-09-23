@@ -517,7 +517,7 @@ foreach ($package in $packagesToRemove) {
 
 # 6. Removing system packages (FoD / Optional features)
 Write-Host "Removing unnecessary system packages..." -ForegroundColor Cyan
-$packagePatterns = [System.Collections.Generic.List[string]]@(
+$packagePatterns = @(
     "Microsoft-Windows-InternetExplorer-Optional-Package~",
     "Microsoft-Windows-MediaPlayer-Package~",
     "Microsoft-Windows-WordPad-FoD-Package~",
@@ -539,11 +539,9 @@ $packagePatterns = [System.Collections.Generic.List[string]]@(
     "Microsoft-Windows-Printing-PMCPPC-FoD-Package~",
     "Microsoft-Windows-WebcamExperience-Package~",
     "Microsoft-Media-MPEG2-Decoder-Package~",
-    "Microsoft-Windows-Wallpaper-Content-Extended-FoD-Package~"
-)
+    "Microsoft-Windows-Wallpaper-Content-Extended-FoD-Package~",
 
-# Foreign language font packages (preserves Latin, system, and Japanese Jpan fonts)
-$packagePatterns.AddRange(@(
+    # Foreign language font packages (preserves Latin, system, and Japanese Jpan fonts)
     "Microsoft-Windows-LanguageFeatures-Fonts-Hans-Package~",
     "Microsoft-Windows-LanguageFeatures-Fonts-Hant-Package~",
     "Microsoft-Windows-LanguageFeatures-Fonts-Kore-Package~",
@@ -561,24 +559,20 @@ $packagePatterns.AddRange(@(
     "Microsoft-Windows-LanguageFeatures-Fonts-Taml-Package~",
     "Microsoft-Windows-LanguageFeatures-Fonts-Telu-Package~",
     "Microsoft-Windows-LanguageFeatures-Fonts-Hebr-Package~",
-    "Microsoft-Windows-LanguageFeatures-Fonts-Arab-Package~"
-))
+    "Microsoft-Windows-LanguageFeatures-Fonts-Arab-Package~",
 
-# Additional obsolete/unneeded optional FOD packages
-$packagePatterns.AddRange(@(
+    # Additional obsolete/unneeded optional FOD packages
     "Microsoft-Windows-WMIC-FoD-Package~",
     "Microsoft-Windows-Printing-WFS-FoD-Package~",
     "Microsoft-Windows-WirelessDisplay-FOD-Package~",
     "Microsoft-Windows-SNMP-Client-Package~",
     "Telnet-Client-Package~",
     "SimpleTCP-Client-Package~",
-    "Microsoft-Windows-RDC-Package~"
-))
+    "Microsoft-Windows-RDC-Package~",
 
-# Decoupled Asian/Foreign Language Cleanup:
-# Always remove foreign Asian IMEs and heavy foreign Speech, Text-to-Speech, OCR, and Handwriting packages.
-# These packages take gigabytes of space and are completely unused in Japanese (ja-JP) or English (en-US) installations.
-$packagePatterns.AddRange(@(
+    # Decoupled Asian/Foreign Language Cleanup:
+    # Always remove foreign Asian IMEs and heavy foreign Speech, Text-to-Speech, OCR, and Handwriting packages.
+    # These packages take gigabytes of space and are completely unused in Japanese (ja-JP) or English (en-US) installations.
     "*IME-ko-kr*",
     "*IME-zh-cn*",
     "*IME-zh-tw*",
@@ -603,18 +597,20 @@ $packagePatterns.AddRange(@(
     "Microsoft-Windows-LanguageFeatures-Handwriting-ko-*",
     "Microsoft-Windows-LanguageFeatures-OCR-zh-*",
     "Microsoft-Windows-LanguageFeatures-OCR-ko-*"
-))
+)
 
 if (-not $keepAsianIME) {
-    $packagePatterns.Add("Microsoft-Windows-LanguageFeatures-Handwriting-$languageCode-Package~")
-    $packagePatterns.Add("Microsoft-Windows-LanguageFeatures-OCR-$languageCode-Package~")
-    $packagePatterns.Add("Microsoft-Windows-LanguageFeatures-Speech-$languageCode-Package~")
-    $packagePatterns.Add("Microsoft-Windows-LanguageFeatures-TextToSpeech-$languageCode-Package~")
-    $packagePatterns.Add("*IME-ja-jp*")
+    $packagePatterns += @(
+        "Microsoft-Windows-LanguageFeatures-Handwriting-$languageCode-Package~",
+        "Microsoft-Windows-LanguageFeatures-OCR-$languageCode-Package~",
+        "Microsoft-Windows-LanguageFeatures-Speech-$languageCode-Package~",
+        "Microsoft-Windows-LanguageFeatures-TextToSpeech-$languageCode-Package~",
+        "*IME-ja-jp*"
+    )
 }
 
 if ($removeDefender) {
-    $packagePatterns.Add("Windows-Defender-Client-Package~")
+    $packagePatterns += "Windows-Defender-Client-Package~"
 }
 
 $allPackagesOutput = & dism.exe /English "/image:$scratchDir" /Get-Packages /Format:Table
@@ -652,12 +648,12 @@ $winDir = "$scratchDir\Windows"
 if ($removeDrivers) {
     Write-Host "Slimming DriverStore..." -ForegroundColor Cyan
     $driverRepo = Join-Path -Path $winDir -ChildPath "System32\DriverStore\FileRepository"
-    $driverPatterns = [System.Collections.Generic.List[string]]@('prn*', 'scan*', 'mfd*', 'wscsmd.inf*', 'tapdrv*', 'rdpbus.inf*')
+    $driverPatterns = @('prn*', 'scan*', 'mfd*', 'wscsmd.inf*', 'tapdrv*', 'rdpbus.inf*')
     if (-not $keepBluetooth) {
-        $driverPatterns.Add('tdibth.inf*')
+        $driverPatterns += 'tdibth.inf*'
     }
     if ($ultraSlimMode) {
-        $driverPatterns.AddRange(@('ntprint*.inf*', 'fax*.inf*', 'smartcrd*.inf*', 'modem*.inf*'))
+        $driverPatterns += @('ntprint*.inf*', 'fax*.inf*', 'smartcrd*.inf*', 'modem*.inf*')
     }
     if (Test-Path -LiteralPath $driverRepo) {
         Get-ChildItem -Path $driverRepo -Directory | ForEach-Object {
