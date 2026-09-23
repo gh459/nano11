@@ -542,15 +542,75 @@ $packagePatterns = [System.Collections.Generic.List[string]]@(
     "Microsoft-Windows-Wallpaper-Content-Extended-FoD-Package~"
 )
 
+# Foreign language font packages (preserves Latin, system, and Japanese Jpan fonts)
+$packagePatterns.AddRange(@(
+    "Microsoft-Windows-LanguageFeatures-Fonts-Hans-Package~",
+    "Microsoft-Windows-LanguageFeatures-Fonts-Hant-Package~",
+    "Microsoft-Windows-LanguageFeatures-Fonts-Kore-Package~",
+    "Microsoft-Windows-LanguageFeatures-Fonts-Thai-Package~",
+    "Microsoft-Windows-LanguageFeatures-Fonts-Deva-Package~",
+    "Microsoft-Windows-LanguageFeatures-Fonts-Syrc-Package~",
+    "Microsoft-Windows-LanguageFeatures-Fonts-Cher-Package~",
+    "Microsoft-Windows-LanguageFeatures-Fonts-Ethi-Package~",
+    "Microsoft-Windows-LanguageFeatures-Fonts-Beng-Package~",
+    "Microsoft-Windows-LanguageFeatures-Fonts-Gujr-Package~",
+    "Microsoft-Windows-LanguageFeatures-Fonts-Guru-Package~",
+    "Microsoft-Windows-LanguageFeatures-Fonts-Knda-Package~",
+    "Microsoft-Windows-LanguageFeatures-Fonts-Mlym-Package~",
+    "Microsoft-Windows-LanguageFeatures-Fonts-Orya-Package~",
+    "Microsoft-Windows-LanguageFeatures-Fonts-Taml-Package~",
+    "Microsoft-Windows-LanguageFeatures-Fonts-Telu-Package~",
+    "Microsoft-Windows-LanguageFeatures-Fonts-Hebr-Package~",
+    "Microsoft-Windows-LanguageFeatures-Fonts-Arab-Package~"
+))
+
+# Additional obsolete/unneeded optional FOD packages
+$packagePatterns.AddRange(@(
+    "Microsoft-Windows-WMIC-FoD-Package~",
+    "Microsoft-Windows-Printing-WFS-FoD-Package~",
+    "Microsoft-Windows-WirelessDisplay-FOD-Package~",
+    "Microsoft-Windows-SNMP-Client-Package~",
+    "Telnet-Client-Package~",
+    "SimpleTCP-Client-Package~",
+    "Microsoft-Windows-RDC-Package~"
+))
+
+# Decoupled Asian/Foreign Language Cleanup:
+# Always remove foreign Asian IMEs and heavy foreign Speech, Text-to-Speech, OCR, and Handwriting packages.
+# These packages take gigabytes of space and are completely unused in Japanese (ja-JP) or English (en-US) installations.
+$packagePatterns.AddRange(@(
+    "*IME-ko-kr*",
+    "*IME-zh-cn*",
+    "*IME-zh-tw*",
+    "*IME-zh-hk*",
+    "Microsoft-Windows-LanguageFeatures-Speech-zh-*",
+    "Microsoft-Windows-LanguageFeatures-Speech-ko-*",
+    "Microsoft-Windows-LanguageFeatures-Speech-de-*",
+    "Microsoft-Windows-LanguageFeatures-Speech-fr-*",
+    "Microsoft-Windows-LanguageFeatures-Speech-es-*",
+    "Microsoft-Windows-LanguageFeatures-Speech-it-*",
+    "Microsoft-Windows-LanguageFeatures-Speech-pt-*",
+    "Microsoft-Windows-LanguageFeatures-Speech-ru-*",
+    "Microsoft-Windows-LanguageFeatures-TextToSpeech-zh-*",
+    "Microsoft-Windows-LanguageFeatures-TextToSpeech-ko-*",
+    "Microsoft-Windows-LanguageFeatures-TextToSpeech-de-*",
+    "Microsoft-Windows-LanguageFeatures-TextToSpeech-fr-*",
+    "Microsoft-Windows-LanguageFeatures-TextToSpeech-es-*",
+    "Microsoft-Windows-LanguageFeatures-TextToSpeech-it-*",
+    "Microsoft-Windows-LanguageFeatures-TextToSpeech-pt-*",
+    "Microsoft-Windows-LanguageFeatures-TextToSpeech-ru-*",
+    "Microsoft-Windows-LanguageFeatures-Handwriting-zh-*",
+    "Microsoft-Windows-LanguageFeatures-Handwriting-ko-*",
+    "Microsoft-Windows-LanguageFeatures-OCR-zh-*",
+    "Microsoft-Windows-LanguageFeatures-OCR-ko-*"
+))
+
 if (-not $keepAsianIME) {
     $packagePatterns.Add("Microsoft-Windows-LanguageFeatures-Handwriting-$languageCode-Package~")
     $packagePatterns.Add("Microsoft-Windows-LanguageFeatures-OCR-$languageCode-Package~")
     $packagePatterns.Add("Microsoft-Windows-LanguageFeatures-Speech-$languageCode-Package~")
     $packagePatterns.Add("Microsoft-Windows-LanguageFeatures-TextToSpeech-$languageCode-Package~")
     $packagePatterns.Add("*IME-ja-jp*")
-    $packagePatterns.Add("*IME-ko-kr*")
-    $packagePatterns.Add("*IME-zh-cn*")
-    $packagePatterns.Add("*IME-zh-tw*")
 }
 
 if ($removeDefender) {
@@ -559,15 +619,26 @@ if ($removeDefender) {
 
 $allPackagesOutput = & dism.exe /English "/image:$scratchDir" /Get-Packages /Format:Table
 $allPackages = ($allPackagesOutput -split '\r?\n') | Select-Object -Skip 1
+
+$packagesToRemove = [System.Collections.Generic.List[string]]::new()
 foreach ($packagePattern in $packagePatterns) {
-    $matched = $allPackages | Where-Object { $_ -like "$packagePattern*" }
+    $pattern = if ($packagePattern.EndsWith("*")) { $packagePattern } else { "$packagePattern*" }
+    $matched = $allPackages | Where-Object { $_ -like $pattern }
     foreach ($pkg in $matched) {
         $packageIdentity = ($pkg -split '\s+')[0]
-        if ($packageIdentity) {
-            Write-Host "  - Removing package: $packageIdentity"
-            & dism.exe /English "/image:$scratchDir" /Remove-Package "/PackageName:$packageIdentity" > $null 2>&1
+        if ($packageIdentity -and (-not $packagesToRemove.Contains($packageIdentity))) {
+            # Strictly protect Japanese IME and Japanese font packages if keepAsianIME is enabled
+            if ($keepAsianIME -and ($packageIdentity -like "*IME-ja-jp*" -or $packageIdentity -like "*Fonts-Jpan*")) {
+                continue
+            }
+            $packagesToRemove.Add($packageIdentity)
         }
     }
+}
+
+foreach ($packageIdentity in $packagesToRemove) {
+    Write-Host "  - Removing package: $packageIdentity"
+    & dism.exe /English "/image:$scratchDir" /Remove-Package "/PackageName:$packageIdentity" > $null 2>&1
 }
 
 # 7. Removing NativeImages (.NET)
@@ -581,9 +652,12 @@ $winDir = "$scratchDir\Windows"
 if ($removeDrivers) {
     Write-Host "Slimming DriverStore..." -ForegroundColor Cyan
     $driverRepo = Join-Path -Path $winDir -ChildPath "System32\DriverStore\FileRepository"
-    $driverPatterns = @('prn*', 'scan*', 'mfd*', 'wscsmd.inf*', 'tapdrv*', 'rdpbus.inf*', 'tdibth.inf*')
+    $driverPatterns = [System.Collections.Generic.List[string]]@('prn*', 'scan*', 'mfd*', 'wscsmd.inf*', 'tapdrv*', 'rdpbus.inf*')
+    if (-not $keepBluetooth) {
+        $driverPatterns.Add('tdibth.inf*')
+    }
     if ($ultraSlimMode) {
-        $driverPatterns += @('ntprint*.inf*', 'fax*.inf*', 'smartcrd*.inf*', 'modem*.inf*')
+        $driverPatterns.AddRange(@('ntprint*.inf*', 'fax*.inf*', 'smartcrd*.inf*', 'modem*.inf*'))
     }
     if (Test-Path -LiteralPath $driverRepo) {
         Get-ChildItem -Path $driverRepo -Directory | ForEach-Object {
@@ -609,7 +683,7 @@ if (-not $keepExtraFonts -or $ultraSlimMode) {
             "lucon*", "calibri*", "arial*", "times*", "cou*", "8*.*"
         )
         $japaneseFonts = @(
-            "meiryo*", "yugoth*", "yumin*", "msgothic*", "msmincho*", "segoeuihistoric.ttf"
+            "meiryo*", "yugoth*", "yumin*", "msgoth*", "msgothic*", "msmin*", "msmincho*", "segoeuihistoric.ttf"
         )
         $fontsToKeep = $essentialSystemFonts + $japaneseFonts
         
@@ -640,13 +714,16 @@ if (-not $keepExtraFonts -or $ultraSlimMode) {
     }
 }
 
-# IME Input Methods (optional)
+# IME Input Methods: Always remove non-Japanese Asian Input Methods (CHS, CHT, KOR)
+Write-Host "Removing Chinese and Korean Input Methods..." -ForegroundColor Cyan
+Remove-Item -Path "$scratchDir\Windows\System32\InputMethod\CHS" -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item -Path "$scratchDir\Windows\System32\InputMethod\CHT" -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item -Path "$scratchDir\Windows\System32\InputMethod\KOR" -Recurse -Force -ErrorAction SilentlyContinue
+
+# Japanese IME: Strictly preserve JPN when keepAsianIME is set
 if (-not $keepAsianIME) {
-    Write-Host "Removing Asian Input Methods..." -ForegroundColor Cyan
-    Remove-Item -Path "$scratchDir\Windows\System32\InputMethod\CHS" -Recurse -Force -ErrorAction SilentlyContinue
-    Remove-Item -Path "$scratchDir\Windows\System32\InputMethod\CHT" -Recurse -Force -ErrorAction SilentlyContinue
+    Write-Host "Removing Japanese Input Method..." -ForegroundColor Cyan
     Remove-Item -Path "$scratchDir\Windows\System32\InputMethod\JPN" -Recurse -Force -ErrorAction SilentlyContinue
-    Remove-Item -Path "$scratchDir\Windows\System32\InputMethod\KOR" -Recurse -Force -ErrorAction SilentlyContinue
     Remove-Item -Path (Join-Path -Path $winDir -ChildPath "Speech\Engines\TTS") -Recurse -Force -ErrorAction SilentlyContinue
 }
 
@@ -677,8 +754,14 @@ if ($removeDefender) {
     }
 }
 
-# General cleanup
+# General cleanup & offline cache trimming
+Write-Host "Cleaning offline system caches, prefetch, and setup logs..." -ForegroundColor Cyan
 Remove-Item -Path "$scratchDir\Windows\Temp\*" -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item -Path "$scratchDir\Windows\SoftwareDistribution\Download\*" -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item -Path "$scratchDir\Windows\System32\LogFiles\*" -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item -Path "$scratchDir\Windows\Prefetch\*" -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item -Path "$scratchDir\Windows\Panther\*" -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item -Path "$scratchDir\Windows\Downloaded Program Files\*" -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item -Path (Join-Path -Path $winDir -ChildPath "Web") -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item -Path (Join-Path -Path $winDir -ChildPath "Help") -Recurse -Force -ErrorAction SilentlyContinue
 
@@ -1593,8 +1676,8 @@ reg.exe unload HKLM\zNTUSER     > $null 2>&1
 reg.exe unload HKLM\zSOFTWARE   > $null 2>&1
 reg.exe unload HKLM\zSYSTEM     > $null 2>&1
 
-# 12. Unmount and re-export install.wim
-Write-Host "Unmounting install.wim..." -ForegroundColor Green
+# 12. Unmount and export install image
+Write-Host "Unmounting install image..." -ForegroundColor Green
 
 [GC]::Collect()
 [GC]::WaitForPendingFinalizers()
@@ -1612,11 +1695,21 @@ if ($LASTEXITCODE -ne 0) {
     }
 }
 
-$tempWim = Join-Path -Path "$nano11Dir\sources" -ChildPath "install2.wim"
-Write-Host "Re-exporting install.wim with maximum compression..." -ForegroundColor Cyan
-& dism.exe /English /Export-Image "/SourceImageFile:$destWim" "/SourceIndex:$index" "/DestinationImageFile:$tempWim" /Compress:max
-Remove-Item -LiteralPath $destWim -Force -ErrorAction SilentlyContinue
-Rename-Item -LiteralPath $tempWim -NewName "install.wim" -Force
+# Export modified image directly to recovery ESD format (LZMS compression)
+$finalEsd = Join-Path -Path "$nano11Dir\sources" -ChildPath "install.esd"
+Write-Host "Exporting modified image to recovery-compressed install.esd (LZMS)..." -ForegroundColor Green
+& dism.exe /English /Export-Image "/SourceImageFile:$destWim" "/SourceIndex:$index" "/DestinationImageFile:$finalEsd" /Compress:recovery /CheckIntegrity
+
+if ((Test-Path -LiteralPath $finalEsd) -and ((Get-Item -LiteralPath $finalEsd).Length -gt 100MB)) {
+    Write-Host "install.esd successfully created ($([math]::Round((Get-Item -LiteralPath $finalEsd).Length / 1GB, 2)) GB). Removing temporary install.wim..." -ForegroundColor Green
+    Remove-Item -LiteralPath $destWim -Force -ErrorAction SilentlyContinue
+} else {
+    Write-Host "Recovery export unavailable or failed, falling back to LZX install.wim..." -ForegroundColor Yellow
+    $tempWim = Join-Path -Path "$nano11Dir\sources" -ChildPath "install2.wim"
+    & dism.exe /English /Export-Image "/SourceImageFile:$destWim" "/SourceIndex:$index" "/DestinationImageFile:$tempWim" /Compress:max /CheckIntegrity
+    Remove-Item -LiteralPath $destWim -Force -ErrorAction SilentlyContinue
+    Rename-Item -LiteralPath $tempWim -NewName "install.wim" -Force
+}
 
 # 14. Shrink and modify boot.wim (Setup bypasses & dynamic index handling)
 $bootWimPath = Join-Path -Path "$nano11Dir\sources" -ChildPath "boot.wim"
@@ -1661,12 +1754,16 @@ if (Test-Path -LiteralPath $bootWimPath) {
     Rename-Item -LiteralPath $finalBootWim -NewName "boot.wim" -Force
 }
 
-# 15. Export final image to recovery ESD format
-Write-Host "Exporting final install.wim to recovery-compressed install.esd..." -ForegroundColor Green
-$finalEsd = Join-Path -Path "$nano11Dir\sources" -ChildPath "install.esd"
-& dism.exe /English /Export-Image "/SourceImageFile:$destWim" "/SourceIndex:1" "/DestinationImageFile:$finalEsd" /Compress:recovery
-if (Test-Path -LiteralPath $finalEsd) {
-    Remove-Item -LiteralPath $destWim -Force -ErrorAction SilentlyContinue
+# 15. Verify final installation payload
+$esdCheck = Join-Path -Path "$nano11Dir\sources" -ChildPath "install.esd"
+$wimCheck = Join-Path -Path "$nano11Dir\sources" -ChildPath "install.wim"
+if (Test-Path -LiteralPath $esdCheck) {
+    Write-Host "Final installation image confirmed: install.esd ($([math]::Round((Get-Item -LiteralPath $esdCheck).Length / 1GB, 2)) GB)" -ForegroundColor Green
+    if (Test-Path -LiteralPath $wimCheck) {
+        Remove-Item -LiteralPath $wimCheck -Force -ErrorAction SilentlyContinue
+    }
+} elseif (Test-Path -LiteralPath $wimCheck) {
+    Write-Host "Final installation image confirmed: install.wim ($([math]::Round((Get-Item -LiteralPath $wimCheck).Length / 1GB, 2)) GB)" -ForegroundColor Green
 }
 
 # 16. Final cleanup of ISO root
