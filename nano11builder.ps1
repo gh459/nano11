@@ -1578,12 +1578,36 @@ foreach ($exe in $blockedExes) {
 # Scheduled Tasks Cleanup (Path fixed - no hardcoded C:)
 Write-Host "Cleaning up scheduled telemetry tasks..." -ForegroundColor Cyan
 $tasksPath = Join-Path -Path $scratchDir -ChildPath "Windows\System32\Tasks"
-Remove-Item -LiteralPath "$tasksPath\Microsoft\Windows\Application Experience\Microsoft Compatibility Appraiser" -Force -ErrorAction SilentlyContinue
-Remove-Item -LiteralPath "$tasksPath\Microsoft\Windows\Customer Experience Improvement Program" -Recurse -Force -ErrorAction SilentlyContinue
-Remove-Item -LiteralPath "$tasksPath\Microsoft\Windows\Application Experience\ProgramDataUpdater" -Force -ErrorAction SilentlyContinue
-Remove-Item -LiteralPath "$tasksPath\Microsoft\Windows\Chkdsk\Proxy" -Force -ErrorAction SilentlyContinue
-Remove-Item -LiteralPath "$tasksPath\Microsoft\Windows\Windows Error Reporting\QueueReporting" -Force -ErrorAction SilentlyContinue
-Remove-Item -LiteralPath "$tasksPath\Microsoft\XblGameSave" -Recurse -Force -ErrorAction SilentlyContinue
+$telemetryAndMemTasks = @(
+    "Microsoft\Windows\Application Experience\Microsoft Compatibility Appraiser",
+    "Microsoft\Windows\Application Experience\ProgramDataUpdater",
+    "Microsoft\Windows\Application Experience\StartupAppTask",
+    "Microsoft\Windows\Customer Experience Improvement Program",
+    "Microsoft\Windows\Chkdsk\Proxy",
+    "Microsoft\Windows\Windows Error Reporting\QueueReporting",
+    "Microsoft\XblGameSave",
+    "Microsoft\Windows\DiskDiagnostic",
+    "Microsoft\Windows\Feedback",
+    "Microsoft\Windows\FileHistory",
+    "Microsoft\Windows\Maintenance\WinSAT",
+    "Microsoft\Windows\PI\Sqm-Tasks",
+    "Microsoft\Windows\Power Efficiency Diagnostics",
+    "Microsoft\Windows\Shell\FamilySafetyMonitor",
+    "Microsoft\Windows\Shell\FamilySafetyRefreshTask",
+    "Microsoft\Windows\Registry\RegIdleBackup",
+    "Microsoft\Windows\Diagnosis",
+    "Microsoft\Windows\MemoryDiagnostic",
+    "Microsoft\Windows\DiskFootprint",
+    "Microsoft\Windows\Maps",
+    "Microsoft\Windows\Speech",
+    "Microsoft\Windows\Defrag\ScheduledDefrag",
+    "Microsoft\Windows\Windows Filtering Platform",
+    "Microsoft\Windows\Device Information",
+    "Microsoft\Windows\NetTrace"
+)
+foreach ($t in $telemetryAndMemTasks) {
+    Remove-Item -LiteralPath "$tasksPath\$t" -Recurse -Force -ErrorAction SilentlyContinue
+}
 
 # Windows Update (optional)
 if ($disableWU) {
@@ -1690,7 +1714,7 @@ reg.exe add "$powerPath\be337238-0d82-4146-a960-4f3749d470c2" /v "ACSettingIndex
 # 3. Disk, NVMe & Memory Management (eclean.gg Deep Clean)
 reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\FileSystem" /v "NtfsDisable8dot3NameCreation" /t REG_DWORD /d 1 /f > $null 2>&1
 reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\FileSystem" /v "NtfsDisableLastAccessUpdate" /t REG_DWORD /d 1 /f > $null 2>&1
-reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\Session Manager\Memory Management" /v "DisablePagingExecutive" /t REG_DWORD /d 1 /f > $null 2>&1
+reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\Session Manager\Memory Management" /v "DisablePagingExecutive" /t REG_DWORD /d 0 /f > $null 2>&1
 reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\Session Manager\Memory Management" /v "LargeSystemCache" /t REG_DWORD /d 0 /f > $null 2>&1
 
 # 4. Network & TCP/IP Low-Latency (Nagle's Algorithm Disabled, Instant ACK)
@@ -1761,45 +1785,46 @@ reg.exe add "HKLM\zSYSTEM\ControlSet001\Control" /v "ServicesPipeTimeout" /t REG
 
 # Kernel Memory Management (Radical RAM Optimization & Page Combining)
 reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\Session Manager\Memory Management" /v "DisablePageCombining" /t REG_DWORD /d 0 /f > $null 2>&1
-reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\Session Manager\Memory Management" /v "PoolUsageMaximum" /t REG_DWORD /d 60 /f > $null 2>&1
+reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\Session Manager\Memory Management" /v "PoolUsageMaximum" /t REG_DWORD /d 40 /f > $null 2>&1
 reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\Session Manager\Memory Management" /v "LargeSystemCache" /t REG_DWORD /d 0 /f > $null 2>&1
 reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\Session Manager\Memory Management" /v "DisablePagingExecutive" /t REG_DWORD /d 0 /f > $null 2>&1
+reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\Session Manager\Memory Management" /v "ClearPageFileAtShutdown" /t REG_DWORD /d 0 /f > $null 2>&1
 reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\Session Manager\Memory Management\PrefetchParameters" /v "EnablePrefetcher" /t REG_DWORD /d 0 /f > $null 2>&1
 reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\Session Manager\Memory Management\PrefetchParameters" /v "EnableSuperfetch" /t REG_DWORD /d 0 /f > $null 2>&1
 
 # Radical RAM Optimization: Non-essential background services configured to Disabled (4) or Manual (3)
 Write-Host "Configuring system services for radical RAM reduction..." -ForegroundColor Green
 $serviceConfigs = @{
-    "SysMain"            = 4  # SuperFetch / RAM pre-caching (Saves 100MB-200MB RAM)
-    "WSearch"            = 4  # Windows Search Indexer (Saves 80MB-150MB RAM)
-    "DoSvc"              = 4  # Delivery Optimization (Saves 40MB-80MB RAM)
-    "DPS"                = 4  # Diagnostic Policy Service (Saves 30MB-50MB RAM)
-    "WdiServiceHost"     = 4  # Diagnostic Service Host
-    "WdiSystemHost"      = 4  # Diagnostic System Host
-    "TroubleshootingSvc" = 4  # Recommended Troubleshooting Service
-    "DusmSvc"            = 4  # Data Usage Monitoring
-    "LanmanServer"       = 3  # Server / SMB File Sharing (Manual: starts on demand only)
-    "TabletInputService" = 3  # Touch Keyboard and Handwriting Panel (Manual)
-    "SensrSvc"           = 4  # Sensor Monitoring Service
-    "SensorService"      = 4  # Sensor Service
-    "SensorDataService"  = 4  # Sensor Data Service
-    "ShellHWDetection"   = 3  # Shell Hardware Detection (Manual)
-    "WarpJITSvc"         = 4  # WARP JIT Service
-    "SharedAccess"       = 4  # Internet Connection Sharing
-    "stisvc"             = 3  # Windows Image Acquisition (Manual)
-    "MapsBroker"         = 4  # Downloaded Maps Manager
-    "DiagTrack"          = 4  # Connected User Experiences and Telemetry
-    "dmwappushservice"   = 4  # WAP Push Message Routing Service
-    "RetailDemo"         = 4  # Retail Demo Service
-    "wisvc"              = 4  # Windows Insider Service
-    "lfsvc"              = 4  # Geolocation Service
-    "PcaSvc"             = 4  # Program Compatibility Assistant
-    "WerSvc"             = 4  # Windows Error Reporting Service
-    "SCardSvr"           = 4  # Smart Card Service
-    "ScDeviceEnum"       = 4  # Smart Card Device Enumeration Service
-    "icssvc"             = 4  # Mobile Hotspot Service
-    "CertPropSvc"        = 4  # Certificate Propagation
-    "CscService"         = 4  # Offline Files
+    "SysMain"                                  = 4  # SuperFetch / RAM pre-caching (Saves 100MB-200MB RAM)
+    "WSearch"                                  = 4  # Windows Search Indexer (Saves 80MB-150MB RAM)
+    "DoSvc"                                    = 4  # Delivery Optimization (Saves 40MB-80MB RAM)
+    "DPS"                                      = 4  # Diagnostic Policy Service (Saves 30MB-50MB RAM)
+    "WdiServiceHost"                           = 4  # Diagnostic Service Host
+    "WdiSystemHost"                            = 4  # Diagnostic System Host
+    "TroubleshootingSvc"                       = 4  # Recommended Troubleshooting Service
+    "DusmSvc"                                  = 4  # Data Usage Monitoring
+    "LanmanServer"                             = 3  # Server / SMB File Sharing (Manual: starts on demand only)
+    "TabletInputService"                       = 3  # Touch Keyboard and Handwriting Panel (Manual)
+    "SensrSvc"                                 = 4  # Sensor Monitoring Service
+    "SensorService"                            = 4  # Sensor Service
+    "SensorDataService"                        = 4  # Sensor Data Service
+    "ShellHWDetection"                         = 3  # Shell Hardware Detection (Manual)
+    "WarpJITSvc"                               = 4  # WARP JIT Service
+    "SharedAccess"                             = 4  # Internet Connection Sharing
+    "stisvc"                                   = 3  # Windows Image Acquisition (Manual)
+    "MapsBroker"                               = 4  # Downloaded Maps Manager
+    "DiagTrack"                                = 4  # Connected User Experiences and Telemetry
+    "dmwappushservice"                         = 4  # WAP Push Message Routing Service
+    "RetailDemo"                               = 4  # Retail Demo Service
+    "wisvc"                                    = 4  # Windows Insider Service
+    "lfsvc"                                    = 4  # Geolocation Service
+    "PcaSvc"                                   = 4  # Program Compatibility Assistant
+    "WerSvc"                                   = 4  # Windows Error Reporting Service
+    "SCardSvr"                                 = 4  # Smart Card Service
+    "ScDeviceEnum"                             = 4  # Smart Card Device Enumeration Service
+    "icssvc"                                   = 4  # Mobile Hotspot Service
+    "CertPropSvc"                              = 4  # Certificate Propagation
+    "CscService"                               = 4  # Offline Files
     "Netlogon"                                 = 3  # Netlogon (Manual demand-start)
     "UCPD"                                     = 4  # Universal Consent Privacy Driver (eclean/Atlas: prevent forced tweak reverts)
     "GpuEnergyDrv"                             = 4  # GPU Energy Driver (eclean/Atlas: reduce gaming latency & telemetry)
@@ -1807,6 +1832,33 @@ $serviceConfigs = @{
     "OneSyncSvc"                               = 4  # Sync Host (eclean/Atlas)
     "TrkWks"                                   = 4  # Distributed Link Tracking Client (eclean/Atlas)
     "wercplsupport"                            = 4  # Problem Reports Control Panel Support (eclean/Atlas)
+    "FontCache"                                = 4  # Windows Font Cache Service (Saves 25MB-50MB RAM)
+    "FontCache3.0.0.0"                         = 4  # WPF Font Cache Service
+    "WpnService"                               = 4  # Windows Push Notifications System Service (Saves 15MB-30MB RAM)
+    "WpnUserService"                           = 4  # Push Notifications User Service
+    "PimIndexMaintenanceSvc"                   = 4  # Contact Data Indexing
+    "UnistoreSvc"                              = 4  # User Data Storage
+    "UserDataSvc"                              = 4  # User Data Access
+    "MessagingService"                         = 4  # Messaging Service
+    "CDPSvc"                                   = 4  # Connected Devices Platform Service
+    "CDPUserSvc"                               = 4  # Connected Devices Platform User Service
+    "iphlpsvc"                                 = 4  # IP Helper (IPv6 6to4/ISATAP tunnels - Saves 10MB-15MB RAM)
+    "VaultSvc"                                 = 3  # Credential Manager (Manual demand-start)
+    "TokenBroker"                              = 3  # Web Account Manager (Manual demand-start)
+    "WbioSrvc"                                 = 4  # Windows Biometric Service (Saves 10MB-20MB RAM)
+    "PhoneSvc"                                 = 4  # Phone Service
+    "WpcMonSvc"                                = 4  # Parental Controls
+    "WMPNetworkSvc"                            = 4  # Windows Media Player Network Sharing
+    "SmsRouter"                                = 4  # SMS Router
+    "AppHostSvc"                               = 4  # Application Host Helper
+    "SEMgrSvc"                                 = 4  # Payments and NFC/SE Manager
+    "CaptureService"                           = 3  # Screen / Camera capture broker (Manual)
+    "edgeupdate"                               = 4  # Microsoft Edge Update Service (Saves 20MB-35MB RAM)
+    "edgeupdatem"                              = 4  # Microsoft Edge Update Service
+    "GraphicsPerfSvc"                          = 4  # Graphics Performance Monitor Service
+    "InventorySvc"                             = 4  # Device Association / Inventory Service
+    "NaturalAuthentication"                    = 4  # Companion Device Authentication
+    "SharedRealitySvc"                         = 4  # Spatial Data / Mixed Reality Service
 }
 foreach ($svc in $serviceConfigs.GetEnumerator()) {
     reg.exe add "HKLM\zSYSTEM\ControlSet001\Services\$($svc.Key)" /v "Start" /t REG_DWORD /d $($svc.Value) /f > $null 2>&1
@@ -1912,7 +1964,7 @@ if ($atlasReviOSMode) {
     reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\FileSystem" /v "DontVerifyRandomDrivers" /t REG_DWORD /d 1 /f > $null 2>&1
 
     # 2. Kernel & Memory Tuning (AtlasOS / ReviOS Core)
-    reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\Session Manager\Memory Management" /v "DisablePagingExecutive" /t REG_DWORD /d 1 /f > $null 2>&1
+    reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\Session Manager\Memory Management" /v "DisablePagingExecutive" /t REG_DWORD /d 0 /f > $null 2>&1
     reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\Session Manager\Memory Management" /v "ClearPageFileAtShutdown" /t REG_DWORD /d 0 /f > $null 2>&1
     reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\Session Manager\Memory Management" /v "LargeSystemCache" /t REG_DWORD /d 0 /f > $null 2>&1
 
@@ -2010,19 +2062,45 @@ reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Themes\Perso
 reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize" /v "AppsUseLightTheme" /t REG_DWORD /d 0 /f > $null 2>&1
 reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize" /v "SystemUsesLightTheme" /t REG_DWORD /d 0 /f > $null 2>&1
 
-# Radical RAM: Disable Transparency & DWM render targets
+# Radical RAM: Disable Transparency & DWM render targets & Best Performance Visual Effects
 reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize" /v "EnableTransparency" /t REG_DWORD /d 0 /f > $null 2>&1
 reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize" /v "EnableTransparency" /t REG_DWORD /d 0 /f > $null 2>&1
 reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\DWM" /v "ColorizationOpaqueBlend" /t REG_DWORD /d 1 /f > $null 2>&1
 reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\DWM" /v "ColorizationOpaqueBlend" /t REG_DWORD /d 1 /f > $null 2>&1
+reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\DWM" /v "AlwaysHibernateThumbnails" /t REG_DWORD /d 0 /f > $null 2>&1
+reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\DWM" /v "AlwaysHibernateThumbnails" /t REG_DWORD /d 0 /f > $null 2>&1
+reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\DWM" /v "DisallowAnimations" /t REG_DWORD /d 1 /f > $null 2>&1
+reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\DWM" /v "DisableTransparency" /t REG_DWORD /d 1 /f > $null 2>&1
+
+# Best Performance Visual Effects (Zero Animation / Zero Shadow / No Live Window Drag)
 reg.exe add "HKLM\zNTUSER\Control Panel\Desktop\WindowMetrics" /v "MinAnimate" /t REG_SZ /d "0" /f > $null 2>&1
 reg.exe add "HKLM\zDEFAULT\Control Panel\Desktop\WindowMetrics" /v "MinAnimate" /t REG_SZ /d "0" /f > $null 2>&1
 reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" /v "VisualFXSetting" /t REG_DWORD /d 2 /f > $null 2>&1
 reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" /v "VisualFXSetting" /t REG_DWORD /d 2 /f > $null 2>&1
-reg.exe add "HKLM\zNTUSER\Control Panel\Desktop" /v "UserPreferencesMask" /t REG_BINARY /d "9012038010000000" /f > $null 2>&1
-reg.exe add "HKLM\zDEFAULT\Control Panel\Desktop" /v "UserPreferencesMask" /t REG_BINARY /d "9012038010000000" /f > $null 2>&1
+reg.exe add "HKLM\zNTUSER\Control Panel\Desktop" /v "UserPreferencesMask" /t REG_BINARY /d "9012018010000000" /f > $null 2>&1
+reg.exe add "HKLM\zDEFAULT\Control Panel\Desktop" /v "UserPreferencesMask" /t REG_BINARY /d "9012018010000000" /f > $null 2>&1
+reg.exe add "HKLM\zNTUSER\Control Panel\Desktop" /v "DragFullWindows" /t REG_SZ /d "0" /f > $null 2>&1
+reg.exe add "HKLM\zDEFAULT\Control Panel\Desktop" /v "DragFullWindows" /t REG_SZ /d "0" /f > $null 2>&1
 reg.exe add "HKLM\zNTUSER\Control Panel\Desktop" /v "FontSmoothing" /t REG_SZ /d "2" /f > $null 2>&1
 reg.exe add "HKLM\zDEFAULT\Control Panel\Desktop" /v "FontSmoothing" /t REG_SZ /d "2" /f > $null 2>&1
+
+# Shell & DLL RAM Optimization: Unload DLLs instantly and stop thumbnail caching
+reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AlwaysUnloadDll" /ve /t REG_SZ /d "1" /f > $null 2>&1
+reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Explorer" /v "AlwaysUnloadDll" /t REG_DWORD /d 1 /f > $null 2>&1
+reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\Explorer" /v "NoThumbnailCache" /t REG_DWORD /d 1 /f > $null 2>&1
+reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v "TaskbarAnimations" /t REG_DWORD /d 0 /f > $null 2>&1
+reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v "TaskbarAnimations" /t REG_DWORD /d 0 /f > $null 2>&1
+reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v "ListviewAlphaSelect" /t REG_DWORD /d 0 /f > $null 2>&1
+reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v "ListviewAlphaSelect" /t REG_DWORD /d 0 /f > $null 2>&1
+reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v "ListviewShadow" /t REG_DWORD /d 0 /f > $null 2>&1
+reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v "ListviewShadow" /t REG_DWORD /d 0 /f > $null 2>&1
+reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v "DisableThumbnailCache" /t REG_DWORD /d 1 /f > $null 2>&1
+reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v "DisableThumbnailCache" /t REG_DWORD /d 1 /f > $null 2>&1
+
+# Edge & WebView2 Background Memory Suppression
+reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Edge\WebView2" /v "BackgroundModeEnabled" /t REG_DWORD /d 0 /f > $null 2>&1
+reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Edge\WebView2" /v "StartupBoostEnabled" /t REG_DWORD /d 0 /f > $null 2>&1
+reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Edge" /v "PreloadEdgeDefaultEngine" /t REG_DWORD /d 0 /f > $null 2>&1
 reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v "HideFileExt" /t REG_DWORD /d 0 /f > $null 2>&1
 reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v "HideFileExt" /t REG_DWORD /d 0 /f > $null 2>&1
 reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v "Hidden" /t REG_DWORD /d 1 /f > $null 2>&1
