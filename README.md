@@ -22,6 +22,9 @@ The goal of nano11 is to automate the creation of a streamlined Windows 11 image
   - Works on any host operating system language/locale without permission or translation errors.
   - Replaces localized tools (`takeown`/`icacls`) with native .NET Access Control Lists (`Set-Acl` via Well-Known Administrator SID `S-1-5-32-544`).
 - **🛡️ Customization Options (Issues #1, #9, #10, #12, #13)**:
+  - **Japanese Keyboard (106/109) Guarantee**: Prevents the common Windows clean install issue where Japanese keyboards are misdetected as 101/104 English keyboards (causing `@` and `:` key mapping mismatch) by injecting verified `kbd106.dll` and `PCAT_106KEY` configurations. Toggle with `-JapaneseKeyboard` / `-NoJapaneseKeyboard`.
+  - **Windows 11 24H2 & AI Bloatware Neutralization**: Automatically disables 24H2 mandatory BitLocker device encryption (`PreventDeviceEncryption = 1`), TCG hardware security activation, and eliminates background AI telemetry (Copilot Provider, Windows Recall, Click-to-Do, and DevHome).
+  - **Automatic Media Drive Detection**: Automatically detects connected Windows 11 ISO/USB installation drives containing `sources\install.wim` or `install.esd`, eliminating manual drive letter entry.
   - **Keep Asian IMEs**: Retain Japanese input method (`ja-JP`) while cleanly decoupling and trimming foreign Asian IMEs (`ko-KR`, `zh-CN`, `zh-TW`) and gigabytes of unneeded foreign voice packages.
   - **Windows Defender Toggle**: Option to keep Windows Defender active or remove it completely.
   - **Fonts & Drivers**: Option to preserve international font collections and essential hardware drivers.
@@ -33,7 +36,7 @@ The goal of nano11 is to automate the creation of a streamlined Windows 11 image
   - **Foreign Supplemental Fonts Trimmed**: Safely purges non-Latin/non-Japanese font collections (Chinese Hans/Hant, Korean Kore, Devanagari, Thai, Ethiopic, Syriac, Cherokee, etc.), saving ~200 MB.
   - **Obsolete FOD Packages Removed**: Purges deprecated and unused optional features including `WMIC` (deprecated in 24H2), `Printing-WFS` (Fax & Scan), `WirelessDisplay` (Miracast Connect), `SNMP`, `Telnet`, `SimpleTCP`, and `RDC`.
   - **Offline System Caches & Setup Logs Cleaned**: Wipes build-time update caches (`SoftwareDistribution\Download`), `System32\LogFiles`, `Prefetch`, and setup temporary files before unmounting.
-  - **Single-Pass Direct Recovery ESD Export**: Streamlines the DISM pipeline to export the modified image directly from the committed WIM index into `sources\install.esd` using LZMS recovery compression (`/Compress:recovery /CheckIntegrity`), completely eliminating the redundant 10-minute intermediate `install2.wim` (LZX) pass and saving ~9 GB of temporary disk writes.
+  - **High-Speed Stable LZX install.wim Export & Setup Error 0x8007000D Fix**: Defaults to rock-solid LZX `/Compress:max` export to `sources\install.wim` (exports in ~20 seconds), preventing the known Windows 11 24H2 DISM `WIMGAPI.DLL` crash (`0xc0000005`) that occurred during LZMS solid recovery compression. Eliminates the critical bug where a crashed 208-byte `install.esd` remnant caused the valid `install.wim` to be deleted, which resulted in Windows Setup error `0x8007000D - 0x4002C` (ERROR_INVALID_DATA). Includes strict payload (> 1 GB) and ISO (> 1.5 GB) size validation, with an optional `-ExportESD` flag for systems that support solid LZMS export.
   - **Zero Setup-Breaking Hacks**: Strictly keeps `winre.wim` intact during offline build (preventing `0x80070002` SafeOS staging failures) and keeps `boot.wim` under LZX `/Compress:max` (avoiding `0xc0000001` unbootable media), with CBS component integrity guaranteed via official DISM `StartComponentCleanup /ResetBase`.
 - **🚫 Safe Debloat & Suppression of Target Components**:
   - **Windows Backup (Windows バックアップ)**: Complete policy suppression (`DisableBackupRestore = 1`, `DisableCloudBackup = 1`, `DisableConsumerAccountStateContent = 1`), `AppListBackup` scheduled task removal, and concealment from Settings (`hide:backup`). Avoids breaking `Client.CBS` system dependencies.
@@ -60,12 +63,35 @@ The goal of nano11 is to automate the creation of a streamlined Windows 11 image
   - **Robocopy Mirroring**: Uses `robocopy` with `Copy-Item` fallback to ensure 100% of directory structures and boot files are preserved from read-only ISO media.
   - **Build Integrity & Safe Cleanup**: Validates output ISO existence and size (> 1 MB), captures `oscdimg` exit codes, displays SHA256 checksums, and preserves the working directory upon error for troubleshooting.
 - **⚡ Advanced Performance, Latency & Registry Optimization**:
+  - **Integrated eclean & AtlasOS Optimization & Disk Cleaner**:
+    - *Fault Tolerant Heap (FTH) Disabled*: Eliminates crash mitigation throttling and CPU overhead for games and intensive applications.
+    - *Program Compatibility Assistant (PCA) Suppressed*: Disables PCA engine, inventory, and telemetry policies (`DisablePCA`, `DisableEngine`, `DisableInventory`, `AITEnable`).
+    - *UCPD & Background Driver Pruning*: Disables Universal Consent Privacy Driver (`UCPD`) to prevent Windows from reverting user customizations, along with `GpuEnergyDrv`, `diagnosticshub`, `OneSyncSvc`, and `TrkWks`.
+    - *Delivery Optimization (P2P Upload) Disabled*: Sets `DODownloadMode = 0` to prevent Windows from seeding update files to external peers.
+    - *Fast Startup (Hiberboot) Disabled*: Eliminates hibernated state disk wear, dual-boot partition locks, and ensures clean cold-boot kernel state.
+    - *Automated Disk Cleanup (Cleaner Logic)*: Integrates `VolumeCaches` preset configuration with `cleanmgr.exe /sagerun:64` and automatic purge of user/system Temp, CrashDumps, Minidumps, and Windows Event logs.
   - **Integrated optimizerDuck & sparkle**: Applies system latency and responsiveness optimizations, including `Win32PrioritySeparation` quantum boost (0x26), Multimedia Class Scheduler Service (MMCSS) gaming priority & GPU scheduling, and network throttling index disabling.
   - **Integrated Revo Registry Cleaner Tuner**: Full integration of all 6 optimization categories:
     - *Explorer*: Auto-complete URL/path suggestions, show drive letters first, disable info tips.
     - *Desktop & Start Menu*: Reduce hover delay times, enable classic Alt+Tab, kill hung apps faster (`WaitToKillAppTimeout = 2000`).
     - *System & Services*: `ServicesPipeTimeout` optimization, network file sharing responsiveness.
     - *Visual Effects*: Disable Mica/Acrylic transparency while keeping font smoothing enabled.
+- **🚀 AtlasOS & ReviOS Radical Debloat & Latency Engine**:
+  - **Low-Latency System Timer & BCD Tuning**: Configures high-resolution synthetic timers (`useplatformclock false`, `disabledynamictick yes`, `tscsyncpolicy Enhanced`, `bootux disabled`, `quietboot on`), completely eliminating dynamic tick jitter and micro-stuttering in latency-sensitive applications and games.
+  - **Gaming Responsiveness & Quantum Scheduling**: Injects `Win32PrioritySeparation = 0x26` (38 decimal: short, variable quanta favoring foreground tasks), tunes MMCSS `SystemResponsiveness = 0` (0% multimedia throttling), sets gaming thread priority to 6, and sets GPU scheduling priority to 8.
+  - **Ultra-Low Latency Network Stack**: Disables Nagle's algorithm (`TcpAckFrequency = 1`, `TCPNoDelay = 1`) across all active and virtual network adapters for immediate packet dispatch, lowers `TcpTimedWaitDelay = 30`, sets `MaxUserPort = 65534`, and eliminates Windows QoS 20% bandwidth reservation (`NonBestEffortLimit = 0`).
+  - **Complete Hibernation Purge**: Executes `powercfg.exe /hibernate off` on first logon to eradicate `hiberfil.sys`, instantly recovering **4 GB – 16+ GB of SSD storage** and eliminating fast-startup shutdown disk thrashing.
+  - **Ultimate Performance Power Scheme**: Automatically provisions and activates the hidden Windows Ultimate Performance power scheme (`e9a42b02-d5df-448d-aa00-03f14749eb61`), preventing aggressive core sleeping and frequency drops.
+  - **NTFS File System Overhead Reduction**: Disables legacy 8.3 short filename generation (`NtfsDisable8dot3NameCreation = 1`) and disables NTFS last-access timestamp tracking (`NtfsDisableLastAccessUpdate = 1`), drastically cutting file I/O operations and disk overhead.
+  - **Kernel Paging & Crash Dump Overhead Elimination**: Locks the core NT kernel executive in physical RAM (`DisablePagingExecutive = 1`), disables zeroing pagefile at shutdown for faster reboots, disables memory crash dump generation (`CrashDumpEnabled = 0`), and suppresses crash logging events.
+  - **Deep Service & Diagnostics Stripping**: Disables 13+ unnecessary telemetry, parental, and legacy background services offline (`WpcMonSvc`, `WMPNetworkSvc`, `PhoneSvc`, `WbioSrvc`, `SharedAccess`, `RemoteRegistry`, `RetailDemo`, `shpamsvc`, etc.) and purges diagnostic scheduled tasks offline.
+  - **🛠️ Post-Install Desktop Maintenance Tools**: Automatically deploys a dedicated management toolkit folder directly to `C:\Users\Public\Desktop\Atlas-ReviOS Tools` containing 6 one-click `.bat` scripts:
+    1. `1. Toggle Windows Defender.bat`: Enable or disable Defender real-time protection and services on demand.
+    2. `2. Toggle Windows Update.bat`: Enable or disable Windows Update services (`wuauserv`, `UsoSvc`, `BITS`).
+    3. `3. Toggle Hibernation.bat`: Enable or disable hibernation and toggle `hiberfil.sys` disk footprint.
+    4. `4. Toggle Bluetooth.bat`: Enable or disable Bluetooth support services (`bthserv`, `BTAGService`).
+    5. `5. Toggle Print Spooler.bat`: Enable or disable the print spooler service (`Spooler`).
+    6. `6. Free Memory & Clear Temp.bat`: Instant purge of temporary files, crash dumps, and Win32 working sets.
 - **⚡ Radical RAM Optimization (Idle Memory Baseline ~1.0 GB – 1.3 GB, Perplexity-Verified Safe)**:
   - **SvcHost Grouping**: Sets `SvcHostSplitThresholdInKB` to 64 GB, consolidating 70–90 separate `svchost.exe` instances into 12–15 shared processes, instantly freeing 500 MB – 800 MB of RAM.
   - **Kernel Memory Manager & Page Combining**: Enables NT Kernel `PageCombining` (copy-on-write memory deduplication) via MMAgent and sets paged pool trim threshold (`PoolUsageMaximum = 60`) while prioritizing application working sets over file system cache (`LargeSystemCache = 0`, `DisablePagingExecutive = 0`).
@@ -167,17 +193,21 @@ You can also run the builder non-interactively with customized flags:
 # Specify a custom working drive (e.g. when C: drive has low SSD space):
 .\nano11builder.ps1 -WorkDir "D:\nano11_temp"
 
-# Full aggressive debloat without prompts:
+# Full aggressive debloat without prompts (AtlasOS & ReviOS tuning enabled by default):
 .\nano11builder.ps1 -NonInteractive
 
 # UltraSlim mode with ultra-small ISO footprint (~3.0 GB):
 .\nano11builder.ps1 -NonInteractive -UltraSlim
+
+# Maximum gaming & low-latency build retaining Japanese IME:
+.\nano11builder.ps1 -NonInteractive -AtlasReviOS -KeepIME
 ```
 
 ### **Available Parameters:**
 | Parameter | Description |
 | :--- | :--- |
 | `-NonInteractive` | Runs without interactive confirmation prompts |
+| `-SourceDrive <Drive>` | Windows 11 installation media drive letter (e.g. `D:`). Auto-detected if omitted |
 | `-WorkDir <Path>` | Custom directory for temporary file processing (ideal if C: has < 25 GB free) |
 | `-KeepIME` | Retains Asian language input methods (Japanese, Chinese, Korean) |
 | `-KeepDefender` | Retains Windows Defender and related real-time protection services |
@@ -190,6 +220,10 @@ You can also run the builder non-interactively with customized flags:
 | `-SafeDebloat` | Enables safe component store cleanup mode preserving CBS integrity (Default: True) |
 | `-AggressiveWinSxS` | Opts into aggressive WinSxS pruning mode (Experimental, for testing) |
 | `-UltraSlim` | Enables UltraSlim mode to achieve ~3.0 GB ISO (prunes Edge WebView, non-JP CJK fonts, WinSxS dead weight, compresses WinRE) |
+| `-JapaneseKeyboard` | Explicitly enforces Japanese 106/109 keyboard layout (Default: Enabled) |
+| `-NoJapaneseKeyboard` | Skips Japanese 106/109 keyboard layout injection |
+| `-AtlasReviOS` | Enables AtlasOS & ReviOS radical debloat, low-latency, and performance tuning (Default: Enabled) |
+| `-NoAtlasReviOS` | Skips AtlasOS & ReviOS radical debloat and tuning |
 
 When finished, your bootable ISO will be generated in the script directory as `nano11.iso` with SHA256 verification hash displayed!
 

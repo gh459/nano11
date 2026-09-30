@@ -21,7 +21,9 @@
 [CmdletBinding()]
 param(
     [switch]$NonInteractive,
+    [string]$SourceDrive,
     [string]$WorkDir,
+    [string]$Index,
     [switch]$KeepIME,
     [switch]$KeepDefender,
     [switch]$KeepFonts,
@@ -34,7 +36,12 @@ param(
     [switch]$SafeDebloat,
     [switch]$AggressiveWinSxS,
     [switch]$TrimWinSxS,
-    [switch]$UltraSlim
+    [switch]$UltraSlim,
+    [switch]$JapaneseKeyboard,
+    [switch]$NoJapaneseKeyboard,
+    [switch]$AtlasReviOS,
+    [switch]$NoAtlasReviOS,
+    [switch]$ExportESD
 )
 
 # 1. Check and adjust Execution Policy
@@ -287,6 +294,9 @@ $wslSupport = $false
 $keepRecoveryEnv = $false
 $safeDebloatMode = $true
 $ultraSlimMode = $false
+$setJapaneseKeyboard = $true
+$atlasReviOSMode = $true
+$exportESDMode = $false
 
 if ($NonInteractive) {
     if ($KeepDefender)          { $removeDefender = $false }
@@ -299,6 +309,11 @@ if ($NonInteractive) {
     if ($KeepRecovery -or $KeepWinRE) { $keepRecoveryEnv = $true }
     if ($AggressiveWinSxS -or $TrimWinSxS) { $safeDebloatMode = $false }
     if ($UltraSlim)             { $ultraSlimMode = $true; $keepExtraFonts = $false }
+    if ($NoJapaneseKeyboard)    { $setJapaneseKeyboard = $false }
+    elseif ($JapaneseKeyboard)  { $setJapaneseKeyboard = $true }
+    if ($NoAtlasReviOS)         { $atlasReviOSMode = $false }
+    elseif ($AtlasReviOS)       { $atlasReviOSMode = $true }
+    if ($ExportESD)             { $exportESDMode = $true }
 } else {
     Write-Host "Configure debloat options (Press Enter to use recommended defaults):" -ForegroundColor Gray
     
@@ -358,6 +373,30 @@ if ($NonInteractive) {
         $ultraSlimMode = $true
         $keepExtraFonts = $false
     }
+
+    # 11. Japanese 106/109 Keyboard Layout Configuration
+    $opt = Read-Host "11. Configure Japanese 106/109 keyboard layout (prevents @/: mismatch)? [Y/n] (Default: Y)"
+    if ($opt -and ($opt.Trim().ToLower() -in @('no', 'n'))) {
+        $setJapaneseKeyboard = $false
+    } else {
+        $setJapaneseKeyboard = $true
+    }
+
+    # 12. AtlasOS & ReviOS Radical Debloat & Performance Optimization
+    $opt = Read-Host "12. Enable AtlasOS & ReviOS radical debloat & latency optimizations? [Y/n] (Default: Y)"
+    if ($opt -and ($opt.Trim().ToLower() -in @('no', 'n'))) {
+        $atlasReviOSMode = $false
+    } else {
+        $atlasReviOSMode = $true
+    }
+
+    # 13. Image Compression Format (Default: LZX install.wim to prevent 24H2 DISM WIMGAPI 0xc0000005 crash)
+    $opt = Read-Host "13. Image compression format [1=install.wim LZX (Recommended: Fast & Crash-Free), 2=install.esd Recovery (LZMS, experimental)] (Default: 1)"
+    if ($opt -and ($opt.Trim() -eq '2')) {
+        $exportESDMode = $true
+    } else {
+        $exportESDMode = $false
+    }
 }
 
 Write-Host ""
@@ -372,6 +411,9 @@ Write-Host "  - Enable WSL2 Platform:    $wslSupport"
 Write-Host "  - Keep Recovery (WinRE):   $keepRecoveryEnv"
 Write-Host "  - Safe Debloat (WinSxS):   $safeDebloatMode"
 Write-Host "  - UltraSlim (~3GB ISO):    $ultraSlimMode"
+Write-Host "  - Japanese 106 Keyboard:   $setJapaneseKeyboard"
+Write-Host "  - AtlasOS & ReviOS Tuning: $atlasReviOSMode"
+Write-Host "  - Payload Format:          $(if ($exportESDMode) { 'install.esd (LZMS)' } else { 'install.wim (LZX - Recommended)' })"
 Write-Host ""
 
 # Determine Working Directory (Resolves Issue #27, #23 - Low disk space on C:)
@@ -403,17 +445,161 @@ if (Test-Path -LiteralPath $nano11Dir) {
     Write-Host "Cleaning up previous $nano11Dir to prevent leftover file conflicts..." -ForegroundColor Yellow
     Remove-Item -LiteralPath $nano11Dir -Recurse -Force -ErrorAction SilentlyContinue
 }
+if (Test-Path -LiteralPath $scratchDir) {
+    Clear-DismMountConflicts -TargetMountDir $scratchDir
+    Remove-Item -LiteralPath $scratchDir -Recurse -Force -ErrorAction SilentlyContinue
+}
 New-Item -ItemType Directory -Force -Path (Join-Path -Path $nano11Dir -ChildPath "sources") | Out-Null
 
-# Prompt for source drive letter
+# Determine source drive letter (with auto-detection)
 $DriveLetter = ""
-while (-not $DriveLetter) {
-    $inputDrive = Read-Host "Please enter the drive letter for the Windows 11 installation media (e.g. D or D:)"
-    if ($inputDrive) {
-        $DriveLetter = $inputDrive.Trim().TrimEnd(':') + ":"
-        if (-not (Test-Path -LiteralPath $DriveLetter)) {
-            Write-Host "Drive $DriveLetter does not exist. Please check and re-enter." -ForegroundColor Red
-            $DriveLetter = ""
+if ($SourceDrive) {
+    $candDrive = $SourceDrive.Trim().TrimEnd(':') + ":"
+    if (Test-Path -LiteralPath $candDrive) {
+        $DriveLetter = $candDrive
+        Write-Host "Using specified SourceDrive: $DriveLetter" -ForegroundColor Green
+    } else {
+        Write-Host "Specified SourceDrive '$SourceDrive' does not exist." -ForegroundColor Red
+    }
+}
+
+# Helper: Scan for healthy Windows 11 ISO files on local storage and auto-mount if needed
+function Find-AndMountHealthyWindowsIso {
+    $searchPaths = @("E:\", "D:\", (Split-Path -Parent $PSScriptRoot), $env:USERPROFILE)
+    $candidateIsos = @()
+    foreach ($p in $searchPaths) {
+        if (-not (Test-Path -LiteralPath $p)) { continue }
+        $candidateIsos += Get-ChildItem -Path $p -Filter "*.iso" -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.Length -gt 4GB -and ($_.Name -like "*26300*" -or $_.Name -like "*Win11*" -or $_.Name -like "*Windows11*") -and $_.Name -notlike "*nano11*" }
+    }
+    # Sort: Prioritize 26300 (26H2) official ISO first, then by size
+    $sortedIsos = $candidateIsos | Sort-Object { if ($_.Name -like "*26300*") { 0 } else { 1 } }, Length -Descending
+    foreach ($iso in $sortedIsos) {
+        try {
+            $diskImg = Get-DiskImage -ImagePath $iso.FullName -ErrorAction SilentlyContinue
+            if (-not $diskImg -or -not $diskImg.Attached) {
+                Write-Host "Auto-mounting healthy Windows 11 ISO: $($iso.Name)..." -ForegroundColor Cyan
+                $diskImg = Mount-DiskImage -ImagePath $iso.FullName -PassThru -ErrorAction SilentlyContinue
+            }
+            if ($diskImg) {
+                $vol = $diskImg | Get-Volume -ErrorAction SilentlyContinue
+                if ($vol -and $vol.DriveLetter) {
+                    $dl = "$($vol.DriveLetter):"
+                    $wimCheck = Join-Path -Path "$dl\sources" -ChildPath "install.wim"
+                    if ((Test-Path -LiteralPath $wimCheck) -and ((Get-Item -LiteralPath $wimCheck).Length -gt 1GB)) {
+                        return $dl
+                    }
+                }
+            }
+        } catch {}
+    }
+    return $null
+}
+
+if (-not $DriveLetter) {
+    # Scan all filesystem drives for sources\install.wim or sources\install.esd
+    $detectedMediaDrives = @()
+    foreach ($psd in (Get-PSDrive -PSProvider FileSystem -ErrorAction SilentlyContinue)) {
+        if (-not $psd.Root) { continue }
+        $rootClean = $psd.Root.TrimEnd('\')
+        $wimP = Join-Path -Path "$rootClean\sources" -ChildPath "install.wim"
+        $esdP = Join-Path -Path "$rootClean\sources" -ChildPath "install.esd"
+        $hasWimP = (Test-Path -LiteralPath $wimP) -and ((Get-Item -LiteralPath $wimP).Length -gt 1GB)
+        $hasEsdP = (Test-Path -LiteralPath $esdP) -and ((Get-Item -LiteralPath $esdP).Length -gt 1GB)
+        if ($hasWimP -or $hasEsdP) {
+            $detectedMediaDrives += $psd
+        }
+    }
+
+    # If no healthy install.wim drive is mounted, check if a healthy official ISO can be auto-mounted
+    $hasHealthyWimMounted = $detectedMediaDrives | Where-Object {
+        $r = $_.Root.TrimEnd('\')
+        Test-Path -LiteralPath "$r\sources\install.wim"
+    }
+    if (-not $hasHealthyWimMounted) {
+        $mountedDriveLetter = Find-AndMountHealthyWindowsIso
+        if ($mountedDriveLetter) {
+            $mountedClean = $mountedDriveLetter.TrimEnd(':')
+            $newPsd = Get-PSDrive -Name $mountedClean -PSProvider FileSystem -ErrorAction SilentlyContinue
+            if ($newPsd -and ($detectedMediaDrives.Root -notcontains $newPsd.Root)) {
+                $detectedMediaDrives += $newPsd
+            }
+        }
+    }
+
+    # Prioritize install.wim media over install.esd, and prioritize newer/larger 26H2 Build 26300 media
+    $detectedMediaDrives = @($detectedMediaDrives | Sort-Object {
+        $rootClean = $_.Root.TrimEnd('\')
+        $wimFile = Join-Path -Path "$rootClean\sources" -ChildPath "install.wim"
+        if (Test-Path -LiteralPath $wimFile) {
+            # Negative length so larger (26H2 Build 26300 @ 8.01 GB) sorts before smaller media
+            return -1 * ((Get-Item -LiteralPath $wimFile).Length)
+        } else {
+            return [long]::MaxValue
+        }
+    })
+
+    if ($NonInteractive -and $detectedMediaDrives.Count -gt 0) {
+        $DriveLetter = $detectedMediaDrives[0].Root.TrimEnd('\')
+        Write-Host "Auto-detected Windows installation media on: $DriveLetter" -ForegroundColor Green
+    } elseif ($detectedMediaDrives.Count -eq 1) {
+        $cand = $detectedMediaDrives[0].Root.TrimEnd('\')
+        $vol = Get-Volume -DriveLetter ($cand.TrimEnd(':')) -ErrorAction SilentlyContinue
+        $volLabel = if ($vol -and $vol.FileSystemLabel) { " [$($vol.FileSystemLabel)]" } else { "" }
+        $wimP = Join-Path -Path "$cand\sources" -ChildPath "install.wim"
+        $esdP = Join-Path -Path "$cand\sources" -ChildPath "install.esd"
+        $typeDesc = if (Test-Path -LiteralPath $wimP) {
+            "install.wim ($([math]::Round((Get-Item -LiteralPath $wimP).Length / 1GB, 2)) GB) [Recommended - Direct LZX, 100% Stable]"
+        } elseif (Test-Path -LiteralPath $esdP) {
+            "install.esd ($([math]::Round((Get-Item -LiteralPath $esdP).Length / 1GB, 2)) GB) [Requires ESD Decompression]"
+        } else { "" }
+        Write-Host "Auto-detected Windows 11 installation media on drive $cand$volLabel ($typeDesc)" -ForegroundColor Green
+        $inputDrive = Read-Host "Use drive $cand? [Y/n, or enter another drive letter] (Default: Y)"
+        if (-not $inputDrive -or ($inputDrive.Trim().ToLower() -in @('y', 'yes'))) {
+            $DriveLetter = $cand
+        } else {
+            $candInput = $inputDrive.Trim().TrimEnd(':') + ":"
+            if (Test-Path -LiteralPath $candInput) {
+                $DriveLetter = $candInput
+            }
+        }
+    } elseif ($detectedMediaDrives.Count -gt 1) {
+        Write-Host "Multiple Windows installation media drives detected:" -ForegroundColor Green
+        for ($i = 0; $i -lt $detectedMediaDrives.Count; $i++) {
+            $d = $detectedMediaDrives[$i].Root.TrimEnd('\')
+            $vol = Get-Volume -DriveLetter ($d.TrimEnd(':')) -ErrorAction SilentlyContinue
+            $volLabel = if ($vol -and $vol.FileSystemLabel) { " [$($vol.FileSystemLabel)]" } else { "" }
+            $wimP = Join-Path -Path "$d\sources" -ChildPath "install.wim"
+            $esdP = Join-Path -Path "$d\sources" -ChildPath "install.esd"
+            $typeDesc = if (Test-Path -LiteralPath $wimP) {
+                "install.wim ($([math]::Round((Get-Item -LiteralPath $wimP).Length / 1GB, 2)) GB) [Recommended - Windows 11 26H2 Official, 100% Stable]"
+            } elseif (Test-Path -LiteralPath $esdP) {
+                "install.esd ($([math]::Round((Get-Item -LiteralPath $esdP).Length / 1GB, 2)) GB) [Warning: Potential Error 1392 in ESD stream]"
+            } else { "" }
+            Write-Host "  [$($i+1)] Drive $d$volLabel - $typeDesc"
+        }
+        $sel = Read-Host "Select a drive number [1-$($detectedMediaDrives.Count)] or enter a drive letter (Default: 1)"
+        if (-not $sel -or $sel.Trim() -eq '1') {
+            $DriveLetter = $detectedMediaDrives[0].Root.TrimEnd('\')
+        } elseif ($sel -match '^\d+$' -and [int]$sel -ge 1 -and [int]$sel -le $detectedMediaDrives.Count) {
+            $DriveLetter = $detectedMediaDrives[[int]$sel - 1].Root.TrimEnd('\')
+        } else {
+            $candInput = $sel.Trim().TrimEnd(':') + ":"
+            if (Test-Path -LiteralPath $candInput) {
+                $DriveLetter = $candInput
+            }
+        }
+    }
+
+    while (-not $DriveLetter) {
+        $inputDrive = Read-Host "Please enter the drive letter for the Windows 11 installation media (e.g. D or D:)"
+        if ($inputDrive) {
+            $candDrive = $inputDrive.Trim().TrimEnd(':') + ":"
+            if (Test-Path -LiteralPath $candDrive) {
+                $DriveLetter = $candDrive
+            } else {
+                Write-Host "Drive $candDrive does not exist. Please check and re-enter." -ForegroundColor Red
+            }
         }
     }
 }
@@ -423,26 +609,22 @@ $sourceWim = Join-Path -Path "$DriveLetter\sources" -ChildPath "install.wim"
 $sourceEsd = Join-Path -Path "$DriveLetter\sources" -ChildPath "install.esd"
 $destWim = Join-Path -Path "$nano11Dir\sources" -ChildPath "install.wim"
 
-if (-not (Test-Path -LiteralPath $sourceWim)) {
-    if (Test-Path -LiteralPath $sourceEsd) {
-        Write-Host "Found install.esd, converting to install.wim..." -ForegroundColor Yellow
-        & dism.exe /English /Get-WimInfo "/WimFile:$sourceEsd"
-        $index = Read-Host "Please enter the image index to extract"
-        Write-Host "Converting install.esd (Index $index) to install.wim. This may take a while..." -ForegroundColor Green
-        & dism.exe /Export-Image "/SourceImageFile:$sourceEsd" "/SourceIndex:$index" "/DestinationImageFile:$destWim" /Compress:max /CheckIntegrity
-        $index = "1"
-    } else {
-        Write-Host "Can't find install.wim or install.esd in $DriveLetter\sources. Exiting..." -ForegroundColor Red
-        Stop-Transcript
-        exit 1
-    }
-}
+$hasSourceWim = (Test-Path -LiteralPath $sourceWim) -and ((Get-Item -LiteralPath $sourceWim).Length -gt 1GB)
+$hasSourceEsd = (Test-Path -LiteralPath $sourceEsd) -and ((Get-Item -LiteralPath $sourceEsd).Length -gt 1GB)
+
+# Ensure destination sources directory exists prior to file operations
+$destSourcesDir = Join-Path -Path $nano11Dir -ChildPath "sources"
+New-Item -ItemType Directory -Force -Path $destSourcesDir | Out-Null
 
 Write-Host "Copying Windows installation files to $nano11Dir..." -ForegroundColor Green
 $sourcePath = $DriveLetter.TrimEnd('\') + "\"
 $copySuccess = $false
+# If converting from install.esd, exclude both install.esd and install.wim from initial robocopy
+# so we don't spend unnecessary minutes duplicating multi-gigabyte source archives.
 $robocopyArgs = @("$sourcePath", "$nano11Dir", "/E", "/R:1", "/W:1", "/NP", "/NFL", "/NDL", "/NJH", "/NJS")
-if (-not (Test-Path -LiteralPath $sourceWim)) {
+if (-not $hasSourceWim -and $hasSourceEsd) {
+    $robocopyArgs += @("/XF", "install.esd", "install.wim")
+} elseif (-not $hasSourceWim) {
     $robocopyArgs += @("/XF", "install.esd")
 }
 try {
@@ -455,6 +637,96 @@ try {
 if (-not $copySuccess) {
     Write-Host "Robocopy completed or unavailable, ensuring files via Copy-Item..." -ForegroundColor Yellow
     Copy-Item -Path "$sourcePath*" -Destination $nano11Dir -Recurse -Force | Out-Null
+}
+
+# Handle installation image conversion (install.esd -> install.wim) if needed
+if (-not $hasSourceWim) {
+    if ($hasSourceEsd) {
+        Write-Host "Found install.esd ($([math]::Round((Get-Item -LiteralPath $sourceEsd).Length / 1GB, 2)) GB), converting to install.wim..." -ForegroundColor Yellow
+        $esdInfoOutput = & dism.exe /English /Get-WimInfo "/WimFile:$sourceEsd"
+        $esdInfoOutput | ForEach-Object { Write-Host $_ }
+        $esdAvailableIndices = @(($esdInfoOutput | Select-String -Pattern '^\s*Index\s*:\s*(\d+)' | ForEach-Object { $_.Matches[0].Groups[1].Value }))
+        $esdDefaultIndex = if ($esdAvailableIndices.Count -gt 0) { $esdAvailableIndices[0] } else { "1" }
+        
+        $targetEsdIndex = $esdDefaultIndex
+        if ([string]::IsNullOrWhiteSpace($index) -or ($index -notin $esdAvailableIndices)) {
+            if (-not $NonInteractive) {
+                $promptRange = if ($esdAvailableIndices.Count -gt 1) { " ($($esdAvailableIndices -join ', '))" } else { "" }
+                $userInput = Read-Host "Please enter the image index to extract$promptRange [Default: $esdDefaultIndex]"
+                if (-not [string]::IsNullOrWhiteSpace($userInput) -and ($userInput.Trim() -in $esdAvailableIndices)) {
+                    $targetEsdIndex = $userInput.Trim()
+                }
+            }
+        } else {
+            $targetEsdIndex = $index
+        }
+        Write-Host "Converting install.esd (Index $targetEsdIndex) to install.wim. This may take a while..." -ForegroundColor Green
+        
+        # Clean up any partial destWim from previous failed run
+        Remove-Item -LiteralPath $destWim -Force -ErrorAction SilentlyContinue
+
+        # Run DISM export without /CheckIntegrity to prevent Error 1392 / 0x80070570 caused by LZMS integrity mismatch
+        & dism.exe /Export-Image "/SourceImageFile:$sourceEsd" "/SourceIndex:$targetEsdIndex" "/DestinationImageFile:$destWim" /Compress:max
+        
+        $esdExportOk = ($LASTEXITCODE -eq 0 -and (Test-Path -LiteralPath $destWim) -and ((Get-Item -LiteralPath $destWim).Length -gt 1GB))
+
+        if (-not $esdExportOk) {
+            Write-Host "Warning: Standard ESD export of Index $targetEsdIndex failed (Exit code: $LASTEXITCODE)." -ForegroundColor Yellow
+            Remove-Item -LiteralPath $destWim -Force -ErrorAction SilentlyContinue
+
+            # Check if any other drive has a valid install.wim to automatically recover from corrupt ESD
+            $altWimDrive = (Get-PSDrive -PSProvider FileSystem -ErrorAction SilentlyContinue | Where-Object {
+                $r = $_.Root.TrimEnd('\')
+                $w = Join-Path -Path "$r\sources" -ChildPath "install.wim"
+                $r -ne $DriveLetter -and (Test-Path -LiteralPath $w) -and ((Get-Item -LiteralPath $w).Length -gt 1GB)
+            } | Select-Object -First 1)
+
+            # If no alternative drive is currently mounted, auto-mount a healthy Windows 11 ISO from local storage
+            if (-not $altWimDrive) {
+                Write-Host "Attempting auto-recovery by locating and mounting healthy Windows 11 ISO on storage..." -ForegroundColor Cyan
+                $recoveredDrive = Find-AndMountHealthyWindowsIso
+                if ($recoveredDrive) {
+                    $recClean = $recoveredDrive.TrimEnd(':')
+                    $altWimDrive = Get-PSDrive -Name $recClean -PSProvider FileSystem -ErrorAction SilentlyContinue
+                }
+            }
+
+            if ($altWimDrive) {
+                $altRoot = $altWimDrive.Root.TrimEnd('\')
+                Write-Host "Auto-Recovery: Found healthy install.wim on alternative drive $altRoot!" -ForegroundColor Green
+                Write-Host "Switching source to $altRoot to bypass corrupt ESD and guarantee successful build..." -ForegroundColor Green
+                $DriveLetter = $altRoot
+                $sourcePath = $DriveLetter.TrimEnd('\') + "\"
+                $sourceWim = Join-Path -Path "$DriveLetter\sources" -ChildPath "install.wim"
+                $hasSourceWim = $true
+
+                # Copy healthy install.wim directly
+                Write-Host "Copying install.wim from $altRoot..." -ForegroundColor Green
+                Copy-Item -LiteralPath $sourceWim -Destination $destWim -Force
+                if ((Test-Path -LiteralPath $destWim) -and ((Get-Item -LiteralPath $destWim).Length -gt 1GB)) {
+                    $esdExportOk = $true
+                    $index = "" # Reset index so it prompts or defaults from healthy wim
+                }
+            }
+        }
+
+        if (-not $esdExportOk -and -not $hasSourceWim) {
+            Write-Host "Critical Error: Failed to extract valid install.wim from install.esd on $DriveLetter." -ForegroundColor Red
+            Write-Host "The ESD file on $DriveLetter appears to have damaged data streams." -ForegroundColor Yellow
+            Write-Host "Recommendation: Mount the official Windows 11 ISO containing install.wim and run again." -ForegroundColor Yellow
+            Stop-Transcript
+            exit 1
+        }
+
+        # When an index is extracted into a fresh install.wim, the new destination image has only 1 index (Index 1)
+        if (-not $hasSourceWim) {
+            $index = "1"
+        }
+    } else {
+        Write-Host "Can't find valid install.wim or install.esd (> 1GB) in $DriveLetter\sources. Exiting..." -ForegroundColor Red
+        Stop-Transcript
+        exit 1
+    }
 }
 
 # Explicitly ensure critical boot files exist in target image
@@ -471,13 +743,17 @@ foreach ($cbf in $criticalBootFiles) {
     }
 }
 
-# Bypass hardware requirement checks in installer (Resolves Issue #29 - Canary 28020+, Older CPUs/TPM)
-$appraiserDll = Join-Path -Path "$nano11Dir\sources" -ChildPath "appraiserres.dll"
-if (Test-Path -LiteralPath $appraiserDll) {
-    Set-ItemOwnershipAndAccess -Path $appraiserDll
-    Set-Content -LiteralPath $appraiserDll -Value "" -NoNewline -Force
-    Write-Host "Patched appraiserres.dll for legacy hardware compatibility (TPM, CPU, SecureBoot bypass)." -ForegroundColor Green
+# Configure sources\ei.cfg for universal edition selection without forcing product key prompt
+$eiCfgPath = Join-Path -Path "$nano11Dir\sources" -ChildPath "ei.cfg"
+if (-not (Test-Path -LiteralPath $eiCfgPath)) {
+    "[Channel]`r`n_Default`r`n[VL]`r`n0`r`n" | Set-Content -LiteralPath $eiCfgPath -Encoding ascii -Force
+    Write-Host "Created sources\ei.cfg for universal edition selection." -ForegroundColor Green
 }
+
+# Note: On Windows 11 24H2/25H2 (Build 26100+), zeroing appraiserres.dll causes SetupPlatform
+# to fail with error 0x8007000D - 0x4002C (ERROR_INVALID_DATA).
+# Hardware checks are fully bypassed via LabConfig in boot.wim and autounattend.xml.
+
 
 # Remove ESD from copy if it exists to avoid duplication
 if (Test-Path -LiteralPath "$nano11Dir\sources\install.esd") {
@@ -486,10 +762,27 @@ if (Test-Path -LiteralPath "$nano11Dir\sources\install.esd") {
 
 # Image Information and Index Selection
 Write-Host "Getting Windows image information:" -ForegroundColor Cyan
-& dism.exe /English /Get-WimInfo "/WimFile:$destWim"
-if (-not $index) {
-    $index = Read-Host "Please enter the image index to modify"
+$wimInfoOutput = & dism.exe /English /Get-WimInfo "/WimFile:$destWim"
+$wimInfoOutput | ForEach-Object { Write-Host $_ }
+
+# Parse available indices from DISM output
+$availableIndices = @(($wimInfoOutput | Select-String -Pattern '^\s*Index\s*:\s*(\d+)' | ForEach-Object { $_.Matches[0].Groups[1].Value }))
+$defaultIndex = if ($availableIndices.Count -gt 0) { $availableIndices[0] } else { "1" }
+
+if ([string]::IsNullOrWhiteSpace($index) -or ($index -notin $availableIndices)) {
+    if (-not $NonInteractive) {
+        $promptRange = if ($availableIndices.Count -gt 1) { " ($($availableIndices -join ', '))" } else { "" }
+        $userInput = Read-Host "Please enter the image index to modify$promptRange [Default: $defaultIndex]"
+        if (-not [string]::IsNullOrWhiteSpace($userInput) -and ($userInput.Trim() -in $availableIndices)) {
+            $index = $userInput.Trim()
+        } else {
+            $index = $defaultIndex
+        }
+    } else {
+        $index = $defaultIndex
+    }
 }
+Write-Host "Selected image index: $index" -ForegroundColor Green
 
 Write-Host "Mounting Windows image (Index: $index)... This may take several minutes." -ForegroundColor Green
 Set-ItemOwnershipAndAccess -Path $destWim
@@ -609,7 +902,10 @@ $appxPatterns = @(
     '*RawImageExtension*', '*VP9VideoExtensions*', '*WebpImageExtension*',
     '*DevHome*', '*Photos*', '*Camera*', '*QuickAssist*',
     '*Paint*', '*Notepad*', '*CrossDevice*', '*Getstarted*', '*GetStarted*', '*Microsoft.Getstarted*', '*Tips*',
-    '*WindowsCalculator*', '*Calculator*', '*Xbox*'
+    '*WindowsCalculator*', '*Calculator*', '*Xbox*',
+    '*Microsoft.Windows.Ai.Copilot*', '*Recall*', '*MicrosoftCorporationII.QuickAssist*',
+    '*MicrosoftCorporationII.MicrosoftFamily*', '*Edge.DevToolsClient*', '*549981C3F5F10*',
+    '*Client.WebExperience*', '*Windows.Ai*', '*WindowsAI*'
 )
 # Note: *SecHealthUI*, *CoreAI*, *PeopleExperienceHost*, *PinningConfirmationDialog*, *SecureAssessmentBrowser*
 # are protected system components in newer Windows 11 builds that trigger COMException (0x80073cfa) if removed via DISM.
@@ -639,6 +935,10 @@ foreach ($package in $packagesToRemove) {
         Remove-ProtectedDirectory -Path $folderPath -ScratchPath $scratchDir
     }
 }
+
+# 5b. Disabling Windows 11 24H2/26H2 Recall Optional Feature if present
+Write-Host "Disabling Recall and modern AI optional features..." -ForegroundColor Cyan
+& dism.exe /English "/image:$scratchDir" /Disable-Feature /FeatureName:Recall /Remove > $null 2>&1
 
 # 6. Removing system packages (FoD / Optional features)
 Write-Host "Removing unnecessary system packages..." -ForegroundColor Cyan
@@ -866,13 +1166,15 @@ if ($ultraSlimMode) {
     # Windows\Speech_OneCore directory and WinSxS speech-onecore manifests are preserved to prevent OOBE narrator crashes.
 }
 
-# Windows Defender definitions and binaries cleanup (optional)
+# Windows Defender definitions and telemetry cache purge (safe for Code Integrity & ci.dll)
 if ($removeDefender) {
-    Write-Host "Purging Windows Defender signatures and binaries from WinSxS..." -ForegroundColor Cyan
+    Write-Host "Purging Windows Defender definition updates and telemetry cache..." -ForegroundColor Cyan
     Remove-Item -Path "$scratchDir\ProgramData\Microsoft\Windows Defender\Definition Updates" -Recurse -Force -ErrorAction SilentlyContinue
-    Get-ChildItem -Path "$scratchDir\Windows\WinSxS" -Filter "*windows-defender*" -Directory -ErrorAction SilentlyContinue | ForEach-Object {
-        Remove-ProtectedDirectory -Path $_.FullName -ScratchPath $scratchDir
-    }
+    Remove-Item -Path "$scratchDir\ProgramData\Microsoft\Windows Defender\Scans" -Recurse -Force -ErrorAction SilentlyContinue
+    # Note: WinSxS manifests, security catalogs (.cat), and System32 binaries are strictly preserved.
+    # On Windows 11 24H2+, deleting WinSxS security catalogs causes Code Integrity (ci.dll) validation
+    # to fail with STATUS_INVALID_IMAGE_HASH (0xC0000428) -> BSOD 0xC000021A.
+    # Defender is completely disabled via services and group policies without breaking signature integrity.
 }
 
 # General cleanup & offline cache trimming
@@ -880,6 +1182,8 @@ Write-Host "Cleaning offline system caches, prefetch, and setup logs..." -Foregr
 Remove-Item -Path "$scratchDir\Windows\Temp\*" -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item -Path "$scratchDir\Windows\SoftwareDistribution\Download\*" -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item -Path "$scratchDir\Windows\System32\LogFiles\*" -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item -Path "$scratchDir\Windows\System32\winevt\Logs\*" -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item -Path "$scratchDir\Windows\Minidump\*" -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item -Path "$scratchDir\Windows\Prefetch\*" -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item -Path "$scratchDir\Windows\Panther\*" -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item -Path "$scratchDir\Windows\Downloaded Program Files\*" -Recurse -Force -ErrorAction SilentlyContinue
@@ -1100,6 +1404,17 @@ reg.exe load HKLM\zDEFAULT "$defaultHive" | Out-Null
 reg.exe load HKLM\zCOMPONENTS "$componentsHive" | Out-Null
 reg.exe load HKLM\zNTUSER "$ntuserHive" | Out-Null
 
+# Detect and display target Windows build info (e.g. Windows 11 26H2 Build 26300.9457)
+try {
+    $targetProductName = (reg.exe query "HKLM\zSOFTWARE\Microsoft\Windows NT\CurrentVersion" /v ProductName 2>$null | Select-String -Pattern 'REG_SZ\s+(.+)$' | ForEach-Object { $_.Matches[0].Groups[1].Value.Trim() })
+    $targetDisplayVer  = (reg.exe query "HKLM\zSOFTWARE\Microsoft\Windows NT\CurrentVersion" /v DisplayVersion 2>$null | Select-String -Pattern 'REG_SZ\s+(.+)$' | ForEach-Object { $_.Matches[0].Groups[1].Value.Trim() })
+    $targetBuildNum    = (reg.exe query "HKLM\zSOFTWARE\Microsoft\Windows NT\CurrentVersion" /v CurrentBuildNumber 2>$null | Select-String -Pattern 'REG_SZ\s+(.+)$' | ForEach-Object { $_.Matches[0].Groups[1].Value.Trim() })
+    $targetUBR         = (reg.exe query "HKLM\zSOFTWARE\Microsoft\Windows NT\CurrentVersion" /v UBR 2>$null | Select-String -Pattern 'REG_DWORD\s+0x([0-9a-fA-F]+)' | ForEach-Object { [Convert]::ToInt32($_.Matches[0].Groups[1].Value, 16) })
+    if ($targetProductName) {
+        Write-Host "Target Image OS: $targetProductName (Version: $targetDisplayVer, Build: $targetBuildNum.$targetUBR)" -ForegroundColor Green
+    }
+} catch {}
+
 Write-Host "Applying Setup & Hardware requirement bypasses..." -ForegroundColor Green
 $labConfigKeys = @(
     'BypassCPUCheck',
@@ -1153,6 +1468,17 @@ Write-Host "Enabling Local Account bypass on OOBE..." -ForegroundColor Green
 reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\OOBE" /v "BypassNRO" /t REG_DWORD /d 1 /f > $null 2>&1
 reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\ReserveManager" /v "ShippedWithReserves" /t REG_DWORD /d 0 /f > $null 2>&1
 reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\BitLocker" /v "PreventDeviceEncryption" /t REG_DWORD /d 1 /f > $null 2>&1
+reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\EnhancedStorageDevices" /v "TCGSecurityActivationDisabled" /t REG_DWORD /d 1 /f > $null 2>&1
+
+# Japanese 106/109 Keyboard Configuration (Prevents English 101/104 misdetection)
+if ($setJapaneseKeyboard) {
+    Write-Host "Configuring Japanese 106/109 keyboard layout..." -ForegroundColor Green
+    reg.exe add "HKLM\zSYSTEM\ControlSet001\Services\i8042prt\Parameters" /v "LayerDriver JPN" /t REG_SZ /d "kbd106.dll" /f > $null 2>&1
+    reg.exe add "HKLM\zSYSTEM\ControlSet001\Services\i8042prt\Parameters" /v "OverrideKeyboardIdentifier" /t REG_SZ /d "PCAT_106KEY" /f > $null 2>&1
+    reg.exe add "HKLM\zSYSTEM\ControlSet001\Services\i8042prt\Parameters" /v "OverrideKeyboardType" /t REG_DWORD /d 7 /f > $null 2>&1
+    reg.exe add "HKLM\zSYSTEM\ControlSet001\Services\i8042prt\Parameters" /v "OverrideKeyboardSubtype" /t REG_DWORD /d 2 /f > $null 2>&1
+}
+
 reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\Windows Chat" /v "ChatIcon" /t REG_DWORD /d 3 /f > $null 2>&1
 reg.exe add "HKLM\zNTUSER\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v "TaskbarMn" /t REG_DWORD /d 0 /f > $null 2>&1
 reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Search" /v "SearchboxTaskbarMode" /t REG_DWORD /d 0 /f > $null 2>&1
@@ -1270,25 +1596,109 @@ if ($disableWU) {
     reg.exe add "HKLM\zSYSTEM\ControlSet001\Services\UsoSvc" /v "Start" /t REG_DWORD /d 4 /f > $null 2>&1
 }
 
-# Windows Defender (optional)
+# ============================================================================
+# Windows Defender & Security Complete Removal (ionuttbara/windows-defender-remover integration)
+# ============================================================================
 if ($removeDefender) {
-    Write-Host "Disabling Windows Defender & Security Health Services..." -ForegroundColor Green
-    $defServices = @("WinDefend", "WdNisSvc", "WdNisDrv", "WdFilter", "Sense", "SecurityHealthService")
+    Write-Host "Completely disabling and removing Windows Defender, Security Center, and ATP services (windows-defender-remover)..." -ForegroundColor Green
+    # Only disable user-mode background services and non-boot filters.
+    # Note: Boot-critical drivers (WdBoot, MsSecCore, MsSecFlt, Pluton) MUST NOT be set to Start=4.
+    # On Windows 11 24H2+, disabling WdBoot or MsSecCore breaks winload.efi & ci.dll validation,
+    # causing STOP 0xC000021A (Parameter 2: STATUS_INVALID_IMAGE_HASH 0xC0000428).
+    $defServices = @(
+        "WinDefend", "WdNisSvc", "WdNisDrv", "WdFilter", "Sense", "SecurityHealthService",
+        "wscsvc", "webthreatdefsvc", "webthreatdefusersvc"
+    )
     foreach ($svc in $defServices) {
         reg.exe add "HKLM\zSYSTEM\ControlSet001\Services\$svc" /v "Start" /t REG_DWORD /d 4 /f > $null 2>&1
     }
-    # Disable Defender Real-Time Protection and AntiSpyware policies
+
+    # Complete Defender & AntiSpyware Policies from windows-defender-remover
     reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows Defender" /v "DisableAntiSpyware" /t REG_DWORD /d 1 /f > $null 2>&1
     reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows Defender" /v "DisableAntiVirus" /t REG_DWORD /d 1 /f > $null 2>&1
+    reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows Defender" /v "ServiceKeepAlive" /t REG_DWORD /d 0 /f > $null 2>&1
+    reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows Defender" /v "PUAProtection" /t REG_DWORD /d 0 /f > $null 2>&1
+    reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows Defender" /v "DisableRoutinelyTakingAction" /t REG_DWORD /d 1 /f > $null 2>&1
+    reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows Defender" /v "AllowFastServiceStartup" /t REG_DWORD /d 0 /f > $null 2>&1
+    reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows Defender" /v "DisableLocalAdminMerge" /t REG_DWORD /d 1 /f > $null 2>&1
+    reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows Defender" /v "RandomizeScheduleTaskTimes" /t REG_DWORD /d 0 /f > $null 2>&1
+
+    # Real-Time Protection & Behavioral Monitoring
     reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection" /v "DisableRealtimeMonitoring" /t REG_DWORD /d 1 /f > $null 2>&1
     reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection" /v "DisableBehaviorMonitoring" /t REG_DWORD /d 1 /f > $null 2>&1
     reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection" /v "DisableOnAccessProtection" /t REG_DWORD /d 1 /f > $null 2>&1
     reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection" /v "DisableScanOnRealtimeEnable" /t REG_DWORD /d 1 /f > $null 2>&1
     reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection" /v "DisableIOAVProtection" /t REG_DWORD /d 1 /f > $null 2>&1
+    reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection" /v "DisableScriptScanning" /t REG_DWORD /d 1 /f > $null 2>&1
+
+    # PolicyManager Defender overrides
+    $pmPolicies = @(
+        "AllowIOAVProtection", "AllowArchiveScanning", "AllowBehaviorMonitoring", "AllowCloudProtection",
+        "AllowEmailScanning", "AllowFullScanOnMappedNetworkDrives", "AllowFullScanRemovableDriveScanning",
+        "AllowIntrusionPreventionSystem", "AllowOnAccessProtection", "AllowRealtimeMonitoring",
+        "AllowScanningNetworkFiles", "AllowScriptScanning", "AllowUserUIAccess",
+        "CheckForSignaturesBeforeRunningScan", "EnableControlledFolderAccess", "EnableNetworkProtection", "PUAProtection"
+    )
+    foreach ($pol in $pmPolicies) {
+        reg.exe add "HKLM\zSOFTWARE\Microsoft\PolicyManager\default\Defender\$pol" /v "value" /t REG_DWORD /d 0 /f > $null 2>&1
+    }
+
+    # Disable SmartScreen completely
+    reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\System" /v "EnableSmartScreen" /t REG_DWORD /d 0 /f > $null 2>&1
+    reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Explorer" /v "SmartScreenEnabled" /t REG_SZ /d "Off" /f > $null 2>&1
+    reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\MicrosoftEdge\PhishingFilter" /v "EnabledV9" /t REG_DWORD /d 0 /f > $null 2>&1
+
+    # Notifications & Startup
     reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows Defender\Reporting" /v "DisableEnhancedNotifications" /t REG_DWORD /d 1 /f > $null 2>&1
-    # Remove SecurityHealth from startup Run key
+    reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows Defender Security Center\Notifications" /v "DisableNotifications" /t REG_DWORD /d 1 /f > $null 2>&1
     reg.exe delete "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Run" /v "SecurityHealth" /f > $null 2>&1
+
+    # Remove Context Menu & Shell Associations
+    reg.exe delete "HKLM\zSOFTWARE\Classes\CLSID\{09A47860-11B0-4DA5-AFA5-26D86198A780}" /f > $null 2>&1
+    reg.exe delete "HKLM\zSOFTWARE\Classes\*\shellex\ContextMenuHandlers\EPP" /f > $null 2>&1
+    reg.exe delete "HKLM\zSOFTWARE\Classes\Directory\shellex\ContextMenuHandlers\EPP" /f > $null 2>&1
+    reg.exe delete "HKLM\zSOFTWARE\Classes\Drive\shellex\ContextMenuHandlers\EPP" /f > $null 2>&1
 }
+
+# ============================================================================
+# eclean.gg Comprehensive Windows Optimization (Gaming Latency, Power, Memory & Disk)
+# ============================================================================
+Write-Host "Applying eclean.gg advanced system optimizations (Low-latency Gaming, Power & DPC)..." -ForegroundColor Cyan
+
+# 1. DPC & Low-Latency Thread Scheduling
+reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\Session Manager\Kernel" /v "ThreadDpcEnable" /t REG_DWORD /d 1 /f > $null 2>&1
+reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\PriorityControl" /v "Win32PrioritySeparation" /t REG_DWORD /d 38 /f > $null 2>&1
+
+# 2. CPU Core Parking & Hybrid Architecture (P-Core / E-Core) Optimization (eclean.gg / AtlasOS)
+$powerPath = "HKLM\zSOFTWARE\Policies\Microsoft\Power\PowerSettings"
+reg.exe add "$powerPath\0cc5b647-c74e-4111-92e3-3b129533f4d5" /v "ACSettingIndex" /t REG_DWORD /d 100 /f > $null 2>&1
+reg.exe add "$powerPath\0cc5b647-c74e-4111-92e3-3b129533f4d5" /v "DCSettingIndex" /t REG_DWORD /d 100 /f > $null 2>&1
+reg.exe add "$powerPath\ea0653f4-9251-4ca4-99a3-324b3d2b0636" /v "ACSettingIndex" /t REG_DWORD /d 100 /f > $null 2>&1
+reg.exe add "$powerPath\ea0653f4-9251-4ca4-99a3-324b3d2b0636" /v "DCSettingIndex" /t REG_DWORD /d 100 /f > $null 2>&1
+
+# Energy Performance Preference (EPP 0 = Max Performance)
+reg.exe add "$powerPath\36687f9e-e3a5-4dbf-b1dc-15eb381c6863" /v "ACSettingIndex" /t REG_DWORD /d 0 /f > $null 2>&1
+reg.exe add "$powerPath\36687f9e-e3a5-4dbf-b1dc-15eb381c6863" /v "DCSettingIndex" /t REG_DWORD /d 0 /f > $null 2>&1
+reg.exe add "$powerPath\36687e9e-e3a5-4dbf-b1dc-15eb31c7448b" /v "ACSettingIndex" /t REG_DWORD /d 0 /f > $null 2>&1
+reg.exe add "$powerPath\36687e9e-e3a5-4dbf-b1dc-15eb31c7448b" /v "DCSettingIndex" /t REG_DWORD /d 0 /f > $null 2>&1
+
+# Hybrid P-Core Priority Scheduling (Keep high-priority / game threads on high-performance cores)
+reg.exe add "$powerPath\93b22d1d-9513-4bc7-ad42-1e967313f2e4" /v "ACSettingIndex" /t REG_DWORD /d 2 /f > $null 2>&1
+reg.exe add "$powerPath\bae08b81-2d5e-4688-ad6a-13243356654b" /v "ACSettingIndex" /t REG_DWORD /d 2 /f > $null 2>&1
+reg.exe add "$powerPath\be337238-0d82-4146-a960-4f3749d470c2" /v "ACSettingIndex" /t REG_DWORD /d 2 /f > $null 2>&1
+
+# 3. Disk, NVMe & Memory Management (eclean.gg Deep Clean)
+reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\FileSystem" /v "NtfsDisable8dot3NameCreation" /t REG_DWORD /d 1 /f > $null 2>&1
+reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\FileSystem" /v "NtfsDisableLastAccessUpdate" /t REG_DWORD /d 1 /f > $null 2>&1
+reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\Session Manager\Memory Management" /v "DisablePagingExecutive" /t REG_DWORD /d 1 /f > $null 2>&1
+reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\Session Manager\Memory Management" /v "LargeSystemCache" /t REG_DWORD /d 0 /f > $null 2>&1
+
+# 4. Network & TCP/IP Low-Latency (Nagle's Algorithm Disabled, Instant ACK)
+reg.exe add "HKLM\zSYSTEM\ControlSet001\Services\Tcpip\Parameters" /v "TcpTimedWaitDelay" /t REG_DWORD /d 30 /f > $null 2>&1
+reg.exe add "HKLM\zSYSTEM\ControlSet001\Services\Tcpip\Parameters" /v "MaxUserPort" /t REG_DWORD /d 65534 /f > $null 2>&1
+reg.exe add "HKLM\zSYSTEM\ControlSet001\Services\Tcpip\Parameters" /v "DefaultTTL" /t REG_DWORD /d 64 /f > $null 2>&1
+reg.exe add "HKLM\zSYSTEM\ControlSet001\Services\Tcpip\Parameters" /v "EnableICMPRedirect" /t REG_DWORD /d 0 /f > $null 2>&1
+
 
 # Disabling unneeded background services (Resolves Issue #1 - Keep Bluetooth / Audio)
 Write-Host "Disabling unneeded background services..." -ForegroundColor Cyan
@@ -1335,8 +1745,8 @@ reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\PriorityControl" /v "Win32Priori
 reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" /v "NoLazyMode" /t REG_DWORD /d 1 /f > $null 2>&1
 reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" /v "AlwaysOn" /t REG_DWORD /d 1 /f > $null 2>&1
 reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" /v "NetworkThrottlingIndex" /t REG_DWORD /d 4294967295 /f > $null 2>&1
-reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" /v "SystemResponsiveness" /t REG_DWORD /d 10 /f > $null 2>&1
-reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games" /v "Priority" /t REG_DWORD /d 2 /f > $null 2>&1
+reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" /v "SystemResponsiveness" /t REG_DWORD /d 0 /f > $null 2>&1
+reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games" /v "Priority" /t REG_DWORD /d 6 /f > $null 2>&1
 reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games" /v "Scheduling Category" /t REG_SZ /d "High" /f > $null 2>&1
 reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games" /v "SFIO Priority" /t REG_SZ /d "High" /f > $null 2>&1
 reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games" /v "GPU Priority" /t REG_DWORD /d 8 /f > $null 2>&1
@@ -1390,7 +1800,13 @@ $serviceConfigs = @{
     "icssvc"             = 4  # Mobile Hotspot Service
     "CertPropSvc"        = 4  # Certificate Propagation
     "CscService"         = 4  # Offline Files
-    "Netlogon"           = 3  # Netlogon (Manual demand-start)
+    "Netlogon"                                 = 3  # Netlogon (Manual demand-start)
+    "UCPD"                                     = 4  # Universal Consent Privacy Driver (eclean/Atlas: prevent forced tweak reverts)
+    "GpuEnergyDrv"                             = 4  # GPU Energy Driver (eclean/Atlas: reduce gaming latency & telemetry)
+    "diagnosticshub.standardcollector.service" = 4  # Diagnostics Hub Collector (eclean/Atlas)
+    "OneSyncSvc"                               = 4  # Sync Host (eclean/Atlas)
+    "TrkWks"                                   = 4  # Distributed Link Tracking Client (eclean/Atlas)
+    "wercplsupport"                            = 4  # Problem Reports Control Panel Support (eclean/Atlas)
 }
 foreach ($svc in $serviceConfigs.GetEnumerator()) {
     reg.exe add "HKLM\zSYSTEM\ControlSet001\Services\$($svc.Key)" /v "Start" /t REG_DWORD /d $($svc.Value) /f > $null 2>&1
@@ -1406,8 +1822,22 @@ reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\Session Manager" /v "DisableWpbt
 reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\CrashControl" /v "DisplayParameters" /t REG_DWORD /d 1 /f > $null 2>&1
 reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\CrashControl" /v "DisableEmoticon" /t REG_DWORD /d 1 /f > $null 2>&1
 
-# Hardware Clock in UTC (Fixes dual-boot time desync with Linux)
-reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\TimeZoneInformation" /v "RealTimeIsUniversal" /t REG_DWORD /d 1 /f > $null 2>&1
+# eclean & AtlasOS - Fault Tolerant Heap (FTH) Disabled (Eliminates crash mitigation overhead for games/apps)
+reg.exe add "HKLM\zSOFTWARE\Microsoft\FTH" /v "Enabled" /t REG_DWORD /d 0 /f > $null 2>&1
+
+# eclean & AtlasOS - Program Compatibility Assistant (PCA) Complete Suppression
+reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\AppCompat" /v "DisablePCA" /t REG_DWORD /d 1 /f > $null 2>&1
+reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\AppCompat" /v "DisableEngine" /t REG_DWORD /d 1 /f > $null 2>&1
+reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\AppCompat" /v "DisableInventory" /t REG_DWORD /d 1 /f > $null 2>&1
+reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\AppCompat" /v "AITEnable" /t REG_DWORD /d 0 /f > $null 2>&1
+reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\AppCompat" /v "AllowTelemetry" /t REG_DWORD /d 0 /f > $null 2>&1
+reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\AppCompat" /v "DisableUAR" /t REG_DWORD /d 1 /f > $null 2>&1
+
+# eclean & AtlasOS - Delivery Optimization (P2P Background Upload) Disabled
+reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\DeliveryOptimization" /v "DODownloadMode" /t REG_DWORD /d 0 /f > $null 2>&1
+
+# eclean & AtlasOS - Fast Startup (Hiberboot) Disabled (Improves SSD longevity and dual-boot consistency)
+reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\Session Manager\Power" /v "HiberbootEnabled" /t REG_DWORD /d 0 /f > $null 2>&1
 
 # Enable Win32 Long Paths
 reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\FileSystem" /v "LongPathsEnabled" /t REG_DWORD /d 1 /f > $null 2>&1
@@ -1441,6 +1871,8 @@ reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\DeviceGuard\Scenarios\Hypervisor
 Write-Host "Configuring Windows AI, Recall, and Click-To-Do policies..." -ForegroundColor Green
 reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsAI" /v "DisableAIDataAnalysis" /t REG_DWORD /d 1 /f > $null 2>&1
 reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsAI" /v "AllowRecallEnablement" /t REG_DWORD /d 0 /f > $null 2>&1
+reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsAI" /v "AllowRecallToBeEnabled" /t REG_DWORD /d 0 /f > $null 2>&1
+reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsAI" /v "TurnOffRecall" /t REG_DWORD /d 1 /f > $null 2>&1
 reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsAI" /v "TurnOffSavingSnapshots" /t REG_DWORD /d 1 /f > $null 2>&1
 reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsAI" /v "DisableClickToDo" /t REG_DWORD /d 1 /f > $null 2>&1
 reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsAI" /v "DisableSettingsAgent" /t REG_DWORD /d 1 /f > $null 2>&1
@@ -1448,6 +1880,16 @@ reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsAI" /v "DisableAge
 reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsAI" /v "DisableAgentWorkspaces" /t REG_DWORD /d 1 /f > $null 2>&1
 reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsAI" /v "DisableRemoteAgentConnectors" /t REG_DWORD /d 1 /f > $null 2>&1
 reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsAI" /v "AllowCopilotRuntime" /t REG_DWORD /d 0 /f > $null 2>&1
+reg.exe add "HKLM\zDEFAULT\Software\Policies\Microsoft\Windows\WindowsAI" /v "DisableAIDataAnalysis" /t REG_DWORD /d 1 /f > $null 2>&1
+reg.exe add "HKLM\zDEFAULT\Software\Policies\Microsoft\Windows\WindowsAI" /v "TurnOffRecall" /t REG_DWORD /d 1 /f > $null 2>&1
+reg.exe add "HKLM\zDEFAULT\Software\Policies\Microsoft\Windows\WindowsAI" /v "AllowRecallToBeEnabled" /t REG_DWORD /d 0 /f > $null 2>&1
+reg.exe add "HKLM\zDEFAULT\Software\Policies\Microsoft\Windows\WindowsAI" /v "TurnOffSavingSnapshots" /t REG_DWORD /d 1 /f > $null 2>&1
+reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v "TaskbarCompanion" /t REG_DWORD /d 0 /f > $null 2>&1
+reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v "CopilotPWAPin" /t REG_DWORD /d 0 /f > $null 2>&1
+reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v "RecallPin" /t REG_DWORD /d 0 /f > $null 2>&1
+reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v "TaskbarCompanion" /t REG_DWORD /d 0 /f > $null 2>&1
+reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v "CopilotPWAPin" /t REG_DWORD /d 0 /f > $null 2>&1
+reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v "RecallPin" /t REG_DWORD /d 0 /f > $null 2>&1
 
 # Disable WMI AutoLoggers (Integrated from sparkle)
 Write-Host "Disabling WMI AutoLoggers background tracing sessions..." -ForegroundColor Green
@@ -1458,6 +1900,71 @@ $autoLoggers = @(
 )
 foreach ($logger in $autoLoggers) {
     reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\WMI\Autologger\$logger" /v "Start" /t REG_DWORD /d 0 /f > $null 2>&1
+}
+
+# AtlasOS & ReviOS Radical Performance, Low-Latency & Storage Optimization Block
+if ($atlasReviOSMode) {
+    Write-Host "Applying AtlasOS & ReviOS radical performance, latency & storage optimizations..." -ForegroundColor Green
+
+    # 1. NTFS File System I/O Tuning (Reduced SSD wear, faster directory traversal)
+    reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\FileSystem" /v "NtfsDisableLastAccessUpdate" /t REG_DWORD /d 1 /f > $null 2>&1
+    reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\FileSystem" /v "NtfsDisable8dot3NameCreation" /t REG_DWORD /d 1 /f > $null 2>&1
+    reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\FileSystem" /v "DontVerifyRandomDrivers" /t REG_DWORD /d 1 /f > $null 2>&1
+
+    # 2. Kernel & Memory Tuning (AtlasOS / ReviOS Core)
+    reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\Session Manager\Memory Management" /v "DisablePagingExecutive" /t REG_DWORD /d 1 /f > $null 2>&1
+    reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\Session Manager\Memory Management" /v "ClearPageFileAtShutdown" /t REG_DWORD /d 0 /f > $null 2>&1
+    reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\Session Manager\Memory Management" /v "LargeSystemCache" /t REG_DWORD /d 0 /f > $null 2>&1
+
+    # 3. Network Latency & Nagle Algorithm (TCPNoDelay, TcpAckFrequency, QoS 100% bandwidth)
+    reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\Psched" /v "NonBestEffortLimit" /t REG_DWORD /d 0 /f > $null 2>&1
+    reg.exe add "HKLM\zSYSTEM\ControlSet001\Services\Tcpip\Parameters" /v "TcpTimedWaitDelay" /t REG_DWORD /d 30 /f > $null 2>&1
+    reg.exe add "HKLM\zSYSTEM\ControlSet001\Services\Tcpip\Parameters" /v "MaxUserPort" /t REG_DWORD /d 65534 /f > $null 2>&1
+    reg.exe add "HKLM\zSYSTEM\ControlSet001\Services\Tcpip\Parameters" /v "DefaultTTL" /t REG_DWORD /d 64 /f > $null 2>&1
+
+    # 4. Storage & Crash Control (Disable Memory Dump bloat)
+    reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\CrashControl" /v "CrashDumpEnabled" /t REG_DWORD /d 0 /f > $null 2>&1
+    reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\CrashControl" /v "LogEvent" /t REG_DWORD /d 0 /f > $null 2>&1
+    reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\CrashControl" /v "SendAlert" /t REG_DWORD /d 0 /f > $null 2>&1
+
+    # 5. Additional AtlasOS / ReviOS Service Minimization
+    $atlasServices = @{
+        "WpcMonSvc"         = 4  # Parental Controls
+        "WMPNetworkSvc"     = 4  # Windows Media Player Network Sharing
+        "PhoneSvc"          = 4  # Phone Service
+        "WbioSrvc"          = 4  # Windows Biometric Service
+        "SensrSvc"          = 4  # Sensor Monitoring
+        "SensorService"     = 4  # Sensor Service
+        "SensorDataService" = 4
+        "WalletService"     = 4  # Wallet Service
+        "SharedAccess"      = 4  # Internet Connection Sharing
+        "RemoteRegistry"    = 4  # Remote Registry
+        "RetailDemo"        = 4  # Retail Demo
+        "lfsvc"             = 4  # Geolocation
+        "wisvc"             = 4  # Windows Insider
+    }
+    foreach ($asvc in $atlasServices.GetEnumerator()) {
+        reg.exe add "HKLM\zSYSTEM\ControlSet001\Services\$($asvc.Key)" /v "Start" /t REG_DWORD /d $($asvc.Value) /f > $null 2>&1
+    }
+
+    # 6. Additional Scheduled Tasks Purged Offline
+    $atlasTasks = @(
+        "Microsoft\Windows\DiskDiagnostic\Microsoft-Windows-DiskDiagnosticResolver",
+        "Microsoft\Windows\DiskDiagnostic\Microsoft-Windows-DiskDiagnosticDataCollector",
+        "Microsoft\Windows\Feedback\Siuf\DmClient",
+        "Microsoft\Windows\Feedback\Siuf\DmClientOnScenarioDownload",
+        "Microsoft\Windows\FileHistory\File History (maintenance mode)",
+        "Microsoft\Windows\Maintenance\WinSAT",
+        "Microsoft\Windows\PI\Sqm-Tasks",
+        "Microsoft\Windows\Power Efficiency Diagnostics\AnalyzeSystem",
+        "Microsoft\Windows\Shell\FamilySafetyMonitor",
+        "Microsoft\Windows\Shell\FamilySafetyRefreshTask",
+        "Microsoft\Windows\Registry\RegIdleBackup",
+        "Microsoft\Windows\Diagnosis\Scheduled"
+    )
+    foreach ($task in $atlasTasks) {
+        Remove-Item -LiteralPath "$tasksPath\$task" -Force -ErrorAction SilentlyContinue
+    }
 }
 
 # Default User UI / UX, Latency & Gaming (Baked into Default User profile)
@@ -1528,6 +2035,8 @@ reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Explorer\Adv
 reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v "TaskbarMn" /t REG_DWORD /d 0 /f > $null 2>&1
 reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v "ShowTaskViewButton" /t REG_DWORD /d 0 /f > $null 2>&1
 reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v "ShowTaskViewButton" /t REG_DWORD /d 0 /f > $null 2>&1
+reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v "ShowCopilotButton" /t REG_DWORD /d 0 /f > $null 2>&1
+reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v "ShowCopilotButton" /t REG_DWORD /d 0 /f > $null 2>&1
 reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v "LastActiveClick" /t REG_DWORD /d 1 /f > $null 2>&1
 reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v "LastActiveClick" /t REG_DWORD /d 1 /f > $null 2>&1
 
@@ -1745,6 +2254,8 @@ if (-not (Test-Path -LiteralPath $unattendSource)) {
 
 if (Test-Path -LiteralPath $unattendSource) {
     $xmlContent = Get-Content -LiteralPath $unattendSource -Raw -Encoding utf8
+    # Dynamically sanitize invalid ProductKey tags that cause Setup to abort with "cannot read <ProductKey>"
+    $xmlContent = $xmlContent -replace '(?s)<ProductKey>\s*<WillShowUI>[^<]*</WillShowUI>\s*</ProductKey>', ''
     # Dynamically match detected architecture
     $xmlContent = $xmlContent -replace 'processorArchitecture="amd64"', "processorArchitecture=`"$architecture`""
     
@@ -1787,6 +2298,13 @@ if (Test-Path -LiteralPath $unattendSource) {
     } catch {}
 }
 
+# Ensure CurrentControlSet does NOT exist in offline SYSTEM hive
+# Creating CurrentControlSet as a real key in an offline hive causes Bug Check 0x67 (CONFIG_INITIALIZATION_FAILED)
+# because the NT kernel fails to create the CurrentControlSet symbolic link at boot time.
+if (Test-Path -LiteralPath "HKLM:\zSYSTEM\CurrentControlSet") {
+    reg.exe delete "HKLM\zSYSTEM\CurrentControlSet" /f > $null 2>&1
+}
+
 # Unmount Registry Hives
 Write-Host "Unmounting offline registry hives..." -ForegroundColor Cyan
 @('zCOMPONENTS', 'zDEFAULT', 'zNTUSER', 'zSOFTWARE', 'zSYSTEM') | ForEach-Object {
@@ -1796,36 +2314,71 @@ Write-Host "Unmounting offline registry hives..." -ForegroundColor Cyan
 # 12. Unmount and export install image
 Write-Host "Unmounting install image..." -ForegroundColor Green
 
-[GC]::Collect()
-[GC]::WaitForPendingFinalizers()
-Start-Sleep -Seconds 2
-
-& dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /commit
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "Warning: commit unmount failed, retrying after garbage collection..." -ForegroundColor Yellow
+$unmountSuccess = $false
+for ($retry = 1; $retry -le 4; $retry++) {
     [GC]::Collect()
-    Start-Sleep -Seconds 3
+    [GC]::WaitForPendingFinalizers()
+    Start-Sleep -Seconds 2
+
+    & dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /commit
+    if ($LASTEXITCODE -eq 0) {
+        $unmountSuccess = $true
+        break
+    }
+
+    Write-Host "Warning: commit unmount failed (attempt $retry/4). Retrying after waiting and garbage collection..." -ForegroundColor Yellow
+    [GC]::Collect()
+    [GC]::WaitForPendingFinalizers()
+    Start-Sleep -Seconds (3 * $retry)
+}
+
+if (-not $unmountSuccess) {
+    Write-Host "Error: Failed to commit changes to mounted image after 4 attempts." -ForegroundColor Red
+    Write-Host "Checking if image is in 'Needs Remount' state or locked by external processes..." -ForegroundColor Yellow
+    & dism.exe /English /Remount-Image "/MountDir:$scratchDir" > $null 2>&1
     & dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /commit
     if ($LASTEXITCODE -ne 0) {
-        Write-Host "Falling back to discard unmount..." -ForegroundColor Yellow
+        Write-Host "Critical: Unable to commit changes. Falling back to discard unmount to prevent corrupted image..." -ForegroundColor Red
         & dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /discard
     }
 }
 
-# Export modified image directly to recovery ESD format (LZMS compression)
+# 13. Export modified image
+# Note: On Windows 11 24H2 (build 26100+), DISM /Compress:recovery (LZMS) has a known crash bug (0xc0000005 in WIMGAPI.DLL).
+# Exporting to install.wim via /Compress:max (LZX) completes in ~20 seconds, never crashes, and produces a 100% compliant Windows Setup payload.
+$finalWim = Join-Path -Path "$nano11Dir\sources" -ChildPath "install.wim"
 $finalEsd = Join-Path -Path "$nano11Dir\sources" -ChildPath "install.esd"
-Write-Host "Exporting modified image to recovery-compressed install.esd (LZMS)..." -ForegroundColor Green
-& dism.exe /English /Export-Image "/SourceImageFile:$destWim" "/SourceIndex:$index" "/DestinationImageFile:$finalEsd" /Compress:recovery /CheckIntegrity
+$tempWim  = Join-Path -Path "$nano11Dir\sources" -ChildPath "install_export.wim"
 
-if ((Test-Path -LiteralPath $finalEsd) -and ((Get-Item -LiteralPath $finalEsd).Length -gt 100MB)) {
-    Write-Host "install.esd successfully created ($([math]::Round((Get-Item -LiteralPath $finalEsd).Length / 1GB, 2)) GB). Removing temporary install.wim..." -ForegroundColor Green
-    Remove-Item -LiteralPath $destWim -Force -ErrorAction SilentlyContinue
-} else {
-    Write-Host "Recovery export unavailable or failed, falling back to LZX install.wim..." -ForegroundColor Yellow
-    $tempWim = Join-Path -Path "$nano11Dir\sources" -ChildPath "install2.wim"
-    & dism.exe /English /Export-Image "/SourceImageFile:$destWim" "/SourceIndex:$index" "/DestinationImageFile:$tempWim" /Compress:max /CheckIntegrity
-    Remove-Item -LiteralPath $destWim -Force -ErrorAction SilentlyContinue
-    Rename-Item -LiteralPath $tempWim -NewName "install.wim" -Force
+# Clean up any leftover temporary/broken export files
+Remove-Item -LiteralPath $finalEsd -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath $tempWim -Force -ErrorAction SilentlyContinue
+
+$esdSuccess = $false
+if ($exportESDMode) {
+    Write-Host "Exporting modified image to recovery-compressed install.esd (LZMS)..." -ForegroundColor Green
+    & dism.exe /English /Export-Image "/SourceImageFile:$destWim" "/SourceIndex:$index" "/DestinationImageFile:$finalEsd" /Compress:recovery
+    if ($LASTEXITCODE -eq 0 -and (Test-Path -LiteralPath $finalEsd) -and ((Get-Item -LiteralPath $finalEsd).Length -gt 1GB)) {
+        Write-Host "install.esd successfully created ($([math]::Round((Get-Item -LiteralPath $finalEsd).Length / 1GB, 2)) GB). Removing temporary install.wim..." -ForegroundColor Green
+        Remove-Item -LiteralPath $destWim -Force -ErrorAction SilentlyContinue
+        $esdSuccess = $true
+    } else {
+        Write-Host "Recovery export failed or crashed. Cleaning up incomplete ESD and falling back to LZX install.wim..." -ForegroundColor Yellow
+        Remove-Item -LiteralPath $finalEsd -Force -ErrorAction SilentlyContinue
+    }
+}
+
+if (-not $esdSuccess) {
+    Write-Host "Exporting modified image to highly-compressed install.wim (LZX)..." -ForegroundColor Green
+    & dism.exe /English /Export-Image "/SourceImageFile:$destWim" "/SourceIndex:$index" "/DestinationImageFile:$tempWim" /Compress:max
+    if ($LASTEXITCODE -eq 0 -and (Test-Path -LiteralPath $tempWim) -and ((Get-Item -LiteralPath $tempWim).Length -gt 1GB)) {
+        Remove-Item -LiteralPath $destWim -Force -ErrorAction SilentlyContinue
+        Rename-Item -LiteralPath $tempWim -NewName "install.wim" -Force
+        Write-Host "install.wim successfully exported ($([math]::Round((Get-Item -LiteralPath $finalWim).Length / 1GB, 2)) GB)." -ForegroundColor Green
+    } else {
+        Write-Host "Warning: Export to install_export.wim failed or produced undersized file. Keeping original committed install.wim." -ForegroundColor Yellow
+        Remove-Item -LiteralPath $tempWim -Force -ErrorAction SilentlyContinue
+    }
 }
 
 # 14. Shrink and modify boot.wim (Setup bypasses & dynamic index handling)
@@ -1857,18 +2410,33 @@ if (Test-Path -LiteralPath $bootWimPath) {
     foreach ($key in $labConfigKeys) {
         reg.exe add "HKLM\zSYSTEM\Setup\LabConfig" /v $key /t REG_DWORD /d 1 /f > $null 2>&1
     }
+    reg.exe add "HKLM\zSYSTEM\Setup\LabConfig" /v "BypassNRO" /t REG_DWORD /d 1 /f > $null 2>&1
     reg.exe add "HKLM\zSYSTEM\Setup\MoSetup" /v "AllowUpgradesWithUnsupportedTPMOrCPU" /t REG_DWORD /d 1 /f > $null 2>&1
-    reg.exe unload HKLM\zSYSTEM | Out-Null
+    reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\BitLocker" /v "PreventDeviceEncryption" /t REG_DWORD /d 1 /f > $null 2>&1
+    if (Test-Path -LiteralPath "HKLM:\zSYSTEM\CurrentControlSet") {
+        reg.exe delete "HKLM\zSYSTEM\CurrentControlSet" /f > $null 2>&1
+    }
+    [void](Unmount-RegistryHiveWithRetry -Name 'zSYSTEM')
 
-    [GC]::Collect()
-    [GC]::WaitForPendingFinalizers()
-    & dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /commit
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "Warning: commit unmount of boot.wim failed, retrying after garbage collection..." -ForegroundColor Yellow
+    $bootUnmountSuccess = $false
+    for ($bRetry = 1; $bRetry -le 3; $bRetry++) {
         [GC]::Collect()
         [GC]::WaitForPendingFinalizers()
-        Start-Sleep -Seconds 3
+        Start-Sleep -Seconds 2
         & dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /commit
+        if ($LASTEXITCODE -eq 0) {
+            $bootUnmountSuccess = $true
+            break
+        }
+        Write-Host "Warning: commit unmount of boot.wim failed (attempt $bRetry/3), retrying after waiting..." -ForegroundColor Yellow
+        [GC]::Collect()
+        [GC]::WaitForPendingFinalizers()
+        Start-Sleep -Seconds (2 * $bRetry)
+    }
+
+    if (-not $bootUnmountSuccess) {
+        Write-Host "Falling back to discard unmount for boot.wim..." -ForegroundColor Yellow
+        & dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /discard
     }
 
     $finalBootWim = Join-Path -Path "$nano11Dir\sources" -ChildPath "boot_final.wim"
@@ -1881,20 +2449,52 @@ if (Test-Path -LiteralPath $bootWimPath) {
 # 15. Verify final installation payload
 $esdCheck = Join-Path -Path "$nano11Dir\sources" -ChildPath "install.esd"
 $wimCheck = Join-Path -Path "$nano11Dir\sources" -ChildPath "install.wim"
-if (Test-Path -LiteralPath $esdCheck) {
+
+$validEsd = (Test-Path -LiteralPath $esdCheck) -and ((Get-Item -LiteralPath $esdCheck).Length -gt 1GB)
+$validWim = (Test-Path -LiteralPath $wimCheck) -and ((Get-Item -LiteralPath $wimCheck).Length -gt 1GB)
+
+# Remove any corrupt stub files or invalid partial files (< 1GB)
+if (-not $validEsd -and (Test-Path -LiteralPath $esdCheck)) {
+    Write-Host "Warning: Corrupt or incomplete install.esd detected ($((Get-Item -LiteralPath $esdCheck).Length) bytes). Removing..." -ForegroundColor Yellow
+    Remove-Item -LiteralPath $esdCheck -Force -ErrorAction SilentlyContinue
+    $validEsd = $false
+}
+if (-not $validWim -and (Test-Path -LiteralPath $wimCheck)) {
+    Write-Host "Warning: Corrupt or incomplete install.wim detected ($((Get-Item -LiteralPath $wimCheck).Length) bytes). Removing..." -ForegroundColor Yellow
+    Remove-Item -LiteralPath $wimCheck -Force -ErrorAction SilentlyContinue
+    $validWim = $false
+}
+
+if ($validWim) {
+    Write-Host "Final installation image confirmed: install.wim ($([math]::Round((Get-Item -LiteralPath $wimCheck).Length / 1GB, 2)) GB)" -ForegroundColor Green
+    if (Test-Path -LiteralPath $esdCheck) {
+        Remove-Item -LiteralPath $esdCheck -Force -ErrorAction SilentlyContinue
+    }
+} elseif ($validEsd) {
     Write-Host "Final installation image confirmed: install.esd ($([math]::Round((Get-Item -LiteralPath $esdCheck).Length / 1GB, 2)) GB)" -ForegroundColor Green
     if (Test-Path -LiteralPath $wimCheck) {
         Remove-Item -LiteralPath $wimCheck -Force -ErrorAction SilentlyContinue
     }
-} elseif (Test-Path -LiteralPath $wimCheck) {
-    Write-Host "Final installation image confirmed: install.wim ($([math]::Round((Get-Item -LiteralPath $wimCheck).Length / 1GB, 2)) GB)" -ForegroundColor Green
+} else {
+    Write-Host "CRITICAL ERROR: No valid installation payload (install.wim or install.esd > 1GB) found in $nano11Dir\sources!" -ForegroundColor Red
+    Write-Host "Aborting ISO creation to prevent producing an unbootable or corrupt image." -ForegroundColor Red
+    Stop-Transcript
+    exit 1
 }
 
-# 16. Final cleanup of ISO root
+# 16. Final cleanup of ISO root and sources
 Write-Host "Performing final cleanup of ISO root..." -ForegroundColor Cyan
 $keepList = @("boot", "efi", "sources", "bootmgr", "bootmgr.efi", "bootmgfw.efi", "setup.exe", "autounattend.xml")
 Get-ChildItem -Path $nano11Dir | Where-Object { $_.Name -notin $keepList } | ForEach-Object {
     Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+# Clean leftover build diagnostics and setup logs inside sources
+$sourcesDir = Join-Path -Path $nano11Dir -ChildPath "sources"
+if (Test-Path -LiteralPath $sourcesDir) {
+    Remove-Item -Path "$sourcesDir\setupcore.log" -Force -ErrorAction SilentlyContinue
+    Remove-Item -Path "$sourcesDir\*.diagerr" -Force -ErrorAction SilentlyContinue
+    Remove-Item -Path "$sourcesDir\*.diagxml" -Force -ErrorAction SilentlyContinue
 }
 
 # 17. Locate or download oscdimg.exe (checks local dirs, PATH, ADK, and multi-mirror fallback)
@@ -1974,7 +2574,14 @@ if (-not $oscdimgExe) {
 Write-Host "Creating bootable ISO image..." -ForegroundColor Green
 $outputIso = Join-Path -Path $scriptDir -ChildPath "nano11.iso"
 
-# Remove any existing output ISO to prevent file locks/collisions
+# Dismount and remove any existing output ISO to prevent file locks/collisions
+try {
+    $mounted = Get-DiskImage -ImagePath $outputIso -ErrorAction SilentlyContinue
+    if ($mounted) {
+        Write-Host "Dismounting previously mounted output ISO: $outputIso..." -ForegroundColor Yellow
+        Dismount-DiskImage -ImagePath $outputIso -ErrorAction SilentlyContinue | Out-Null
+    }
+} catch {}
 if (Test-Path -LiteralPath $outputIso) {
     Remove-Item -LiteralPath $outputIso -Force -ErrorAction SilentlyContinue
 }
@@ -2057,7 +2664,7 @@ if ($oscdimgExe -and (Test-Path -LiteralPath $oscdimgExe)) {
     Write-Host "Executing oscdimg..." -ForegroundColor Cyan
     & "$oscdimgExe" @oscdimgArgs
     
-    if ((Test-Path -LiteralPath $outputIso) -and ((Get-Item -LiteralPath $outputIso).Length -gt 1MB)) {
+    if ((Test-Path -LiteralPath $outputIso) -and ((Get-Item -LiteralPath $outputIso).Length -gt 1.5GB)) {
         $isoCreatedSuccessfully = $true
         $isoItem = Get-Item -LiteralPath $outputIso
         $isoSizeMB = [math]::Round($isoItem.Length / 1MB, 2)
@@ -2070,11 +2677,21 @@ if ($oscdimgExe -and (Test-Path -LiteralPath $oscdimgExe)) {
         Write-Host "   Path:   $outputIso ($isoSizeMB MB)                     " -ForegroundColor Green
         Write-Host "   SHA256: $sha256                                        " -ForegroundColor Green
         Write-Host "=========================================================" -ForegroundColor Green
+        Write-Host ""
+        Write-Host "[IMPORTANT NOTE FOR BOOTABLE USB CREATION]" -ForegroundColor Cyan
+        Write-Host "- install.wim is larger than 4GB. FAT32 cannot store files > 4GB." -ForegroundColor Yellow
+        Write-Host "- When creating a bootable USB with Rufus, select 'NTFS' filesystem." -ForegroundColor Yellow
+        Write-Host "- Or copy nano11.iso directly into a Ventoy USB drive (recommended)." -ForegroundColor Yellow
+        Write-Host ""
     } else {
         Write-Host ""
         Write-Host "=========================================================" -ForegroundColor Red
-        Write-Host "   ERROR: Failed to create bootable ISO!                 " -ForegroundColor Red
-        Write-Host "   oscdimg exited with code $LASTEXITCODE. The ISO file was not generated." -ForegroundColor Red
+        Write-Host "   ERROR: Failed to create valid bootable ISO!           " -ForegroundColor Red
+        if (Test-Path -LiteralPath $outputIso) {
+            Write-Host "   Generated ISO size ($([math]::Round((Get-Item -LiteralPath $outputIso).Length / 1MB, 2)) MB) is abnormally small (< 1.5 GB). Likely missing OS payload." -ForegroundColor Red
+        } else {
+            Write-Host "   oscdimg exited with code $LASTEXITCODE. The ISO file was not generated." -ForegroundColor Red
+        }
         Write-Host "   Working directory preserved for inspection: $nano11Dir" -ForegroundColor Yellow
         Write-Host "=========================================================" -ForegroundColor Red
     }

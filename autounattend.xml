@@ -6,9 +6,6 @@
   <settings pass="windowsPE">
     <component name="Microsoft-Windows-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
       <UserData>
-        <ProductKey>
-          <WillShowUI>OnError</WillShowUI>
-        </ProductKey>
         <AcceptEula>true</AcceptEula>
       </UserData>
       <UseConfigurationSet>false</UseConfigurationSet>
@@ -36,14 +33,23 @@
         <RunSynchronousCommand wcm:action="add">
           <Order>6</Order>
           <Path>reg.exe add "HKLM\SYSTEM\Setup\LabConfig" /v BypassDiskCheck /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>7</Order>
+          <Path>reg.exe add "HKLM\SYSTEM\Setup\MoSetup" /v AllowUpgradesWithUnsupportedTPMOrCPU /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>8</Order>
+          <Path>reg.exe add "HKLM\SYSTEM\ControlSet001\Control\BitLocker" /v PreventDeviceEncryption /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>9</Order>
+          <Path>reg.exe add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\OOBE" /v BypassNRO /t REG_DWORD /d 1 /f</Path>
         </RunSynchronousCommand>
       </RunSynchronous>
     </component>
     <component name="Microsoft-Windows-Setup" processorArchitecture="x86" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
       <UserData>
-        <ProductKey>
-          <WillShowUI>OnError</WillShowUI>
-        </ProductKey>
         <AcceptEula>true</AcceptEula>
       </UserData>
       <UseConfigurationSet>false</UseConfigurationSet>
@@ -71,14 +77,23 @@
         <RunSynchronousCommand wcm:action="add">
           <Order>6</Order>
           <Path>reg.exe add "HKLM\SYSTEM\Setup\LabConfig" /v BypassDiskCheck /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>7</Order>
+          <Path>reg.exe add "HKLM\SYSTEM\Setup\MoSetup" /v AllowUpgradesWithUnsupportedTPMOrCPU /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>8</Order>
+          <Path>reg.exe add "HKLM\SYSTEM\ControlSet001\Control\BitLocker" /v PreventDeviceEncryption /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>9</Order>
+          <Path>reg.exe add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\OOBE" /v BypassNRO /t REG_DWORD /d 1 /f</Path>
         </RunSynchronousCommand>
       </RunSynchronous>
     </component>
     <component name="Microsoft-Windows-Setup" processorArchitecture="arm64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
       <UserData>
-        <ProductKey>
-          <WillShowUI>OnError</WillShowUI>
-        </ProductKey>
         <AcceptEula>true</AcceptEula>
       </UserData>
       <UseConfigurationSet>false</UseConfigurationSet>
@@ -106,6 +121,18 @@
         <RunSynchronousCommand wcm:action="add">
           <Order>6</Order>
           <Path>reg.exe add "HKLM\SYSTEM\Setup\LabConfig" /v BypassDiskCheck /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>7</Order>
+          <Path>reg.exe add "HKLM\SYSTEM\Setup\MoSetup" /v AllowUpgradesWithUnsupportedTPMOrCPU /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>8</Order>
+          <Path>reg.exe add "HKLM\SYSTEM\ControlSet001\Control\BitLocker" /v PreventDeviceEncryption /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>9</Order>
+          <Path>reg.exe add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\OOBE" /v BypassNRO /t REG_DWORD /d 1 /f</Path>
         </RunSynchronousCommand>
       </RunSynchronous>
     </component>
@@ -138,6 +165,14 @@
           <Order>5</Order>
           <Path>powershell.exe -ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -Command "try { reg.exe load HKU\DefaultUser C:\Users\Default\NTUSER.DAT; if (Test-Path 'C:\Windows\Setup\Scripts\DefaultUser.ps1') { &amp; 'C:\Windows\Setup\Scripts\DefaultUser.ps1' }; [GC]::Collect(); [GC]::WaitForPendingFinalizers(); Start-Sleep -Seconds 1; for ($i = 0; $i -lt 5; $i++) { reg.exe unload HKU\DefaultUser; if ($LASTEXITCODE -eq 0) { break }; Start-Sleep -Seconds 1 } } catch {}; exit 0"</Path>
         </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>6</Order>
+          <Path>reg.exe add "HKLM\SYSTEM\ControlSet001\Control\BitLocker" /v PreventDeviceEncryption /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>7</Order>
+          <Path>reg.exe add "HKLM\SYSTEM\CurrentControlSet\Control\BitLocker" /v PreventDeviceEncryption /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
       </RunSynchronous>
     </component>
     <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="x86" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
@@ -165,6 +200,14 @@
           <Order>5</Order>
           <Path>powershell.exe -ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -Command "try { reg.exe load HKU\DefaultUser C:\Users\Default\NTUSER.DAT; if (Test-Path 'C:\Windows\Setup\Scripts\DefaultUser.ps1') { &amp; 'C:\Windows\Setup\Scripts\DefaultUser.ps1' }; [GC]::Collect(); [GC]::WaitForPendingFinalizers(); Start-Sleep -Seconds 1; for ($i = 0; $i -lt 5; $i++) { reg.exe unload HKU\DefaultUser; if ($LASTEXITCODE -eq 0) { break }; Start-Sleep -Seconds 1 } } catch {}; exit 0"</Path>
         </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>6</Order>
+          <Path>reg.exe add "HKLM\SYSTEM\ControlSet001\Control\BitLocker" /v PreventDeviceEncryption /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>7</Order>
+          <Path>reg.exe add "HKLM\SYSTEM\CurrentControlSet\Control\BitLocker" /v PreventDeviceEncryption /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
       </RunSynchronous>
     </component>
     <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="arm64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
@@ -191,6 +234,14 @@
         <RunSynchronousCommand wcm:action="add">
           <Order>5</Order>
           <Path>powershell.exe -ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -Command "try { reg.exe load HKU\DefaultUser C:\Users\Default\NTUSER.DAT; if (Test-Path 'C:\Windows\Setup\Scripts\DefaultUser.ps1') { &amp; 'C:\Windows\Setup\Scripts\DefaultUser.ps1' }; [GC]::Collect(); [GC]::WaitForPendingFinalizers(); Start-Sleep -Seconds 1; for ($i = 0; $i -lt 5; $i++) { reg.exe unload HKU\DefaultUser; if ($LASTEXITCODE -eq 0) { break }; Start-Sleep -Seconds 1 } } catch {}; exit 0"</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>6</Order>
+          <Path>reg.exe add "HKLM\SYSTEM\ControlSet001\Control\BitLocker" /v PreventDeviceEncryption /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>7</Order>
+          <Path>reg.exe add "HKLM\SYSTEM\CurrentControlSet\Control\BitLocker" /v PreventDeviceEncryption /t REG_DWORD /d 1 /f</Path>
         </RunSynchronousCommand>
       </RunSynchronous>
     </component>
@@ -2463,6 +2514,96 @@ $scripts = @(
 		reg.exe add "HKLM\SOFTWARE\Policies\Microsoft\Windows\System" /v "EnableMmx" /t REG_DWORD /d 0 /f;
 		reg.exe add "HKLM\SOFTWARE\Policies\Microsoft\Windows\CrossDevice" /v "AllowCrossDeviceExperience" /t REG_DWORD /d 0 /f;
 	};
+	{
+		# Japanese 106/109 Keyboard Configuration (Prevents English 101/104 misdetection)
+		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\i8042prt\Parameters" /v "LayerDriver JPN" /t REG_SZ /d "kbd106.dll" /f;
+		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\i8042prt\Parameters" /v "OverrideKeyboardIdentifier" /t REG_SZ /d "PCAT_106KEY" /f;
+		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\i8042prt\Parameters" /v "OverrideKeyboardType" /t REG_DWORD /d 7 /f;
+		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\i8042prt\Parameters" /v "OverrideKeyboardSubtype" /t REG_DWORD /d 2 /f;
+	};
+	{
+		# Windows 11 24H2 BitLocker & Automatic Encryption Block
+		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Control\BitLocker" /v "PreventDeviceEncryption" /t REG_DWORD /d 1 /f;
+		reg.exe add "HKLM\SOFTWARE\Policies\Microsoft\Windows\EnhancedStorageDevices" /v "TCGSecurityActivationDisabled" /t REG_DWORD /d 1 /f;
+	};
+	{
+		# Windows 11 24H2 Windows AI, Recall, Copilot and Click-To-Do Suppression
+		reg.exe add "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsAI" /v "DisableAIDataAnalysis" /t REG_DWORD /d 1 /f;
+		reg.exe add "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsAI" /v "AllowRecallEnablement" /t REG_DWORD /d 0 /f;
+		reg.exe add "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsAI" /v "TurnOffSavingSnapshots" /t REG_DWORD /d 1 /f;
+		reg.exe add "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsAI" /v "DisableClickToDo" /t REG_DWORD /d 1 /f;
+		reg.exe add "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsAI" /v "AllowCopilotRuntime" /t REG_DWORD /d 0 /f;
+		reg.exe add "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsCopilot" /v "TurnOffWindowsCopilot" /t REG_DWORD /d 1 /f;
+	};
+	{
+		# AtlasOS & ReviOS: Kernel, Latency, Storage & Network Stack Tuning
+		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Control\PriorityControl" /v "Win32PrioritySeparation" /t REG_DWORD /d 38 /f;
+		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Control\FileSystem" /v "NtfsDisableLastAccessUpdate" /t REG_DWORD /d 1 /f;
+		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Control\FileSystem" /v "NtfsDisable8dot3NameCreation" /t REG_DWORD /d 1 /f;
+		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Control\FileSystem" /v "DontVerifyRandomDrivers" /t REG_DWORD /d 1 /f;
+		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Power" /v "HiberbootEnabled" /t REG_DWORD /d 0 /f;
+		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management" /v "DisablePagingExecutive" /t REG_DWORD /d 1 /f;
+		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management" /v "ClearPageFileAtShutdown" /t REG_DWORD /d 0 /f;
+		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management" /v "LargeSystemCache" /t REG_DWORD /d 0 /f;
+		reg.exe add "HKLM\SOFTWARE\Policies\Microsoft\Windows\Psched" /v "NonBestEffortLimit" /t REG_DWORD /d 0 /f;
+		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters" /v "TcpTimedWaitDelay" /t REG_DWORD /d 30 /f;
+		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters" /v "MaxUserPort" /t REG_DWORD /d 65534 /f;
+		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Control\CrashControl" /v "CrashDumpEnabled" /t REG_DWORD /d 0 /f;
+		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Control\CrashControl" /v "LogEvent" /t REG_DWORD /d 0 /f;
+		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Control\CrashControl" /v "SendAlert" /t REG_DWORD /d 0 /f;
+	};
+	{
+		# windows-defender-remover: Complete Service & Non-boot Driver removal
+		$defSvcs = @('WinDefend', 'WdNisSvc', 'WdNisDrv', 'WdFilter', 'Sense', 'SecurityHealthService', 'wscsvc', 'webthreatdefsvc', 'webthreatdefusersvc');
+		foreach ($s in $defSvcs) {
+			reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\$s" /v "Start" /t REG_DWORD /d 4 /f;
+		}
+		reg.exe add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender" /v "DisableAntiSpyware" /t REG_DWORD /d 1 /f;
+		reg.exe add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender" /v "DisableAntiVirus" /t REG_DWORD /d 1 /f;
+		reg.exe add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection" /v "DisableRealtimeMonitoring" /t REG_DWORD /d 1 /f;
+		reg.exe add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection" /v "DisableBehaviorMonitoring" /t REG_DWORD /d 1 /f;
+		reg.exe add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection" /v "DisableOnAccessProtection" /t REG_DWORD /d 1 /f;
+		reg.exe add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection" /v "DisableIOAVProtection" /t REG_DWORD /d 1 /f;
+		reg.exe add "HKLM\SOFTWARE\Policies\Microsoft\Windows\System" /v "EnableSmartScreen" /t REG_DWORD /d 0 /f;
+		reg.exe add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer" /v "SmartScreenEnabled" /t REG_SZ /d "Off" /f;
+		reg.exe delete "HKLM\SOFTWARE\Classes\CLSID\{09A47860-11B0-4DA5-AFA5-26D86198A780}" /f 2>$null;
+		reg.exe delete "HKLM\SOFTWARE\Classes\*\shellex\ContextMenuHandlers\EPP" /f 2>$null;
+		reg.exe delete "HKLM\SOFTWARE\Classes\Directory\shellex\ContextMenuHandlers\EPP" /f 2>$null;
+		reg.exe delete "HKLM\SOFTWARE\Classes\Drive\shellex\ContextMenuHandlers\EPP" /f 2>$null;
+	};
+	{
+		# eclean.gg: Network & TCP/IP Low-Latency Gaming Engine (Nagle's Algorithm Disabled, Instant ACK, CTCP)
+		try {
+			Set-NetTCPSetting -SettingName * -ScalingHeuristics Disabled -InitialRto 3000 -Timestamps Disabled -MemoryPressureProtection Disabled -NonSackRttResiliency Disabled -MaxSynRetransmissions 2 -ErrorAction SilentlyContinue | Out-Null;
+			Set-NetOffloadGlobalSetting -PacketCoalescingFilter Disabled -Chimney Disabled -Taskoffload Enabled -ReceiveSideScaling Enabled -ReceiveSegmentCoalescing Disabled -ErrorAction SilentlyContinue | Out-Null;
+			Disable-NetAdapterLso -Name * -ErrorAction SilentlyContinue | Out-Null;
+			netsh.exe int tcp set global ecncapability=enabled | Out-Null;
+			netsh.exe interface tcp set global fastopen=enabled | Out-Null;
+			netsh.exe interface tcp set global hystart=disabled | Out-Null;
+			$tcpipPath = "HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces";
+			if (Test-Path $tcpipPath) {
+				Get-ChildItem -Path $tcpipPath | ForEach-Object {
+					Set-ItemProperty -Path $_.PSPath -Name "TCPNoDelay" -Value 1 -Type DWord -Force -ErrorAction SilentlyContinue;
+					Set-ItemProperty -Path $_.PSPath -Name "TcpAckFrequency" -Value 1 -Type DWord -Force -ErrorAction SilentlyContinue;
+					Set-ItemProperty -Path $_.PSPath -Name "TcpDelAckTicks" -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue;
+				};
+			}
+		} catch {}
+	};
+	{
+		# eclean.gg: Power & DPC Latency & CPU Core Parking (All cores unparked, P-Core priority, EPP 0)
+		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Kernel" /v "ThreadDpcEnable" /t REG_DWORD /d 1 /f;
+		$pwr = "HKLM\SOFTWARE\Policies\Microsoft\Power\PowerSettings";
+		reg.exe add "$pwr\0cc5b647-c74e-4111-92e3-3b129533f4d5" /v "ACSettingIndex" /t REG_DWORD /d 100 /f;
+		reg.exe add "$pwr\0cc5b647-c74e-4111-92e3-3b129533f4d5" /v "DCSettingIndex" /t REG_DWORD /d 100 /f;
+		reg.exe add "$pwr\ea0653f4-9251-4ca4-99a3-324b3d2b0636" /v "ACSettingIndex" /t REG_DWORD /d 100 /f;
+		reg.exe add "$pwr\ea0653f4-9251-4ca4-99a3-324b3d2b0636" /v "DCSettingIndex" /t REG_DWORD /d 100 /f;
+		reg.exe add "$pwr\36687f9e-e3a5-4dbf-b1dc-15eb381c6863" /v "ACSettingIndex" /t REG_DWORD /d 0 /f;
+		reg.exe add "$pwr\36687f9e-e3a5-4dbf-b1dc-15eb381c6863" /v "DCSettingIndex" /t REG_DWORD /d 0 /f;
+		reg.exe add "$pwr\93b22d1d-9513-4bc7-ad42-1e967313f2e4" /v "ACSettingIndex" /t REG_DWORD /d 2 /f;
+		reg.exe add "$pwr\bae08b81-2d5e-4688-ad6a-13243356654b" /v "ACSettingIndex" /t REG_DWORD /d 2 /f;
+		reg.exe add "$pwr\be337238-0d82-4146-a960-4f3749d470c2" /v "ACSettingIndex" /t REG_DWORD /d 2 /f;
+	};
 );
 
 & {
@@ -2470,13 +2611,13 @@ $scripts = @(
   [float] $increment = 100 / $scripts.Count;
   foreach( $script in $scripts ) {
     Write-Progress -Activity 'Running scripts to customize your Windows installation. Do not close this window.' -PercentComplete $complete;
-    '*** Will now execute command ﾂｫ{0}ﾂｻ.' -f $(
+    '*** Will now execute command "{0}".' -f $(
       $str = $script.ToString().Trim() -replace '\s+', ' ';
       $max = 100;
       if( $str.Length -le $max ) {
         $str;
       } else {
-        $str.Substring( 0, $max - 1 ) + '窶ｦ';
+        $str.Substring( 0, $max - 1 ) + '...';
       }
     );
     $start = [datetime]::Now;
@@ -2502,6 +2643,8 @@ $scripts = @(
 		Set-ItemProperty -LiteralPath 'Registry::HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced' -Name 'TaskbarDa' -Type 'DWord' -Value 0 -Force;
 		Set-ItemProperty -LiteralPath 'Registry::HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced' -Name 'TaskbarMn' -Type 'DWord' -Value 0 -Force;
 		Set-ItemProperty -LiteralPath 'Registry::HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced' -Name 'ShowTaskViewButton' -Type 'DWord' -Value 0 -Force;
+		Set-ItemProperty -LiteralPath 'Registry::HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced' -Name 'TaskbarAl' -Type 'DWord' -Value 0 -Force;
+		Set-ItemProperty -LiteralPath 'Registry::HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced' -Name 'ShowCopilotButton' -Type 'DWord' -Value 0 -Force;
 	};
 	{
 		# Background Process Reduction: disable GameDVR capture and OneDrive run per user
@@ -2541,13 +2684,13 @@ $scripts = @(
   [float] $increment = 100 / $scripts.Count;
   foreach( $script in $scripts ) {
     Write-Progress -Activity 'Running scripts to configure this user account. Do not close this window.' -PercentComplete $complete;
-    '*** Will now execute command ﾂｫ{0}ﾂｻ.' -f $(
+    '*** Will now execute command "{0}".' -f $(
       $str = $script.ToString().Trim() -replace '\s+', ' ';
       $max = 100;
       if( $str.Length -le $max ) {
         $str;
       } else {
-        $str.Substring( 0, $max - 1 ) + '窶ｦ';
+        $str.Substring( 0, $max - 1 ) + '...';
       }
     );
     $start = [datetime]::Now;
@@ -2612,6 +2755,8 @@ $scripts = @(
 		reg.exe add "HKU\DefaultUser\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v "TaskbarDa" /t REG_DWORD /d 0 /f;
 		reg.exe add "HKU\DefaultUser\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v "TaskbarMn" /t REG_DWORD /d 0 /f;
 		reg.exe add "HKU\DefaultUser\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v "ShowTaskViewButton" /t REG_DWORD /d 0 /f;
+		reg.exe add "HKU\DefaultUser\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v "TaskbarAl" /t REG_DWORD /d 0 /f;
+		reg.exe add "HKU\DefaultUser\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v "ShowCopilotButton" /t REG_DWORD /d 0 /f;
 		reg.exe add "HKU\DefaultUser\Software\Microsoft\Windows\CurrentVersion\GameDVR" /v "AppCaptureEnabled" /t REG_DWORD /d 0 /f;
 		reg.exe add "HKU\DefaultUser\System\GameConfigStore" /v "GameDVR_Enabled" /t REG_DWORD /d 0 /f;
 		reg.exe delete "HKU\DefaultUser\Software\Microsoft\Windows\CurrentVersion\Run" /v "OneDrive" /f 2>$null;
@@ -2626,14 +2771,14 @@ $scripts = @(
   [float] $complete = 0;
   [float] $increment = 100 / $scripts.Count;
   foreach( $script in $scripts ) {
-    Write-Progress -Activity 'Running scripts to modify the default user窶吮冱 registry hive. Do not close this window.' -PercentComplete $complete;
-    '*** Will now execute command ﾂｫ{0}ﾂｻ.' -f $(
+    Write-Progress -Activity "Running scripts to modify the default user's registry hive. Do not close this window." -PercentComplete $complete;
+    '*** Will now execute command "{0}".' -f $(
       $str = $script.ToString().Trim() -replace '\s+', ' ';
       $max = 100;
       if( $str.Length -le $max ) {
         $str;
       } else {
-        $str.Substring( 0, $max - 1 ) + '窶ｦ';
+        $str.Substring( 0, $max - 1 ) + '...';
       }
     );
     $start = [datetime]::Now;
@@ -2706,10 +2851,38 @@ $scripts = @(
 		schtasks.exe /change /tn "\Microsoft\Windows\Feedback\Siuf\DmClientOnScenarioDownload" /disable 2>$null;
 	};
 	{
-		# Windows Security & Defender: disable SecurityHealthService and remove startup tray entry
+		# Windows Security & Defender: complete user-mode service, task & cache purge
 		reg.exe delete "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" /v "SecurityHealth" /f 2>$null;
-		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\SecurityHealthService" /v "Start" /t REG_DWORD /d 4 /f 2>$null;
-		Stop-Process -Name "SecurityHealthSystray", "SecurityHealthHost" -Force -ErrorAction SilentlyContinue;
+		$defSvcs = @('WinDefend', 'WdNisSvc', 'WdNisDrv', 'WdFilter', 'Sense', 'SecurityHealthService', 'wscsvc', 'webthreatdefsvc', 'webthreatdefusersvc');
+		foreach ($s in $defSvcs) {
+			reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\$s" /v "Start" /t REG_DWORD /d 4 /f 2>$null;
+		}
+		Stop-Process -Name "SecurityHealthSystray", "SecurityHealthHost", "MsMpEng", "NisSrv" -Force -ErrorAction SilentlyContinue;
+		$defCaches = @(
+			'C:\ProgramData\Microsoft\Windows Defender\Definition Updates',
+			'C:\ProgramData\Microsoft\Windows Defender\Scans'
+		);
+		foreach ($dc in $defCaches) {
+			if (Test-Path -LiteralPath $dc) {
+				Remove-Item -LiteralPath $dc -Recurse -Force -ErrorAction SilentlyContinue;
+			}
+		}
+		Get-ScheduledTask -TaskPath "\Microsoft\Windows\Windows Defender\*" -ErrorAction SilentlyContinue | Disable-ScheduledTask -ErrorAction SilentlyContinue | Out-Null;
+	};
+	{
+		# eclean.gg: Deep Disk, Junk & Cache Cleaning
+		$cleanPaths = @(
+			'C:\Windows\Temp\*',
+			"$env:TEMP\*",
+			'C:\Windows\Prefetch\*',
+			'C:\Windows\SoftwareDistribution\Download\*',
+			'C:\Windows\DeliveryOptimization\Cache\*',
+			'C:\Windows\System32\LogFiles\HTTPERR\*',
+			'C:\Windows\System32\winevt\Logs\Archive-*'
+		);
+		foreach ($cp in $cleanPaths) {
+			Remove-Item -Path $cp -Recurse -Force -ErrorAction SilentlyContinue;
+		}
 	};
 	{
 		# Accessibility post-OOBE suppression: safely redirect binaries via IFEO now that OOBE is complete
@@ -2723,9 +2896,11 @@ $scripts = @(
 		schtasks.exe /change /tn "Microsoft\Windows\AppListBackup\Backup" /disable 2>$null;
 	};
 	{
-		# Get Started (はじめに) & Tips: purge remaining AppX packages for all users
-		Get-AppxPackage -AllUsers -Name *Getstarted* -ErrorAction SilentlyContinue | Remove-AppxPackage -AllUsers -ErrorAction SilentlyContinue;
-		Get-AppxPackage -AllUsers -Name *Tips* -ErrorAction SilentlyContinue | Remove-AppxPackage -AllUsers -ErrorAction SilentlyContinue;
+		# Get Started (はじめに) & Tips & 24H2 AI Bloatware: purge remaining AppX packages for all users
+		$purgeApps = @("*Getstarted*", "*Tips*", "*Copilot*", "*Recall*", "*DevHome*", "*OutlookForWindows*", "*QuickAssist*", "*PowerAutomate*");
+		foreach ($app in $purgeApps) {
+			Get-AppxPackage -AllUsers -Name $app -ErrorAction SilentlyContinue | Remove-AppxPackage -AllUsers -ErrorAction SilentlyContinue;
+		}
 	};
 	{
 		# Radical RAM: One-shot empty working set memory from setup processes and reclaim initialization heap
@@ -2746,6 +2921,241 @@ public static extern int EmptyWorkingSet(IntPtr hwProc);
 			[System.GC]::WaitForPendingFinalizers();
 		} catch {}
 	};
+	{
+		# eclean & AtlasOS: Reset and disable Fault Tolerant Heap (FTH)
+		try {
+			rundll32.exe fthsvc.dll,FthSysprepSpecialize 2>$null;
+		} catch {}
+	};
+	{
+		# eclean & AtlasOS: Automatic Disk Cleanup & Junk Purge (VolumeCaches + cleanmgr /sagerun:64)
+		try {
+			$baseKey = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\VolumeCaches';
+			$regValues = @{
+				"Active Setup Temp Folders"             = 2;
+				"BranchCache"                           = 2;
+				"Delivery Optimization Files"           = 2;
+				"Diagnostic Data Viewer database files" = 2;
+				"Downloaded Program Files"              = 2;
+				"Internet Cache Files"                  = 2;
+				"Old ChkDsk Files"                      = 2;
+				"RetailDemo Offline Content"            = 2;
+				"Setup Log Files"                       = 2;
+				"System error memory dump files"        = 2;
+				"System error minidump files"           = 2;
+				"Thumbnail Cache"                       = 2;
+				"Windows Error Reporting Files"         = 2;
+				"Device Driver Packages"                = 2;
+			};
+			foreach ($entry in $regValues.GetEnumerator()) {
+				$targetKey = "$baseKey\$($entry.Key)";
+				if (Test-Path $targetKey) {
+					Set-ItemProperty -Path $targetKey -Name 'StateFlags0064' -Value $entry.Value -Type DWord -Force -ErrorAction SilentlyContinue;
+				}
+			}
+			Start-Process -FilePath "cleanmgr.exe" -ArgumentList "/sagerun:64" -WindowStyle Hidden -ErrorAction SilentlyContinue | Out-Null;
+		} catch {}
+
+		# Purge user and system temp folders, crash dumps, and minidumps
+		foreach ($p in @($env:TEMP, $env:TMP, "$env:LOCALAPPDATA\Temp", "$env:WINDIR\Temp", "$env:LOCALAPPDATA\CrashDumps", "$env:WINDIR\Minidump")) {
+			if (Test-Path $p) {
+				Get-ChildItem -Path $p -Recurse -Force -ErrorAction SilentlyContinue | Remove-Item -Force -Recurse -ErrorAction SilentlyContinue;
+			}
+		}
+	};
+	{
+		# AtlasOS & ReviOS: Complete Hibernation Purge (Frees RAM-sized GBs from disk)
+		try {
+			& powercfg.exe /hibernate off 2>$null;
+		} catch {}
+	};
+	{
+		# AtlasOS & ReviOS: Ultimate Performance Power Plan Activation
+		try {
+			$uPlan = & powercfg.exe -duplicatescheme e9a42b02-d5df-448d-aa00-03f14749eb61 2>$null;
+			if ($uPlan -match '([a-f0-9-]{36})') {
+				& powercfg.exe -setactive $matches[1] 2>$null;
+			}
+		} catch {}
+	};
+	{
+		# AtlasOS & ReviOS: Low-Latency BCD Boot & Timer Tweaks
+		try {
+			& bcdedit.exe /set useplatformclock false 2>$null;
+			& bcdedit.exe /set disabledynamictick yes 2>$null;
+			& bcdedit.exe /set tscsyncpolicy Enhanced 2>$null;
+			& bcdedit.exe /set bootux disabled 2>$null;
+			& bcdedit.exe /set quietboot on 2>$null;
+		} catch {}
+	};
+	{
+		# AtlasOS & ReviOS: Advanced Low-Latency Network & Nagle Tuning
+		try {
+			& netsh.exe int tcp set global autotuninglevel=normal 2>$null;
+			& netsh.exe int tcp set global rss=enabled 2>$null;
+			& netsh.exe int tcp set global rsc=enabled 2>$null;
+			& netsh.exe int tcp set global ecncapability=enabled 2>$null;
+			& netsh.exe int tcp set global timestamps=disabled 2>$null;
+			& netsh.exe int tcp set heuristics disabled 2>$null;
+			$adapters = Get-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces\*' -ErrorAction SilentlyContinue;
+			foreach ($adapter in $adapters) {
+				Set-ItemProperty -Path $adapter.PSPath -Name 'TcpAckFrequency' -Value 1 -Type DWord -Force -ErrorAction SilentlyContinue;
+				Set-ItemProperty -Path $adapter.PSPath -Name 'TCPNoDelay' -Value 1 -Type DWord -Force -ErrorAction SilentlyContinue;
+			}
+		} catch {}
+	};
+	{
+		# AtlasOS & ReviOS: NTFS I/O Overhead Reduction
+		try {
+			& fsutil.exe behavior set disablelastaccess 1 2>$null;
+			& fsutil.exe 8dot3name set 1 2>$null;
+		} catch {}
+	};
+	{
+		# AtlasOS & ReviOS: Generate Desktop Maintenance & Toggle Scripts
+		try {
+			$toolsDir = "$env:PUBLIC\Desktop\Atlas-ReviOS Tools";
+			New-Item -ItemType Directory -Force -Path $toolsDir -ErrorAction SilentlyContinue | Out-Null;
+
+			# 1. Toggle Windows Defender
+			@'
+@echo off
+setlocal
+echo ========================================================
+echo   Atlas/ReviOS Tool: Toggle Windows Defender
+echo ========================================================
+sc query WinDefend | find "RUNNING" >nul
+if %errorlevel% equ 0 (
+    echo Disabling Windows Defender...
+    reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender" /v DisableAntiSpyware /t REG_DWORD /d 1 /f >nul 2>&1
+    reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection" /v DisableRealtimeMonitoring /t REG_DWORD /d 1 /f >nul 2>&1
+    sc config WinDefend start= disabled >nul 2>&1
+    sc stop WinDefend >nul 2>&1
+    echo Windows Defender has been DISABLED.
+) else (
+    echo Enabling Windows Defender...
+    reg delete "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender" /v DisableAntiSpyware /f >nul 2>&1
+    reg delete "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection" /v DisableRealtimeMonitoring /f >nul 2>&1
+    sc config WinDefend start= auto >nul 2>&1
+    sc start WinDefend >nul 2>&1
+    echo Windows Defender has been ENABLED.
+)
+pause
+'@ | Set-Content -LiteralPath "$toolsDir\1. Toggle Windows Defender.bat" -Encoding ascii;
+
+			# 2. Toggle Windows Update
+			@'
+@echo off
+setlocal
+echo ========================================================
+echo   Atlas/ReviOS Tool: Toggle Windows Update
+echo ========================================================
+sc query wuauserv | find "RUNNING" >nul
+if %errorlevel% equ 0 (
+    echo Disabling Windows Update...
+    sc config wuauserv start= disabled >nul 2>&1
+    sc stop wuauserv >nul 2>&1
+    sc config UsoSvc start= disabled >nul 2>&1
+    sc stop UsoSvc >nul 2>&1
+    sc config WaaSMedicSvc start= disabled >nul 2>&1
+    sc stop WaaSMedicSvc >nul 2>&1
+    reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU" /v NoAutoUpdate /t REG_DWORD /d 1 /f >nul 2>&1
+    echo Windows Update has been DISABLED.
+) else (
+    echo Enabling Windows Update...
+    sc config wuauserv start= demand >nul 2>&1
+    sc start wuauserv >nul 2>&1
+    sc config UsoSvc start= demand >nul 2>&1
+    sc config WaaSMedicSvc start= demand >nul 2>&1
+    reg delete "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU" /v NoAutoUpdate /f >nul 2>&1
+    echo Windows Update has been ENABLED.
+)
+pause
+'@ | Set-Content -LiteralPath "$toolsDir\2. Toggle Windows Update.bat" -Encoding ascii;
+
+			# 3. Toggle Hibernation
+			@'
+@echo off
+setlocal
+echo ========================================================
+echo   Atlas/ReviOS Tool: Toggle Hibernation
+echo ========================================================
+if exist "%SystemDrive%\hiberfil.sys" (
+    echo Disabling Hibernation and deleting hiberfil.sys...
+    powercfg.exe /h off
+    echo Hibernation is now DISABLED (Disk space freed).
+) else (
+    echo Enabling Hibernation...
+    powercfg.exe /h on
+    echo Hibernation is now ENABLED.
+)
+pause
+'@ | Set-Content -LiteralPath "$toolsDir\3. Toggle Hibernation.bat" -Encoding ascii;
+
+			# 4. Toggle Bluetooth
+			@'
+@echo off
+setlocal
+echo ========================================================
+echo   Atlas/ReviOS Tool: Toggle Bluetooth Services
+echo ========================================================
+sc query bthserv | find "RUNNING" >nul
+if %errorlevel% equ 0 (
+    echo Disabling Bluetooth...
+    sc config bthserv start= disabled >nul 2>&1
+    sc stop bthserv >nul 2>&1
+    sc config BthAvctpSvc start= disabled >nul 2>&1
+    sc stop BthAvctpSvc >nul 2>&1
+    echo Bluetooth services DISABLED.
+) else (
+    echo Enabling Bluetooth...
+    sc config bthserv start= auto >nul 2>&1
+    sc start bthserv >nul 2>&1
+    sc config BthAvctpSvc start= auto >nul 2>&1
+    sc start BthAvctpSvc >nul 2>&1
+    echo Bluetooth services ENABLED.
+)
+pause
+'@ | Set-Content -LiteralPath "$toolsDir\4. Toggle Bluetooth.bat" -Encoding ascii;
+
+			# 5. Toggle Print Spooler
+			@'
+@echo off
+setlocal
+echo ========================================================
+echo   Atlas/ReviOS Tool: Toggle Print Spooler
+echo ========================================================
+sc query Spooler | find "RUNNING" >nul
+if %errorlevel% equ 0 (
+    echo Disabling Print Spooler...
+    sc config Spooler start= disabled >nul 2>&1
+    sc stop Spooler >nul 2>&1
+    echo Print Spooler is now DISABLED.
+) else (
+    echo Enabling Print Spooler...
+    sc config Spooler start= auto >nul 2>&1
+    sc start Spooler >nul 2>&1
+    echo Print Spooler is now ENABLED.
+)
+pause
+'@ | Set-Content -LiteralPath "$toolsDir\5. Toggle Print Spooler.bat" -Encoding ascii;
+
+			# 6. Free Memory & Clear Temp
+			@'
+@echo off
+setlocal
+echo ========================================================
+echo   Atlas/ReviOS Tool: Free Memory & Clear Temp
+echo ========================================================
+echo Cleaning temporary files...
+del /s /f /q "%TEMP%\*.*" >nul 2>&1
+del /s /f /q "%SystemRoot%\Temp\*.*" >nul 2>&1
+powershell.exe -NoProfile -Command "try { $sig = '[DllImport(\"psapi.dll\")] public static extern int EmptyWorkingSet(IntPtr h);'; Add-Type -MemberDefinition $sig -Name 'Mem' -Namespace 'Win32' -ErrorAction SilentlyContinue; Get-Process | ForEach-Object { try { [Win32.Mem]::EmptyWorkingSet($_.Handle) | Out-Null } catch {} }; [GC]::Collect(); Write-Host 'RAM working set trimmed successfully.' -ForegroundColor Green } catch {}"
+echo Done.
+pause
+'@ | Set-Content -LiteralPath "$toolsDir\6. Free Memory & Clear Temp.bat" -Encoding ascii;
+		} catch {}
+	};
 );
 
 & {
@@ -2753,13 +3163,13 @@ public static extern int EmptyWorkingSet(IntPtr hwProc);
   [float] $increment = 100 / $scripts.Count;
   foreach( $script in $scripts ) {
     Write-Progress -Activity 'Running scripts to finalize your Windows installation. Do not close this window.' -PercentComplete $complete;
-    '*** Will now execute command ﾂｫ{0}ﾂｻ.' -f $(
+    '*** Will now execute command "{0}".' -f $(
       $str = $script.ToString().Trim() -replace '\s+', ' ';
       $max = 100;
       if( $str.Length -le $max ) {
         $str;
       } else {
-        $str.Substring( 0, $max - 1 ) + '窶ｦ';
+        $str.Substring( 0, $max - 1 ) + '...';
       }
     );
     $start = [datetime]::Now;
