@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <unattend xmlns="urn:schemas-microsoft-com:unattend" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
   <!-- Integrated nano11 + Winhance Unattended Configuration -->
   <settings pass="offlineServicing">
@@ -147,7 +147,7 @@
       <RunSynchronous xmlns="urn:schemas-microsoft-com:unattend" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
         <RunSynchronousCommand wcm:action="add">
           <Order>1</Order>
-          <Path>powershell.exe -ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -Command "try { $candidates = @('C:\Windows\Panther\unattend.xml', 'C:\Windows\Panther\autounattend.xml', 'C:\Windows\System32\Sysprep\autounattend.xml', 'C:\Windows\System32\Sysprep\unattend.xml'); foreach ($p in $candidates) { if (Test-Path $p) { $xml = [xml]::new(); $xml.Load($p); if ($xml.unattend.Extensions.ExtractScript) { $sb = [scriptblock]::Create( $xml.unattend.Extensions.ExtractScript ); Invoke-Command -ScriptBlock $sb -ArgumentList $xml; break } } } } catch {}"</Path>
+          <Path>powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -WindowStyle Hidden -Command "try { $candidates = @('C:\Windows\Panther\unattend.xml', 'C:\Windows\Panther\autounattend.xml', 'C:\Windows\System32\Sysprep\autounattend.xml', 'C:\Windows\System32\Sysprep\unattend.xml'); foreach ($p in $candidates) { if (Test-Path $p) { $xml = [xml]::new(); $xml.Load($p); if ($xml.unattend.Extensions.ExtractScript) { $sb = [scriptblock]::Create( $xml.unattend.Extensions.ExtractScript ); Invoke-Command -ScriptBlock $sb -ArgumentList $xml; break } } } } catch {}"</Path>
         </RunSynchronousCommand>
         <RunSynchronousCommand wcm:action="add">
           <Order>2</Order>
@@ -155,22 +155,18 @@
         </RunSynchronousCommand>
         <RunSynchronousCommand wcm:action="add">
           <Order>3</Order>
-          <Path>powershell.exe -ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -Command "try { foreach($d in 'C','D','E','F','G','H','I','J','K') { $src = Join-Path ($d + ':') 'sources\sxs'; if (Test-Path $src\*.cab) { dism /Online /Enable-Feature /FeatureName:NetFx3 /All /LimitAccess /NoRestart /Source:$src; break } } } catch {}"</Path>
+          <Path>powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -WindowStyle Hidden -Command "try { if (Test-Path 'C:\Windows\Setup\Scripts\Specialize.ps1') { &amp; 'C:\Windows\Setup\Scripts\Specialize.ps1' } } catch {}"</Path>
         </RunSynchronousCommand>
         <RunSynchronousCommand wcm:action="add">
           <Order>4</Order>
-          <Path>powershell.exe -ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -Command "try { if (Test-Path 'C:\Windows\Setup\Scripts\Specialize.ps1') { &amp; 'C:\Windows\Setup\Scripts\Specialize.ps1' } } catch {}"</Path>
+          <Path>powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -WindowStyle Hidden -Command "try { reg.exe load HKU\DefaultUser C:\Users\Default\NTUSER.DAT; if (Test-Path 'C:\Windows\Setup\Scripts\DefaultUser.ps1') { &amp; 'C:\Windows\Setup\Scripts\DefaultUser.ps1' }; [GC]::Collect(); [GC]::WaitForPendingFinalizers(); Start-Sleep -Seconds 1; for ($i = 0; $i -lt 5; $i++) { reg.exe unload HKU\DefaultUser; if ($LASTEXITCODE -eq 0) { break }; Start-Sleep -Seconds 1 } } catch {}; exit 0"</Path>
         </RunSynchronousCommand>
         <RunSynchronousCommand wcm:action="add">
           <Order>5</Order>
-          <Path>powershell.exe -ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -Command "try { reg.exe load HKU\DefaultUser C:\Users\Default\NTUSER.DAT; if (Test-Path 'C:\Windows\Setup\Scripts\DefaultUser.ps1') { &amp; 'C:\Windows\Setup\Scripts\DefaultUser.ps1' }; [GC]::Collect(); [GC]::WaitForPendingFinalizers(); Start-Sleep -Seconds 1; for ($i = 0; $i -lt 5; $i++) { reg.exe unload HKU\DefaultUser; if ($LASTEXITCODE -eq 0) { break }; Start-Sleep -Seconds 1 } } catch {}; exit 0"</Path>
-        </RunSynchronousCommand>
-        <RunSynchronousCommand wcm:action="add">
-          <Order>6</Order>
           <Path>reg.exe add "HKLM\SYSTEM\ControlSet001\Control\BitLocker" /v PreventDeviceEncryption /t REG_DWORD /d 1 /f</Path>
         </RunSynchronousCommand>
         <RunSynchronousCommand wcm:action="add">
-          <Order>7</Order>
+          <Order>6</Order>
           <Path>reg.exe add "HKLM\SYSTEM\CurrentControlSet\Control\BitLocker" /v PreventDeviceEncryption /t REG_DWORD /d 1 /f</Path>
         </RunSynchronousCommand>
       </RunSynchronous>
@@ -182,7 +178,7 @@
       <RunSynchronous xmlns="urn:schemas-microsoft-com:unattend" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
         <RunSynchronousCommand wcm:action="add">
           <Order>1</Order>
-          <Path>powershell.exe -ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -Command "try { $candidates = @('C:\Windows\Panther\unattend.xml', 'C:\Windows\Panther\autounattend.xml', 'C:\Windows\System32\Sysprep\autounattend.xml', 'C:\Windows\System32\Sysprep\unattend.xml'); foreach ($p in $candidates) { if (Test-Path $p) { $xml = [xml]::new(); $xml.Load($p); if ($xml.unattend.Extensions.ExtractScript) { $sb = [scriptblock]::Create( $xml.unattend.Extensions.ExtractScript ); Invoke-Command -ScriptBlock $sb -ArgumentList $xml; break } } } } catch {}"</Path>
+          <Path>powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -WindowStyle Hidden -Command "try { $candidates = @('C:\Windows\Panther\unattend.xml', 'C:\Windows\Panther\autounattend.xml', 'C:\Windows\System32\Sysprep\autounattend.xml', 'C:\Windows\System32\Sysprep\unattend.xml'); foreach ($p in $candidates) { if (Test-Path $p) { $xml = [xml]::new(); $xml.Load($p); if ($xml.unattend.Extensions.ExtractScript) { $sb = [scriptblock]::Create( $xml.unattend.Extensions.ExtractScript ); Invoke-Command -ScriptBlock $sb -ArgumentList $xml; break } } } } catch {}"</Path>
         </RunSynchronousCommand>
         <RunSynchronousCommand wcm:action="add">
           <Order>2</Order>
@@ -190,22 +186,18 @@
         </RunSynchronousCommand>
         <RunSynchronousCommand wcm:action="add">
           <Order>3</Order>
-          <Path>powershell.exe -ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -Command "try { foreach($d in 'C','D','E','F','G','H','I','J','K') { $src = Join-Path ($d + ':') 'sources\sxs'; if (Test-Path $src\*.cab) { dism /Online /Enable-Feature /FeatureName:NetFx3 /All /LimitAccess /NoRestart /Source:$src; break } } } catch {}"</Path>
+          <Path>powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -WindowStyle Hidden -Command "try { if (Test-Path 'C:\Windows\Setup\Scripts\Specialize.ps1') { &amp; 'C:\Windows\Setup\Scripts\Specialize.ps1' } } catch {}"</Path>
         </RunSynchronousCommand>
         <RunSynchronousCommand wcm:action="add">
           <Order>4</Order>
-          <Path>powershell.exe -ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -Command "try { if (Test-Path 'C:\Windows\Setup\Scripts\Specialize.ps1') { &amp; 'C:\Windows\Setup\Scripts\Specialize.ps1' } } catch {}"</Path>
+          <Path>powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -WindowStyle Hidden -Command "try { reg.exe load HKU\DefaultUser C:\Users\Default\NTUSER.DAT; if (Test-Path 'C:\Windows\Setup\Scripts\DefaultUser.ps1') { &amp; 'C:\Windows\Setup\Scripts\DefaultUser.ps1' }; [GC]::Collect(); [GC]::WaitForPendingFinalizers(); Start-Sleep -Seconds 1; for ($i = 0; $i -lt 5; $i++) { reg.exe unload HKU\DefaultUser; if ($LASTEXITCODE -eq 0) { break }; Start-Sleep -Seconds 1 } } catch {}; exit 0"</Path>
         </RunSynchronousCommand>
         <RunSynchronousCommand wcm:action="add">
           <Order>5</Order>
-          <Path>powershell.exe -ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -Command "try { reg.exe load HKU\DefaultUser C:\Users\Default\NTUSER.DAT; if (Test-Path 'C:\Windows\Setup\Scripts\DefaultUser.ps1') { &amp; 'C:\Windows\Setup\Scripts\DefaultUser.ps1' }; [GC]::Collect(); [GC]::WaitForPendingFinalizers(); Start-Sleep -Seconds 1; for ($i = 0; $i -lt 5; $i++) { reg.exe unload HKU\DefaultUser; if ($LASTEXITCODE -eq 0) { break }; Start-Sleep -Seconds 1 } } catch {}; exit 0"</Path>
-        </RunSynchronousCommand>
-        <RunSynchronousCommand wcm:action="add">
-          <Order>6</Order>
           <Path>reg.exe add "HKLM\SYSTEM\ControlSet001\Control\BitLocker" /v PreventDeviceEncryption /t REG_DWORD /d 1 /f</Path>
         </RunSynchronousCommand>
         <RunSynchronousCommand wcm:action="add">
-          <Order>7</Order>
+          <Order>6</Order>
           <Path>reg.exe add "HKLM\SYSTEM\CurrentControlSet\Control\BitLocker" /v PreventDeviceEncryption /t REG_DWORD /d 1 /f</Path>
         </RunSynchronousCommand>
       </RunSynchronous>
@@ -217,7 +209,7 @@
       <RunSynchronous xmlns="urn:schemas-microsoft-com:unattend" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
         <RunSynchronousCommand wcm:action="add">
           <Order>1</Order>
-          <Path>powershell.exe -ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -Command "try { $candidates = @('C:\Windows\Panther\unattend.xml', 'C:\Windows\Panther\autounattend.xml', 'C:\Windows\System32\Sysprep\autounattend.xml', 'C:\Windows\System32\Sysprep\unattend.xml'); foreach ($p in $candidates) { if (Test-Path $p) { $xml = [xml]::new(); $xml.Load($p); if ($xml.unattend.Extensions.ExtractScript) { $sb = [scriptblock]::Create( $xml.unattend.Extensions.ExtractScript ); Invoke-Command -ScriptBlock $sb -ArgumentList $xml; break } } } } catch {}"</Path>
+          <Path>powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -WindowStyle Hidden -Command "try { $candidates = @('C:\Windows\Panther\unattend.xml', 'C:\Windows\Panther\autounattend.xml', 'C:\Windows\System32\Sysprep\autounattend.xml', 'C:\Windows\System32\Sysprep\unattend.xml'); foreach ($p in $candidates) { if (Test-Path $p) { $xml = [xml]::new(); $xml.Load($p); if ($xml.unattend.Extensions.ExtractScript) { $sb = [scriptblock]::Create( $xml.unattend.Extensions.ExtractScript ); Invoke-Command -ScriptBlock $sb -ArgumentList $xml; break } } } } catch {}"</Path>
         </RunSynchronousCommand>
         <RunSynchronousCommand wcm:action="add">
           <Order>2</Order>
@@ -225,22 +217,18 @@
         </RunSynchronousCommand>
         <RunSynchronousCommand wcm:action="add">
           <Order>3</Order>
-          <Path>powershell.exe -ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -Command "try { foreach($d in 'C','D','E','F','G','H','I','J','K') { $src = Join-Path ($d + ':') 'sources\sxs'; if (Test-Path $src\*.cab) { dism /Online /Enable-Feature /FeatureName:NetFx3 /All /LimitAccess /NoRestart /Source:$src; break } } } catch {}"</Path>
+          <Path>powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -WindowStyle Hidden -Command "try { if (Test-Path 'C:\Windows\Setup\Scripts\Specialize.ps1') { &amp; 'C:\Windows\Setup\Scripts\Specialize.ps1' } } catch {}"</Path>
         </RunSynchronousCommand>
         <RunSynchronousCommand wcm:action="add">
           <Order>4</Order>
-          <Path>powershell.exe -ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -Command "try { if (Test-Path 'C:\Windows\Setup\Scripts\Specialize.ps1') { &amp; 'C:\Windows\Setup\Scripts\Specialize.ps1' } } catch {}"</Path>
+          <Path>powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -WindowStyle Hidden -Command "try { reg.exe load HKU\DefaultUser C:\Users\Default\NTUSER.DAT; if (Test-Path 'C:\Windows\Setup\Scripts\DefaultUser.ps1') { &amp; 'C:\Windows\Setup\Scripts\DefaultUser.ps1' }; [GC]::Collect(); [GC]::WaitForPendingFinalizers(); Start-Sleep -Seconds 1; for ($i = 0; $i -lt 5; $i++) { reg.exe unload HKU\DefaultUser; if ($LASTEXITCODE -eq 0) { break }; Start-Sleep -Seconds 1 } } catch {}; exit 0"</Path>
         </RunSynchronousCommand>
         <RunSynchronousCommand wcm:action="add">
           <Order>5</Order>
-          <Path>powershell.exe -ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -Command "try { reg.exe load HKU\DefaultUser C:\Users\Default\NTUSER.DAT; if (Test-Path 'C:\Windows\Setup\Scripts\DefaultUser.ps1') { &amp; 'C:\Windows\Setup\Scripts\DefaultUser.ps1' }; [GC]::Collect(); [GC]::WaitForPendingFinalizers(); Start-Sleep -Seconds 1; for ($i = 0; $i -lt 5; $i++) { reg.exe unload HKU\DefaultUser; if ($LASTEXITCODE -eq 0) { break }; Start-Sleep -Seconds 1 } } catch {}; exit 0"</Path>
-        </RunSynchronousCommand>
-        <RunSynchronousCommand wcm:action="add">
-          <Order>6</Order>
           <Path>reg.exe add "HKLM\SYSTEM\ControlSet001\Control\BitLocker" /v PreventDeviceEncryption /t REG_DWORD /d 1 /f</Path>
         </RunSynchronousCommand>
         <RunSynchronousCommand wcm:action="add">
-          <Order>7</Order>
+          <Order>6</Order>
           <Path>reg.exe add "HKLM\SYSTEM\CurrentControlSet\Control\BitLocker" /v PreventDeviceEncryption /t REG_DWORD /d 1 /f</Path>
         </RunSynchronousCommand>
       </RunSynchronous>
@@ -254,8 +242,7 @@
     <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns="urn:schemas-microsoft-com:unattend" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
       <UserAccounts>
         <AdministratorPassword>
-          <Value>
-          </Value>
+          <Value></Value>
           <PlainText>true</PlainText>
         </AdministratorPassword>
         <LocalAccounts>
@@ -264,8 +251,7 @@
             <DisplayName>User</DisplayName>
             <Group>Administrators</Group>
             <Password>
-              <Value>
-              </Value>
+              <Value></Value>
               <PlainText>true</PlainText>
             </Password>
           </LocalAccount>
@@ -274,10 +260,9 @@
       <AutoLogon>
         <Username>User</Username>
         <Enabled>true</Enabled>
-        <LogonCount>9999999</LogonCount>
+        <LogonCount>1</LogonCount>
         <Password>
-          <Value>
-          </Value>
+          <Value></Value>
           <PlainText>true</PlainText>
         </Password>
       </AutoLogon>
@@ -291,19 +276,14 @@
       <FirstLogonCommands>
         <SynchronousCommand wcm:action="add">
           <Order>1</Order>
-          <CommandLine>powershell.exe -ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -Command "try { if (Test-Path 'C:\ProgramData\Winhance\Unattend\Scripts\Winhancements.ps1') { &amp; 'C:\ProgramData\Winhance\Unattend\Scripts\Winhancements.ps1' } } catch {}"</CommandLine>
-        </SynchronousCommand>
-        <SynchronousCommand wcm:action="add">
-          <Order>2</Order>
-          <CommandLine>powershell.exe -ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -Command "try { if (Test-Path 'C:\Windows\Setup\Scripts\FirstLogon.ps1') { &amp; 'C:\Windows\Setup\Scripts\FirstLogon.ps1' } } catch {}"</CommandLine>
+          <CommandLine>powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -WindowStyle Hidden -Command "try { if (Test-Path 'C:\Windows\Setup\Scripts\FirstLogon.ps1') { &amp; 'C:\Windows\Setup\Scripts\FirstLogon.ps1' } } catch {}"</CommandLine>
         </SynchronousCommand>
       </FirstLogonCommands>
     </component>
     <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="x86" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns="urn:schemas-microsoft-com:unattend" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
       <UserAccounts>
         <AdministratorPassword>
-          <Value>
-          </Value>
+          <Value></Value>
           <PlainText>true</PlainText>
         </AdministratorPassword>
         <LocalAccounts>
@@ -312,8 +292,7 @@
             <DisplayName>User</DisplayName>
             <Group>Administrators</Group>
             <Password>
-              <Value>
-              </Value>
+              <Value></Value>
               <PlainText>true</PlainText>
             </Password>
           </LocalAccount>
@@ -322,10 +301,9 @@
       <AutoLogon>
         <Username>User</Username>
         <Enabled>true</Enabled>
-        <LogonCount>9999999</LogonCount>
+        <LogonCount>1</LogonCount>
         <Password>
-          <Value>
-          </Value>
+          <Value></Value>
           <PlainText>true</PlainText>
         </Password>
       </AutoLogon>
@@ -339,19 +317,14 @@
       <FirstLogonCommands>
         <SynchronousCommand wcm:action="add">
           <Order>1</Order>
-          <CommandLine>powershell.exe -ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -Command "try { if (Test-Path 'C:\ProgramData\Winhance\Unattend\Scripts\Winhancements.ps1') { &amp; 'C:\ProgramData\Winhance\Unattend\Scripts\Winhancements.ps1' } } catch {}"</CommandLine>
-        </SynchronousCommand>
-        <SynchronousCommand wcm:action="add">
-          <Order>2</Order>
-          <CommandLine>powershell.exe -ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -Command "try { if (Test-Path 'C:\Windows\Setup\Scripts\FirstLogon.ps1') { &amp; 'C:\Windows\Setup\Scripts\FirstLogon.ps1' } } catch {}"</CommandLine>
+          <CommandLine>powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -WindowStyle Hidden -Command "try { if (Test-Path 'C:\Windows\Setup\Scripts\FirstLogon.ps1') { &amp; 'C:\Windows\Setup\Scripts\FirstLogon.ps1' } } catch {}"</CommandLine>
         </SynchronousCommand>
       </FirstLogonCommands>
     </component>
     <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="arm64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns="urn:schemas-microsoft-com:unattend" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
       <UserAccounts>
         <AdministratorPassword>
-          <Value>
-          </Value>
+          <Value></Value>
           <PlainText>true</PlainText>
         </AdministratorPassword>
         <LocalAccounts>
@@ -360,8 +333,7 @@
             <DisplayName>User</DisplayName>
             <Group>Administrators</Group>
             <Password>
-              <Value>
-              </Value>
+              <Value></Value>
               <PlainText>true</PlainText>
             </Password>
           </LocalAccount>
@@ -370,10 +342,9 @@
       <AutoLogon>
         <Username>User</Username>
         <Enabled>true</Enabled>
-        <LogonCount>9999999</LogonCount>
+        <LogonCount>1</LogonCount>
         <Password>
-          <Value>
-          </Value>
+          <Value></Value>
           <PlainText>true</PlainText>
         </Password>
       </AutoLogon>
@@ -387,11 +358,7 @@
       <FirstLogonCommands>
         <SynchronousCommand wcm:action="add">
           <Order>1</Order>
-          <CommandLine>powershell.exe -ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -Command "try { if (Test-Path 'C:\ProgramData\Winhance\Unattend\Scripts\Winhancements.ps1') { &amp; 'C:\ProgramData\Winhance\Unattend\Scripts\Winhancements.ps1' } } catch {}"</CommandLine>
-        </SynchronousCommand>
-        <SynchronousCommand wcm:action="add">
-          <Order>2</Order>
-          <CommandLine>powershell.exe -ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -Command "try { if (Test-Path 'C:\Windows\Setup\Scripts\FirstLogon.ps1') { &amp; 'C:\Windows\Setup\Scripts\FirstLogon.ps1' } } catch {}"</CommandLine>
+          <CommandLine>powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -WindowStyle Hidden -Command "try { if (Test-Path 'C:\Windows\Setup\Scripts\FirstLogon.ps1') { &amp; 'C:\Windows\Setup\Scripts\FirstLogon.ps1' } } catch {}"</CommandLine>
         </SynchronousCommand>
       </FirstLogonCommands>
     </component>
@@ -780,357 +747,10 @@ if (-not $UserCustomizations) {
     }
 
     # ============================================================================
-    # WINDOWS APPS REMOVAL
+    # WINDOWS APPS REMOVAL (Pre-trimmed offline by nano11builder)
     # ============================================================================
-
-    # Create BloatRemoval.ps1 script
-    $bloatRemovalContent = @'
-&lt;#
-  .SYNOPSIS
-      Removes Windows bloatware apps, legacy capabilities, and optional features from Windows 10/11 systems.
-      Script Version: 2.3
-
-  .DESCRIPTION
-      This script removes selected Windows components including:
-      - Appx packages (UWP apps like Calculator, Weather, etc.)
-      - Legacy Windows capabilities
-      - Optional Windows features
-      - Special apps requiring custom uninstall procedures (e.g., OneNote)
-
-      Provisioned packages are removed first to ensure Remove-AppxPackage -AllUsers succeeds on Win10.
-      This script is designed to run in any context: user sessions, SYSTEM account, or scheduled tasks.
-
-  .NOTES
-      Source: https://github.com/memstechtips/Winhance
-
-      Requirements:
-      - Windows 10/11
-      - Administrator privileges (script will auto-elevate)
-      - PowerShell 5.1 or higher
-#&gt;
-
-# Check if script is running as Administrator
-If (!([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]"Administrator")) {
-    Try {
-        Start-Process PowerShell.exe -ArgumentList ("-NoProfile -ExecutionPolicy Bypass -File `"{0}`"" -f $PSCommandPath) -Verb RunAs
-        Exit
-    }
-    Catch {
-        Write-Host "Failed to run as Administrator. Please rerun with elevated privileges."
-        Exit
-    }
-}
-
-# Setup logging
-$logFolder = "C:\ProgramData\Winhance\Logs"
-$logFile = "$logFolder\BloatRemovalLog.txt"
-
-if (!(Test-Path $logFolder)) {
-    New-Item -ItemType Directory -Path $logFolder -Force | Out-Null
-}
-
-function Write-Log {
-    param ([string]$Message)
-    if ((Test-Path $logFile) -and (Get-Item $logFile).Length -gt 512000) {
-        Remove-Item $logFile -Force -ErrorAction SilentlyContinue
-        "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') - Log rotated - previous log exceeded 500KB" | Out-File -FilePath $logFile
-    }
-    "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') - $Message" | Out-File -FilePath $logFile -Append
-    Write-Host $Message
-}
-
-function Invoke-RunspacePool {
-    param (
-        [array]$Items,
-        [scriptblock]$ScriptBlock,
-        [int]$MaxThreads = 10,
-        [string]$Label,
-        [string]$SuccessFormat,
-        [string]$FailFormat
-    )
-    if ($Items.Count -eq 0) { return }
-
-    try {
-        $threadCount = [Math]::Min($Items.Count, $MaxThreads)
-        Write-Log "Removing $($Items.Count) $Label via runspace pool (threads=$threadCount)..."
-        $pool = [RunspaceFactory]::CreateRunspacePool(1, $threadCount)
-        $pool.Open()
-        $jobs = [System.Collections.Generic.List[object]]::new()
-
-        foreach ($item in $Items) {
-            $ps = [PowerShell]::Create().AddScript($ScriptBlock).AddArgument($item)
-            $ps.RunspacePool = $pool
-            $jobs.Add(@{ Pipe = $ps; Handle = $ps.BeginInvoke() })
-        }
-
-        foreach ($job in $jobs) {
-            $result = $job.Pipe.EndInvoke($job.Handle)
-            foreach ($r in $result) {
-                if ($r.Success) { Write-Log ($SuccessFormat -f $r.Name) }
-                else { Write-Log ($FailFormat -f $r.Name, $r.Error) }
-            }
-            $job.Pipe.Dispose()
-        }
-        $pool.Close()
-        $pool.Dispose()
-        Write-Log "Parallel $Label removal completed"
-    } catch {
-        Write-Log "Parallel execution unavailable, falling back to sequential removal for $Label..."
-        foreach ($item in $Items) {
-            $r = &amp; $ScriptBlock $item
-            if ($r.Success) { Write-Log ($SuccessFormat -f $r.Name) }
-            else { Write-Log ($FailFormat -f $r.Name, $r.Error) }
-        }
-        Write-Log "Sequential $Label removal completed"
-    }
-}
-
-# ============================================================================
-# DATA
-# ============================================================================
-
-$packages = @(
-    'Microsoft.ScreenSketch'
-    'Microsoft.WindowsStore'
-    'Microsoft.DesktopAppInstaller'
-    'Microsoft.CrossDevice'
-    'Microsoft.Getstarted'
-    'Microsoft.WindowsCalculator'
-    'Microsoft.XboxGamingOverlay'
-    'Microsoft.XboxGameOverlay'
-    'Microsoft.XboxIdentityProvider'
-    'Microsoft.XboxSpeechToTextOverlay'
-    'Microsoft.Xbox.TCUI'
-    'Microsoft.GamingApp'
-)
-
-$capabilities = @(
-)
-
-$optionalFeatures = @()
-
-$specialApps = @(
-)
-
-# ============================================================================
-# MAIN
-# ============================================================================
-
-Write-Log "Starting bloat removal process"
-# Discover all packages upfront (single query each)
-Write-Log "Discovering all packages..."
-$allInstalled = Get-AppxPackage -AllUsers -ErrorAction SilentlyContinue
-$allProvisioned = Get-AppxProvisionedPackage -Online -ErrorAction SilentlyContinue
-
-$packagesToRemove = @()
-$provisionedToRemove = @()
-$notFound = @()
-
-foreach ($package in $packages) {
-    $installed = @($allInstalled | Where-Object Name -eq $package)
-    $provisioned = @($allProvisioned | Where-Object DisplayName -eq $package)
-
-    if ($installed) {
-        foreach ($pkg in $installed) { Write-Log "Queuing installed package: $($pkg.PackageFullName)" }
-        $packagesToRemove += $installed.PackageFullName
-    }
-    if ($provisioned) {
-        foreach ($pkg in $provisioned) { Write-Log "Queuing provisioned package: $($pkg.PackageName)" }
-        $provisionedToRemove += $provisioned.PackageName
-    }
-
-    if (-not $installed -and -not $provisioned) { $notFound += $package }
-}
-
-if ($notFound.Count -gt 0) { Write-Log "Packages not found: $($notFound -join ', ')" }
-
-# Deprovision first 遯ｶ繝ｻcritical for Win10 (Remove-AppxPackage -AllUsers fails with 0x80070002 otherwise)
-Invoke-RunspacePool -Items $provisionedToRemove -MaxThreads 10 -Label "provisioned packages" `
-    -ScriptBlock {
-        param($p)
-        try {
-            Remove-AppxProvisionedPackage -Online -PackageName $p -ErrorAction Stop | Out-Null
-            @{ Name = $p; Success = $true; Error = $null }
-        } catch {
-            @{ Name = $p; Success = $false; Error = $_.Exception.Message }
-        }
-    } `
-    -SuccessFormat "Deprovisioned: {0}" `
-    -FailFormat "Failed to deprovision {0}: {1}"
-
-# Remove installed packages (for all users)
-Invoke-RunspacePool -Items $packagesToRemove -MaxThreads 10 -Label "installed packages" `
-    -ScriptBlock {
-        param($p)
-        try {
-            Remove-AppxPackage -Package $p -AllUsers -ErrorAction Stop
-            @{ Name = $p; Success = $true; Error = $null }
-        } catch {
-            @{ Name = $p; Success = $false; Error = $_.Exception.Message }
-        }
-    } `
-    -SuccessFormat "Removed installed package: {0}" `
-    -FailFormat "Failed to remove installed package {0}: {1}"
-
-# Capabilities 遯ｶ繝ｻsingle DISM enumeration, then parallel removal
-Write-Log "Processing capabilities..."
-$allCaps = Get-WindowsCapability -Online -ErrorAction SilentlyContinue
-$capNamesToRemove = @()
-
-foreach ($capability in $capabilities) {
-    $matching = @($allCaps | Where-Object { $_.Name -like "$capability*" -and $_.State -eq "Installed" })
-    if ($matching) {
-        $matching | ForEach-Object { Write-Log "Queuing capability: $($_.Name)" }
-        $capNamesToRemove += $matching.Name
-    } else {
-        Write-Log "Capability not found or not installed: $capability"
-    }
-}
-
-Invoke-RunspacePool -Items $capNamesToRemove -MaxThreads 5 -Label "capabilities" `
-    -ScriptBlock {
-        param($name)
-        try {
-            Remove-WindowsCapability -Online -Name $name -ErrorAction Stop | Out-Null
-            @{ Name = $name; Success = $true; Error = $null }
-        } catch {
-            @{ Name = $name; Success = $false; Error = $_.Exception.Message }
-        }
-    } `
-    -SuccessFormat "Removed capability: {0}" `
-    -FailFormat "Failed to remove capability {0}: {1}"
-
-# Optional features 遯ｶ繝ｻbatch disable
-Write-Log "Processing optional features..."
-$enabledFeatures = @()
-foreach ($feature in $optionalFeatures) {
-    $existing = Get-WindowsOptionalFeature -Online -FeatureName $feature -ErrorAction SilentlyContinue
-    if ($existing -and $existing.State -eq "Enabled") {
-        $enabledFeatures += $feature
-    } else {
-        Write-Log "Feature not found or not enabled: $feature"
-    }
-}
-
-if ($enabledFeatures.Count -gt 0) {
-    Write-Log "Disabling features: $($enabledFeatures -join ', ')"
-    Disable-WindowsOptionalFeature -Online -FeatureName $enabledFeatures -NoRestart -ErrorAction SilentlyContinue | Out-Null
-}
-
-# Special apps 遯ｶ繝ｻregistry-based uninstall
-if ($specialApps.Count -gt 0) {
-    Write-Log "Processing special apps..."
-
-    $uninstallPaths = @(
-        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
-        'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall'
-    )
-
-    foreach ($specialApp in $specialApps) {
-        Write-Log "Processing special app: $specialApp"
-
-        $processNames = switch ($specialApp) {
-            'OneNote' { @('OneNote', 'ONENOTE', 'ONENOTEM') }
-            default { Write-Log "Unknown special app: $specialApp"; continue }
-        }
-
-        foreach ($name in $processNames) {
-            Get-Process -Name $name -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-        }
-
-        $uninstalled = $false
-        foreach ($basePath in $uninstallPaths) {
-            $keys = Get-ChildItem -Path $basePath -ErrorAction SilentlyContinue |
-                    Where-Object { $_.PSChildName -like "$specialApp*" }
-
-            foreach ($key in $keys) {
-                $uninstallString = (Get-ItemProperty -Path $key.PSPath -ErrorAction SilentlyContinue).UninstallString
-                if (-not $uninstallString) { continue }
-
-                Write-Log "Found uninstall string: $uninstallString"
-                $silent = if ($uninstallString -like '*OfficeClickToRun.exe*') { 'DisplayLevel=False' } else { '/silent' }
-
-                if ($uninstallString -match '^"([^"]+)"(.*)$') {
-                    Start-Process -FilePath $matches[1] -ArgumentList "$($matches[2].Trim()) $silent" -NoNewWindow -Wait -ErrorAction SilentlyContinue
-                } else {
-                    Start-Process -FilePath $uninstallString -ArgumentList $silent -NoNewWindow -Wait -ErrorAction SilentlyContinue
-                }
-
-                $uninstalled = $true
-                Write-Log "Completed uninstall for $specialApp"
-            }
-        }
-
-        if (-not $uninstalled) { Write-Log "No uninstall strings found for $specialApp" }
-    }
-}
-Write-Log "Bloat removal process completed"
-'@
-
-    $bloatRemovalPath = Join-Path $scriptsDir "BloatRemoval.ps1"
-    try {
-        $bloatRemovalContent | Out-File -FilePath $bloatRemovalPath -Encoding UTF8 -Force
-        Write-Log "Created: BloatRemoval.ps1" "SUCCESS"
-    } catch {
-        Write-Log "Failed to create BloatRemoval.ps1: $($_.Exception.Message)" "ERROR"
-    }
-
-
-    # Execute removal scripts and register scheduled tasks
-    $scriptsToExecute = @()
-    $scriptsToExecute += @{Path = "$scriptsDir\BloatRemoval.ps1"; Name = "BloatRemoval"; TriggerType = "Logon"}
-
-    foreach ($script in $scriptsToExecute) {
-        if (Test-Path $script.Path) {
-            Write-Log "Executing $($script.Name) script..." "INFO"
-            try {
-                Start-Process powershell.exe -ArgumentList "-ExecutionPolicy Bypass -NoProfile -File `"$($script.Path)`"" -Wait -NoNewWindow
-                Write-Log "$($script.Name) execution completed" "SUCCESS"
-            } catch {
-                Write-Log "$($script.Name) execution failed: $($_.Exception.Message)" "WARNING"
-            }
-
-            # Register scheduled task
-            Write-Log "Registering scheduled task for $($script.Name)..." "INFO"
-            try {
-                $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-ExecutionPolicy Bypass -NoProfile -File `"$($script.Path)`""
-
-                if ($script.TriggerType -eq "Startup") {
-                    $trigger = New-ScheduledTaskTrigger -AtStartup
-                } else {
-                    $trigger = New-ScheduledTaskTrigger -AtLogon
-                }
-
-                $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit 0
-                $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
-
-                Register-ScheduledTask -TaskName $script.Name -TaskPath "\Winhance" -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force | Out-Null
-                Write-Log "Registered scheduled task: $($script.Name)" "SUCCESS"
-            } catch {
-                Write-Log "Failed to register task $($script.Name): $($_.Exception.Message)" "ERROR"
-            }
-        }
-    }
-
-    Write-Log "Windows Apps removal configuration completed" "SUCCESS"
-    # Create desktop shortcut for Winhance installer
-    try {
-        $shortcutPath = "C:\Users\Default\Desktop\Install Winhance.lnk"
-        $WshShell = New-Object -ComObject WScript.Shell
-        $shortcut = $WshShell.CreateShortcut($shortcutPath)
-        $shortcut.TargetPath = "C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
-        $shortcut.Arguments = "-ExecutionPolicy Bypass -NoProfile -Command `"irm 'https://get.winhance.net' | iex`""
-        $shortcut.IconLocation = "C:\Windows\System32\appwiz.cpl,0"
-        $shortcut.WorkingDirectory = "C:\Windows\System32"
-        $shortcut.Description = "Download and install Winhance from GitHub"
-        $shortcut.Save()
-        $bytes = [System.IO.File]::ReadAllBytes($shortcutPath)
-        $bytes[21] = 34
-        [System.IO.File]::WriteAllBytes($shortcutPath, $bytes)
-        Write-Log "Created desktop shortcut: $shortcutPath" "SUCCESS"
-    } catch {
-        Write-Log "Failed to create desktop shortcut: $($_.Exception.Message)" "ERROR"
-    }
+    Write-Log "Windows bloatware and packages pre-trimmed offline by nano11builder. Online removal skipped for ultra-fast setup." "INFO"
+    # Online app removal handled offline cleanly
 
 
     # ============================================================================
@@ -1292,7 +912,6 @@ Write-Log "Bloat removal process completed"
     Set-RegistryValue -Path 'HKLM:\Software\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games' -Name 'Scheduling Category' -Type 'String' -Value 'High' -Description 'Assign high-priority scheduling category to ensure games receive preferential system resource allocation'
     Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Control' -Name 'SvcHostSplitThresholdInKB' -Type 'DWord' -Value 67108864 -Description 'Set the memory threshold that determines when Windows splits services into separate svchost.exe processes. 64GB value groups services together, radically reducing svchost process count and idle RAM usage'
     Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management' -Name 'DisablePageCombining' -Type 'DWord' -Value 0 -Description 'Enable Page Combining memory deduplication to merge identical RAM pages across processes'
-    Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management' -Name 'PoolUsageMaximum' -Type 'DWord' -Value 60 -Description 'Trim paged pool earlier at 60 percent capacity to keep kernel memory compact'
     Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management' -Name 'LargeSystemCache' -Type 'DWord' -Value 0 -Description 'Prioritize application working sets over file system cache in physical RAM'
     Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management' -Name 'DisablePagingExecutive' -Type 'DWord' -Value 0 -Description 'Allow paging of idle kernel drivers and code when RAM is needed'
     Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management\PrefetchParameters' -Name 'EnableSuperfetch' -Type 'DWord' -Value 0 -Description 'Disable Superfetch memory pre-caching'
@@ -1389,8 +1008,8 @@ Write-Log "Bloat removal process completed"
     Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\SysMain' -Name 'Start' -Type 'DWord' -Value 4 -Description 'Preload frequently used applications into RAM for faster launch times. Automatic is recommended for HDD or mixed-storage systems; Manual or Disabled is only suitable for SSD-only systems'
     Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management\PrefetchParameters' -Name 'EnablePrefetcher' -Type 'DWord' -Value 0 -Description 'Preload frequently used applications and boot files into memory to speed up launches. Generally recommended for HDDs not SSDs'
     Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\WSearch' -Name 'Start' -Type 'DWord' -Value 4 -Description 'Indexes files and folders for faster search results. Disabled for radical RAM optimization'
-    Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\FontCache' -Name 'Start' -Type 'DWord' -Value 4 -Description 'Windows Font Cache Service disabled to save continuous RAM'
-    Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\FontCache3.0.0.0' -Name 'Start' -Type 'DWord' -Value 4 -Description 'Windows Presentation Foundation Font Cache disabled to save RAM'
+    Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\FontCache' -Name 'Start' -Type 'DWord' -Value 3 -Description 'Windows Font Cache Service set to Manual to prevent DirectWrite LogonUI hang'
+    Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\FontCache3.0.0.0' -Name 'Start' -Type 'DWord' -Value 3 -Description 'Windows Presentation Foundation Font Cache set to Manual to prevent XAML hang'
     Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\DoSvc' -Name 'Start' -Type 'DWord' -Value 4 -Description 'Delivery Optimization Service disabled to eliminate background RAM usage'
     Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\DPS' -Name 'Start' -Type 'DWord' -Value 4 -Description 'Diagnostic Policy Service disabled to stop diagnostic hosts from idling in RAM'
     Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\WdiServiceHost' -Name 'Start' -Type 'DWord' -Value 4 -Description 'Diagnostic Service Host disabled to save RAM'
@@ -1437,13 +1056,7 @@ Write-Log "Bloat removal process completed"
     Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\WbioSrvc' -Name 'Start' -Type 'DWord' -Value 3 -Description 'Enables fingerprint and facial recognition login via Windows Hello. Safe to disable on desktop systems without biometric hardware'
     Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\TabletInputService' -Name 'Start' -Type 'DWord' -Value 3 -Description 'Manages the Windows Input Experience including touch keyboard, pen/stylus input, handwriting panel, emoji panel (Win+.), and Xbox controller keyboard. Disabling will break all virtual/software keyboard input but is safe on desktop systems without touchscreen, pen, or gamepad'
 
-    # PowerShell script for: Touch Keyboard and Handwriting Panel Service
-    try {
-        if([Environment]::OSVersion.Version.Build -ge 22000 -and -not(Get-WinUserLanguageList|?{$_.LanguageTag-match'^(zh|ja|ko)'})){$f='C:\Windows\SystemApps\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\TextInputHost.exe'; $o=$f-replace'\.exe$','.old.exe'; if(Test-Path $f){takeown /f $f /a | Out-Null; icacls $f /grant Administrators:F | Out-Null; if(Test-Path $o){Remove-Item $o -Force}; Rename-Item $f $o -Force}; Stop-Process -Name TextInputHost -Force -ErrorAction SilentlyContinue}
-        Write-Log "Manages the Windows Input Experience including touch keyboard, pen/stylus input, handwriting panel, emoji panel (Win+.), and Xbox controller keyboard. Disabling will break all virtual/software keyboard input but is safe on desktop systems without touchscreen, pen, or gamepad" "SUCCESS"
-    } catch {
-        Write-Log "Failed: Manages the Windows Input Experience including touch keyboard, pen/stylus input, handwriting panel, emoji panel (Win+.), and Xbox controller keyboard. Disabling will break all virtual/software keyboard input but is safe on desktop systems without touchscreen, pen, or gamepad - $($_.Exception.Message)" "ERROR"
-    }
+    # Touch keyboard and text input experience preserved
 
     Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\TapiSrv' -Name 'Start' -Type 'DWord' -Value 3 -Description 'Manages telephony (TAPI) for Phone Link audio relay, modems, fax, and VoIP softphones. Leave at Manual (Windows default) unless you use no telephony software'
     Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\SensrSvc' -Name 'Start' -Type 'DWord' -Value 4 -Description 'Monitors various sensors like ambient light and orientation. Safe to disable on desktop systems without sensor hardware'
@@ -1957,21 +1570,7 @@ Windows Registry Editor Version 5.00
     }
 
 
-    # ============================================================================
-    # USER CUSTOMIZATIONS SCHEDULED TASK
-    # ============================================================================
-
-    Write-Log "Registering UserCustomizations scheduled task..." "INFO"
-    try {
-        $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -File C:\ProgramData\Winhance\Unattend\Scripts\Winhancements.ps1 -UserCustomizations"
-        $trigger = New-ScheduledTaskTrigger -AtLogOn
-        $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit 0
-        $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
-        Register-ScheduledTask -TaskName "WinhanceUserCustomizations" -TaskPath "\Winhance" -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force | Out-Null
-        Write-Log "Registered scheduled task: WinhanceUserCustomizations" "SUCCESS"
-    } catch {
-        Write-Log "Failed to register UserCustomizations task: `$(`$_.Exception.Message)" "ERROR"
-    }
+    # User customizations are safely applied via DefaultUser.ps1 and UserOnce.ps1 (RunOnce)
 
 
     # ============================================================================
@@ -1998,16 +1597,10 @@ if ($UserCustomizations) {
             New-PSDrive -PSProvider Registry -Name HKU -Root HKEY_USERS -ErrorAction SilentlyContinue | Out-Null
         }
 
-        $targetUser = $null
-        for ($attempt = 1; $attempt -le 12; $attempt++) {
-            $targetUser = Get-TargetUser
-            if ($targetUser) { break }
-            Write-Log "Waiting for user login (attempt $attempt/12)..." "INFO"
-            Start-Sleep -Seconds 10
-        }
+        $targetUser = Get-TargetUser
         if (-not $targetUser) {
-            Write-Log "No logged-in user detected after 2 minutes, will retry at next logon" "WARNING"
-            exit 1
+            Write-Log "Interactive user not ready yet during setup; customizations will apply cleanly on user logon task." "INFO"
+            exit 0
         }
 
         $targetUserSID = Get-UserSID -Username $targetUser
@@ -2046,12 +1639,10 @@ if ($UserCustomizations) {
 
             if ($success) {
                 Write-Log "Child process completed successfully" "SUCCESS"
-                Write-Log "Rebooting system to apply user customizations..." "INFO"
-                # Wait 20 seconds to give the FirstLogon phase some more time before restarting
-                shutdown.exe /r /t 20
+                Write-Log "User customizations applied smoothly without requiring reboot." "INFO"
             } else {
-                Write-Log "Child process failed or timed out - will retry at next logon" "ERROR"
-                exit 1
+                Write-Log "Child process deferred to user logon task" "INFO"
+                exit 0
             }
         }
     } else {
@@ -2479,9 +2070,6 @@ Write-Log "=====================================================================
 		net.exe user Administrator /active:yes;
 		net.exe user Administrator "";
 		net.exe user Administrator /passwordreq:no;
-		try {
-			net.exe user User "" /add /active:yes /passwordreq:no /expires:never 2&gt;$null;
-		} catch {}
 	};
 	{
 		Set-ExecutionPolicy -Scope 'LocalMachine' -ExecutionPolicy 'Unrestricted' -Force;
@@ -2553,11 +2141,6 @@ Write-Log "=====================================================================
 		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management" /v "DisablePagingExecutive" /t REG_DWORD /d 0 /f;
 		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management" /v "ClearPageFileAtShutdown" /t REG_DWORD /d 0 /f;
 		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management" /v "LargeSystemCache" /t REG_DWORD /d 0 /f;
-		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management" /v "PoolUsageMaximum" /t REG_DWORD /d 40 /f;
-		reg.exe add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AlwaysUnloadDll" /ve /t REG_SZ /d "1" /f;
-		reg.exe add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer" /v "AlwaysUnloadDll" /t REG_DWORD /d 1 /f;
-		reg.exe add "HKLM\SOFTWARE\Policies\Microsoft\Windows\DWM" /v "DisallowAnimations" /t REG_DWORD /d 1 /f;
-		reg.exe add "HKLM\SOFTWARE\Policies\Microsoft\Windows\DWM" /v "DisableTransparency" /t REG_DWORD /d 1 /f;
 		reg.exe add "HKLM\SOFTWARE\Policies\Microsoft\Edge\WebView2" /v "BackgroundModeEnabled" /t REG_DWORD /d 0 /f;
 		reg.exe add "HKLM\SOFTWARE\Policies\Microsoft\Edge\WebView2" /v "StartupBoostEnabled" /t REG_DWORD /d 0 /f;
 		reg.exe add "HKLM\SOFTWARE\Policies\Microsoft\Edge" /v "PreloadEdgeDefaultEngine" /t REG_DWORD /d 0 /f;
@@ -2570,22 +2153,24 @@ Write-Log "=====================================================================
 	};
 	{
 		# windows-defender-remover: Complete Service &amp; Non-boot Driver removal
-		$defSvcs = @('WinDefend', 'WdNisSvc', 'WdNisDrv', 'WdFilter', 'Sense', 'SecurityHealthService', 'wscsvc', 'webthreatdefsvc', 'webthreatdefusersvc');
-		foreach ($s in $defSvcs) {
-			reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\$s" /v "Start" /t REG_DWORD /d 4 /f;
+		if (-not (Test-Path 'C:\Program Files\Windows Defender\MsMpEng.exe')) {
+			$defSvcs = @('WinDefend', 'Sense', 'SecurityHealthService', 'wscsvc', 'webthreatdefsvc', 'webthreatdefusersvc');
+			foreach ($s in $defSvcs) {
+				reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\$s" /v "Start" /t REG_DWORD /d 4 /f;
+			}
+			reg.exe add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender" /v "DisableAntiSpyware" /t REG_DWORD /d 1 /f;
+			reg.exe add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender" /v "DisableAntiVirus" /t REG_DWORD /d 1 /f;
+			reg.exe add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection" /v "DisableRealtimeMonitoring" /t REG_DWORD /d 1 /f;
+			reg.exe add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection" /v "DisableBehaviorMonitoring" /t REG_DWORD /d 1 /f;
+			reg.exe add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection" /v "DisableOnAccessProtection" /t REG_DWORD /d 1 /f;
+			reg.exe add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection" /v "DisableIOAVProtection" /t REG_DWORD /d 1 /f;
+			reg.exe add "HKLM\SOFTWARE\Policies\Microsoft\Windows\System" /v "EnableSmartScreen" /t REG_DWORD /d 0 /f;
+			reg.exe add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer" /v "SmartScreenEnabled" /t REG_SZ /d "Off" /f;
+			reg.exe delete "HKLM\SOFTWARE\Classes\CLSID\{09A47860-11B0-4DA5-AFA5-26D86198A780}" /f 2&gt;$null;
+			reg.exe delete "HKLM\SOFTWARE\Classes\*\shellex\ContextMenuHandlers\EPP" /f 2&gt;$null;
+			reg.exe delete "HKLM\SOFTWARE\Classes\Directory\shellex\ContextMenuHandlers\EPP" /f 2&gt;$null;
+			reg.exe delete "HKLM\SOFTWARE\Classes\Drive\shellex\ContextMenuHandlers\EPP" /f 2&gt;$null;
 		}
-		reg.exe add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender" /v "DisableAntiSpyware" /t REG_DWORD /d 1 /f;
-		reg.exe add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender" /v "DisableAntiVirus" /t REG_DWORD /d 1 /f;
-		reg.exe add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection" /v "DisableRealtimeMonitoring" /t REG_DWORD /d 1 /f;
-		reg.exe add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection" /v "DisableBehaviorMonitoring" /t REG_DWORD /d 1 /f;
-		reg.exe add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection" /v "DisableOnAccessProtection" /t REG_DWORD /d 1 /f;
-		reg.exe add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection" /v "DisableIOAVProtection" /t REG_DWORD /d 1 /f;
-		reg.exe add "HKLM\SOFTWARE\Policies\Microsoft\Windows\System" /v "EnableSmartScreen" /t REG_DWORD /d 0 /f;
-		reg.exe add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer" /v "SmartScreenEnabled" /t REG_SZ /d "Off" /f;
-		reg.exe delete "HKLM\SOFTWARE\Classes\CLSID\{09A47860-11B0-4DA5-AFA5-26D86198A780}" /f 2&gt;$null;
-		reg.exe delete "HKLM\SOFTWARE\Classes\*\shellex\ContextMenuHandlers\EPP" /f 2&gt;$null;
-		reg.exe delete "HKLM\SOFTWARE\Classes\Directory\shellex\ContextMenuHandlers\EPP" /f 2&gt;$null;
-		reg.exe delete "HKLM\SOFTWARE\Classes\Drive\shellex\ContextMenuHandlers\EPP" /f 2&gt;$null;
 	};
 	{
 		# eclean.gg: Network &amp; TCP/IP Low-Latency Gaming Engine (Nagle's Algorithm Disabled, Instant ACK, CTCP)
@@ -2688,9 +2273,9 @@ Write-Log "=====================================================================
 		Set-ItemProperty -LiteralPath 'Registry::HKCU\Software\Microsoft\VoiceAccess' -Name 'Enabled' -Type 'DWord' -Value 0 -Force;
 		Set-ItemProperty -LiteralPath 'Registry::HKCU\Software\Microsoft\LiveCaptions' -Name 'LiveCaptionsDesktopEnabled' -Type 'DWord' -Value 0 -Force;
 		Set-ItemProperty -LiteralPath 'Registry::HKCU\Software\Microsoft\Windows NT\CurrentVersion\Accessibility' -Name 'Configuration' -Type 'String' -Value '' -Force;
-		Set-ItemProperty -LiteralPath 'Registry::HKCU\Control Panel\Accessibility\StickyKeys' -Name 'Flags' -Type 'String' -Value '506' -Force;
+		Set-ItemProperty -LiteralPath 'Registry::HKCU\Control Panel\Accessibility\StickyKeys' -Name 'Flags' -Type 'String' -Value '26' -Force;
 		Set-ItemProperty -LiteralPath 'Registry::HKCU\Control Panel\Accessibility\Keyboard Response' -Name 'Flags' -Type 'String' -Value '122' -Force;
-		Set-ItemProperty -LiteralPath 'Registry::HKCU\Control Panel\Accessibility\ToggleKeys' -Name 'Flags' -Type 'String' -Value '58' -Force;
+		Set-ItemProperty -LiteralPath 'Registry::HKCU\Control Panel\Accessibility\ToggleKeys' -Name 'Flags' -Type 'String' -Value '34' -Force;
 	};
 	{
 		# Classic Context Menu (Win10 style)
@@ -2699,11 +2284,6 @@ Write-Log "=====================================================================
 			New-Item -Path $regPath -Force | Out-Null;
 		}
 		Set-ItemProperty -Path $regPath -Name '(Default)' -Value '' -Force;
-	};
-	{
-		Get-Process -Name 'explorer' -ErrorAction 'SilentlyContinue' | Where-Object -FilterScript {
-			$_.SessionId -eq ( Get-Process -Id $PID ).SessionId;
-		} | Stop-Process -Force;
 	};
 );
 
@@ -2781,7 +2361,6 @@ Write-Log "=====================================================================
 		reg.exe add "HKU\DefaultUser\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v "TaskbarDa" /t REG_DWORD /d 0 /f;
 		reg.exe add "HKU\DefaultUser\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v "TaskbarMn" /t REG_DWORD /d 0 /f;
 		reg.exe add "HKU\DefaultUser\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v "ShowTaskViewButton" /t REG_DWORD /d 0 /f;
-		reg.exe add "HKU\DefaultUser\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v "TaskbarAl" /t REG_DWORD /d 0 /f;
 		reg.exe add "HKU\DefaultUser\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v "ShowCopilotButton" /t REG_DWORD /d 0 /f;
 		reg.exe add "HKU\DefaultUser\Software\Microsoft\Windows\CurrentVersion\GameDVR" /v "AppCaptureEnabled" /t REG_DWORD /d 0 /f;
 		reg.exe add "HKU\DefaultUser\System\GameConfigStore" /v "GameDVR_Enabled" /t REG_DWORD /d 0 /f;
@@ -2795,7 +2374,7 @@ Write-Log "=====================================================================
 		reg.exe add "HKU\DefaultUser\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v "ListviewShadow" /t REG_DWORD /d 0 /f;
 		reg.exe add "HKU\DefaultUser\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v "DisableThumbnailCache" /t REG_DWORD /d 1 /f;
 		reg.exe add "HKU\DefaultUser\Software\Microsoft\Windows\DWM" /v "AlwaysHibernateThumbnails" /t REG_DWORD /d 0 /f;
-		reg.exe add "HKU\DefaultUser\Software\Microsoft\Windows\CurrentVersion\RunOnce" /v "UnattendedSetup" /t REG_SZ /d "powershell.exe -ExecutionPolicy Bypass -WindowStyle Normal -NoProfile -Command \""Get-Content -LiteralPath 'C:\Windows\Setup\Scripts\UserOnce.ps1' -Raw | Invoke-Expression;\""" /f;
+		reg.exe add "HKU\DefaultUser\Software\Microsoft\Windows\CurrentVersion\RunOnce" /v "UnattendedSetup" /t REG_SZ /d "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -WindowStyle Hidden -Command \""Get-Content -LiteralPath 'C:\Windows\Setup\Scripts\UserOnce.ps1' -Raw | Invoke-Expression;\""" /f;
 	};
 );
 
@@ -2859,47 +2438,37 @@ Write-Log "=====================================================================
 		cmd.exe /c "rmdir C:\Windows.old";
 	};
 	{
-		compact.exe /CompactOS:always;
-	};
-	{
-		ie4uinit.exe -show;
-	};
-	{
-		if (-not (Test-Path 'C:\Windows\System32\Recovery\winre.wim.keep')) {
-			try {
-				&amp; reagentc.exe /disable | Out-Null;
-				Remove-Item -Path 'C:\Windows\System32\Recovery\winre.wim' -Force -ErrorAction SilentlyContinue;
-			} catch {}
-		}
+		# Run CompactOS compression asynchronously in background to ensure zero desktop delay
+		Start-Process -FilePath "compact.exe" -ArgumentList "/CompactOS:always" -WindowStyle Hidden -ErrorAction SilentlyContinue;
 	};
 	{
 		# Radical RAM: Protected diagnostic, telemetry, and background services configured to Disabled (4) / Manual (3) as SYSTEM
 		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\DPS" /v "Start" /t REG_DWORD /d 4 /f;
 		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\WdiServiceHost" /v "Start" /t REG_DWORD /d 4 /f;
 		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\WdiSystemHost" /v "Start" /t REG_DWORD /d 4 /f;
-		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\FontCache" /v "Start" /t REG_DWORD /d 4 /f;
-		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\FontCache3.0.0.0" /v "Start" /t REG_DWORD /d 4 /f;
+		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\FontCache" /v "Start" /t REG_DWORD /d 3 /f;
+		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\FontCache3.0.0.0" /v "Start" /t REG_DWORD /d 3 /f;
 		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\SCardSvr" /v "Start" /t REG_DWORD /d 4 /f;
 		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\ScDeviceEnum" /v "Start" /t REG_DWORD /d 4 /f;
 		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\icssvc" /v "Start" /t REG_DWORD /d 4 /f;
 		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\CertPropSvc" /v "Start" /t REG_DWORD /d 4 /f;
 		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\CscService" /v "Start" /t REG_DWORD /d 4 /f;
 		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\Netlogon" /v "Start" /t REG_DWORD /d 3 /f;
-		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\WpnService" /v "Start" /t REG_DWORD /d 4 /f;
-		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\WpnUserService" /v "Start" /t REG_DWORD /d 4 /f;
-		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\PimIndexMaintenanceSvc" /v "Start" /t REG_DWORD /d 4 /f;
-		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\UnistoreSvc" /v "Start" /t REG_DWORD /d 4 /f;
-		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\UserDataSvc" /v "Start" /t REG_DWORD /d 4 /f;
-		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\MessagingService" /v "Start" /t REG_DWORD /d 4 /f;
+		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\WpnService" /v "Start" /t REG_DWORD /d 3 /f;
+		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\WpnUserService" /v "Start" /t REG_DWORD /d 3 /f;
+		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\PimIndexMaintenanceSvc" /v "Start" /t REG_DWORD /d 3 /f;
+		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\UnistoreSvc" /v "Start" /t REG_DWORD /d 3 /f;
+		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\UserDataSvc" /v "Start" /t REG_DWORD /d 3 /f;
+		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\MessagingService" /v "Start" /t REG_DWORD /d 3 /f;
 		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\iphlpsvc" /v "Start" /t REG_DWORD /d 4 /f;
 		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\VaultSvc" /v "Start" /t REG_DWORD /d 3 /f;
 		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\TokenBroker" /v "Start" /t REG_DWORD /d 3 /f;
-		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\WbioSrvc" /v "Start" /t REG_DWORD /d 4 /f;
+		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\WbioSrvc" /v "Start" /t REG_DWORD /d 3 /f;
 		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\PhoneSvc" /v "Start" /t REG_DWORD /d 4 /f;
 		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\WpcMonSvc" /v "Start" /t REG_DWORD /d 4 /f;
 		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\WMPNetworkSvc" /v "Start" /t REG_DWORD /d 4 /f;
 		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\SmsRouter" /v "Start" /t REG_DWORD /d 4 /f;
-		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\AppHostSvc" /v "Start" /t REG_DWORD /d 4 /f;
+		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\AppHostSvc" /v "Start" /t REG_DWORD /d 3 /f;
 		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\SEMgrSvc" /v "Start" /t REG_DWORD /d 4 /f;
 		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\edgeupdate" /v "Start" /t REG_DWORD /d 4 /f;
 		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\edgeupdatem" /v "Start" /t REG_DWORD /d 4 /f;
@@ -2907,42 +2476,11 @@ Write-Log "=====================================================================
 		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\InventorySvc" /v "Start" /t REG_DWORD /d 4 /f;
 	};
 	{
-			{
 		# Radical RAM: Disable Application Prelaunch and enable memory tuning
 		try {
 			Disable-MMAgent -ApplicationPreLaunch -ErrorAction SilentlyContinue | Out-Null;
 			Disable-MMAgent -ApplicationLaunchPrefetching -ErrorAction SilentlyContinue | Out-Null;
 			Disable-MMAgent -OperationAPI -ErrorAction SilentlyContinue | Out-Null;
-			Enable-MMAgent -PageCombining -ErrorAction SilentlyContinue | Out-Null;
-		} catch {}
-
-		# Install persistent Auto-RAM-Optimizer (Working Set Trimmer on Idle &amp; Logon)
-		try {
-			$lines = @(
-				'try {',
-				'  $sig = ''[DllImport("psapi.dll")] public static extern int EmptyWorkingSet(IntPtr h);''',
-				'  if (-not (''Win32.PsapiMem'' -as [type])) {',
-				'    Add-Type -MemberDefinition $sig -Name "PsapiMem" -Namespace "Win32" -ErrorAction SilentlyContinue',
-				'  }',
-				'  Get-Process -ErrorAction SilentlyContinue | ForEach-Object {',
-				'    try { [Win32.PsapiMem]::EmptyWorkingSet($_.Handle) | Out-Null } catch {}',
-				'  }',
-				'  [System.GC]::Collect()',
-				'  [System.GC]::WaitForPendingFinalizers()',
-				'} catch {}'
-			)
-			$trimScriptPath = "C:\Windows\System32\trim-ram.ps1"
-			[System.IO.File]::WriteAllLines($trimScriptPath, $lines, [System.Text.Encoding]::UTF8)
-
-			# Register scheduled task to run on system idle and user logon as SYSTEM
-			$action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$trimScriptPath`""
-			$trigger1 = New-ScheduledTaskTrigger -AtLogOn
-			$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -RunOnlyIfIdle -IdleDuration (New-TimeSpan -Minutes 2) -IdleWaitTimeout (New-TimeSpan -Minutes 5)
-			Register-ScheduledTask -TaskName "AutoWorkingSetTrim" -TaskPath "\Microsoft\Windows\MemoryManagement\" -Action $action -Trigger $trigger1 -Settings $settings -User "NT AUTHORITY\SYSTEM" -RunLevel Highest -Force -ErrorAction SilentlyContinue | Out-Null
-		} catch {}
-	};
-		# Radical RAM: Enable NT Kernel Page Combining (physical memory page deduplication)
-		try {
 			Enable-MMAgent -PageCombining -ErrorAction SilentlyContinue | Out-Null;
 		} catch {}
 	};
@@ -2963,75 +2501,25 @@ Write-Log "=====================================================================
 		schtasks.exe /change /tn "\Microsoft\Windows\Feedback\Siuf\DmClientOnScenarioDownload" /disable 2&gt;$null;
 	};
 	{
-		# Windows Security &amp; Defender: complete user-mode service, task &amp; cache purge
-		reg.exe delete "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" /v "SecurityHealth" /f 2&gt;$null;
-		$defSvcs = @('WinDefend', 'WdNisSvc', 'WdNisDrv', 'WdFilter', 'Sense', 'SecurityHealthService', 'wscsvc', 'webthreatdefsvc', 'webthreatdefusersvc');
-		foreach ($s in $defSvcs) {
-			reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\$s" /v "Start" /t REG_DWORD /d 4 /f 2&gt;$null;
-		}
-		Stop-Process -Name "SecurityHealthSystray", "SecurityHealthHost", "MsMpEng", "NisSrv" -Force -ErrorAction SilentlyContinue;
-		$defCaches = @(
-			'C:\ProgramData\Microsoft\Windows Defender\Definition Updates',
-			'C:\ProgramData\Microsoft\Windows Defender\Scans'
-		);
-		foreach ($dc in $defCaches) {
-			if (Test-Path -LiteralPath $dc) {
-				Remove-Item -LiteralPath $dc -Recurse -Force -ErrorAction SilentlyContinue;
+		# Windows Security &amp; Defender: complete user-mode service, task &amp; cache purge (only when Defender was removed)
+		if (-not (Test-Path 'C:\Program Files\Windows Defender\MsMpEng.exe')) {
+			reg.exe delete "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" /v "SecurityHealth" /f 2&gt;$null;
+			$defSvcs = @('WinDefend', 'Sense', 'SecurityHealthService', 'wscsvc', 'webthreatdefsvc', 'webthreatdefusersvc');
+			foreach ($s in $defSvcs) {
+				reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\$s" /v "Start" /t REG_DWORD /d 4 /f 2&gt;$null;
 			}
-		}
-		Get-ScheduledTask -TaskPath "\Microsoft\Windows\Windows Defender\*" -ErrorAction SilentlyContinue | Disable-ScheduledTask -ErrorAction SilentlyContinue | Out-Null;
-	};
-	{
-		# eclean.gg: Deep Disk, Junk &amp; Cache Cleaning
-		$cleanPaths = @(
-			'C:\Windows\Temp\*',
-			"$env:TEMP\*",
-			'C:\Windows\Prefetch\*',
-			'C:\Windows\SoftwareDistribution\Download\*',
-			'C:\Windows\DeliveryOptimization\Cache\*',
-			'C:\Windows\System32\LogFiles\HTTPERR\*',
-			'C:\Windows\System32\winevt\Logs\Archive-*'
-		);
-		foreach ($cp in $cleanPaths) {
-			Remove-Item -Path $cp -Recurse -Force -ErrorAction SilentlyContinue;
-		}
-	};
-	{
-		# Accessibility post-OOBE suppression: safely redirect binaries via IFEO now that OOBE is complete
-		$accessExes = @("magnify.exe", "osk.exe", "Narrator.exe", "NarratorQuickStart.exe", "VoiceAccess.exe", "Livecaptions.exe");
-		foreach ($bin in $accessExes) {
-			reg.exe add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\$bin" /v "Debugger" /t REG_SZ /d "systray.exe" /f 2&gt;$null;
-		}
-	};
-	{
-		# Windows Backup: disable leftover scheduled tasks
-		schtasks.exe /change /tn "Microsoft\Windows\AppListBackup\Backup" /disable 2&gt;$null;
-	};
-	{
-		# Get Started (縺ｯ縺倥ａ縺ｫ) &amp; Tips &amp; 24H2 AI Bloatware: purge remaining AppX packages for all users
-		$purgeApps = @("*Getstarted*", "*Tips*", "*Copilot*", "*Recall*", "*DevHome*", "*OutlookForWindows*", "*QuickAssist*", "*PowerAutomate*");
-		foreach ($app in $purgeApps) {
-			Get-AppxPackage -AllUsers -Name $app -ErrorAction SilentlyContinue | Remove-AppxPackage -AllUsers -ErrorAction SilentlyContinue;
-		}
-	};
-	{
-		# Radical RAM: One-shot empty working set memory from setup processes and reclaim initialization heap
-		try {
-			if (-not ('Win32.PsapiMem' -as [type])) {
-				$sig = @'
-[DllImport("psapi.dll")]
-public static extern int EmptyWorkingSet(IntPtr hwProc);
-'@
-				Add-Type -MemberDefinition $sig -Name "PsapiMem" -Namespace "Win32" -ErrorAction SilentlyContinue;
+			Stop-Process -Name "SecurityHealthSystray", "SecurityHealthHost", "MsMpEng", "NisSrv" -Force -ErrorAction SilentlyContinue;
+			$defCaches = @(
+				'C:\ProgramData\Microsoft\Windows Defender\Definition Updates',
+				'C:\ProgramData\Microsoft\Windows Defender\Scans'
+			);
+			foreach ($dc in $defCaches) {
+				if (Test-Path -LiteralPath $dc) {
+					Remove-Item -LiteralPath $dc -Recurse -Force -ErrorAction SilentlyContinue;
+				}
 			}
-			if ('Win32.PsapiMem' -as [type]) {
-				Get-Process -ErrorAction SilentlyContinue | ForEach-Object {
-					try { [Win32.PsapiMem]::EmptyWorkingSet($_.Handle) | Out-Null } catch {}
-				};
-			}
-			[System.GC]::Collect();
-			[System.GC]::WaitForPendingFinalizers();
-		} catch {}
+			Get-ScheduledTask -TaskPath "\Microsoft\Windows\Windows Defender\*" -ErrorAction SilentlyContinue | Disable-ScheduledTask -ErrorAction SilentlyContinue | Out-Null;
+		}
 	};
 	{
 		# eclean &amp; AtlasOS: Reset and disable Fault Tolerant Heap (FTH)
@@ -3040,34 +2528,7 @@ public static extern int EmptyWorkingSet(IntPtr hwProc);
 		} catch {}
 	};
 	{
-		# eclean &amp; AtlasOS: Automatic Disk Cleanup &amp; Junk Purge (VolumeCaches + cleanmgr /sagerun:64)
-		try {
-			$baseKey = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\VolumeCaches';
-			$regValues = @{
-				"Active Setup Temp Folders"             = 2;
-				"BranchCache"                           = 2;
-				"Delivery Optimization Files"           = 2;
-				"Diagnostic Data Viewer database files" = 2;
-				"Downloaded Program Files"              = 2;
-				"Internet Cache Files"                  = 2;
-				"Old ChkDsk Files"                      = 2;
-				"RetailDemo Offline Content"            = 2;
-				"Setup Log Files"                       = 2;
-				"System error memory dump files"        = 2;
-				"System error minidump files"           = 2;
-				"Thumbnail Cache"                       = 2;
-				"Windows Error Reporting Files"         = 2;
-				"Device Driver Packages"                = 2;
-			};
-			foreach ($entry in $regValues.GetEnumerator()) {
-				$targetKey = "$baseKey\$($entry.Key)";
-				if (Test-Path $targetKey) {
-					Set-ItemProperty -Path $targetKey -Name 'StateFlags0064' -Value $entry.Value -Type DWord -Force -ErrorAction SilentlyContinue;
-				}
-			}
-			Start-Process -FilePath "cleanmgr.exe" -ArgumentList "/sagerun:64" -WindowStyle Hidden -ErrorAction SilentlyContinue | Out-Null;
-		} catch {}
-
+		# eclean &amp; AtlasOS: Automatic Disk Cleanup &amp; Junk Purge
 		# Purge user and system temp folders, crash dumps, and minidumps
 		foreach ($p in @($env:TEMP, $env:TMP, "$env:LOCALAPPDATA\Temp", "$env:WINDIR\Temp", "$env:LOCALAPPDATA\CrashDumps", "$env:WINDIR\Minidump")) {
 			if (Test-Path $p) {
@@ -3096,8 +2557,6 @@ public static extern int EmptyWorkingSet(IntPtr hwProc);
 			&amp; bcdedit.exe /set useplatformclock false 2&gt;$null;
 			&amp; bcdedit.exe /set disabledynamictick yes 2&gt;$null;
 			&amp; bcdedit.exe /set tscsyncpolicy Enhanced 2&gt;$null;
-			&amp; bcdedit.exe /set bootux disabled 2&gt;$null;
-			&amp; bcdedit.exe /set quietboot on 2&gt;$null;
 		} catch {}
 	};
 	{

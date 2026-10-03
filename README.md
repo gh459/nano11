@@ -24,7 +24,7 @@ The goal of nano11 is to automate the creation of a streamlined Windows 11 image
 - **🛡️ Customization Options (Issues #1, #9, #10, #12, #13)**:
   - **Japanese Keyboard (106/109) Guarantee**: Prevents the common Windows clean install issue where Japanese keyboards are misdetected as 101/104 English keyboards (causing `@` and `:` key mapping mismatch) by injecting verified `kbd106.dll` and `PCAT_106KEY` configurations. Toggle with `-JapaneseKeyboard` / `-NoJapaneseKeyboard`.
   - **Windows 11 24H2 & AI Bloatware Neutralization**: Automatically disables 24H2 mandatory BitLocker device encryption (`PreventDeviceEncryption = 1`), TCG hardware security activation, and eliminates background AI telemetry (Copilot Provider, Windows Recall, Click-to-Do, and DevHome).
-  - **Automatic Media Drive Detection**: Automatically detects connected Windows 11 ISO/USB installation drives containing `sources\install.wim` or `install.esd`, eliminating manual drive letter entry.
+  - **Automatic Media Drive Detection**: Automatically detects connected official Windows 11 ISO/USB installation drives containing `sources\install.wim`, eliminating manual drive letter entry.
   - **Keep Asian IMEs**: Retain Japanese input method (`ja-JP`) while cleanly decoupling and trimming foreign Asian IMEs (`ko-KR`, `zh-CN`, `zh-TW`) and gigabytes of unneeded foreign voice packages.
   - **Windows Defender Toggle**: Option to keep Windows Defender active or remove it completely.
   - **Fonts & Drivers**: Option to preserve international font collections and essential hardware drivers.
@@ -32,7 +32,7 @@ The goal of nano11 is to automate the creation of a streamlined Windows 11 image
   - **Bluetooth & Audio**: Preserves Bluetooth audio transport and peripheral services by default so wireless headphones and controllers function properly.
   - **Recovery Environment (WinRE)**: Retain Windows RE with `-KeepRecovery` or `-KeepWinRE`. By default, WinRE is kept intact during installation so Windows Setup SafeOS staging succeeds 100%, then safely disabled and deleted online on first logon.
 - **📦 Radical ISO Size Reduction (~3.2 GB – 3.8 GB, Perplexity-Verified Safe)**:
-  - **Decoupled Japanese IME & Foreign Language Stripping**: Purges heavy foreign Asian IMEs (Korean `ko-KR`, Chinese `zh-CN`/`zh-TW`), foreign speech models (`zh-*`, `ko-*`, `de-*`, `fr-*`, `es-*`, `it-*`, `pt-*`, `ru-*`), and foreign Handwriting/OCR packages, saving over 800 MB – 1.2 GB in `install.esd` while strictly safeguarding Japanese IME (`*IME-ja-jp*`), Japanese fonts (`meiryo*`, `yugoth*`, `msgoth*`, `msmin*`, `yumin*`), and Text Services Framework (`ctfmon.exe`).
+  - **Decoupled Japanese IME & Foreign Language Stripping**: Purges heavy foreign Asian IMEs (Korean `ko-KR`, Chinese `zh-CN`/`zh-TW`), foreign speech models (`zh-*`, `ko-*`, `de-*`, `fr-*`, `es-*`, `it-*`, `pt-*`, `ru-*`), and foreign Handwriting/OCR packages, saving over 800 MB – 1.2 GB in the installation image while strictly safeguarding Japanese IME (`*IME-ja-jp*`), Japanese fonts (`meiryo*`, `yugoth*`, `msgoth*`, `msmin*`, `yumin*`), and Text Services Framework (`ctfmon.exe`).
   - **Foreign Supplemental Fonts Trimmed**: Safely purges non-Latin/non-Japanese font collections (Chinese Hans/Hant, Korean Kore, Devanagari, Thai, Ethiopic, Syriac, Cherokee, etc.), saving ~200 MB.
   - **Obsolete FOD Packages Removed**: Purges deprecated and unused optional features including `WMIC` (deprecated in 24H2), `Printing-WFS` (Fax & Scan), `WirelessDisplay` (Miracast Connect), `SNMP`, `Telnet`, `SimpleTCP`, and `RDC`.
   - **Offline System Caches & Setup Logs Cleaned**: Wipes build-time update caches (`SoftwareDistribution\Download`), `System32\LogFiles`, `Prefetch`, and setup temporary files before unmounting.
@@ -95,16 +95,15 @@ The goal of nano11 is to automate the creation of a streamlined Windows 11 image
 - **⚡ Radical RAM Optimization (Idle Memory Baseline ~600 MB – 800 MB, Theoretical Architectural Limit)**:
   - **SvcHost Grouping**: Sets `SvcHostSplitThresholdInKB` to 64 GB, consolidating 70–90 separate `svchost.exe` instances into 12–15 shared processes, instantly freeing 500 MB – 800 MB of RAM.
   - **Strict Kernel Paging (`DisablePagingExecutive = 0`)**: Fully eliminates kernel driver physical memory locking, allowing Windows to dynamically page inactive kernel code to disk and reclaiming 80 MB – 150 MB of physical RAM.
-  - **Aggressive Pool Trimming (`PoolUsageMaximum = 40`)**: Lowers the kernel pool trimming threshold from 60% to 40%, forcing the memory manager to reclaim idle paged and non-paged memory immediately.
+  - **Dynamic Kernel Memory Management**: Preserves NT Kernel dynamic pool allocation to prevent `STATUS_INSUFFICIENT_RESOURCES` driver allocation deadlocks during setup, while aggressively paging idle structures.
   - **Application Pre-Launch & Prefetch Disabling**: Neutralizes `Disable-MMAgent -ApplicationPreLaunch`, `Disable-MMAgent -ApplicationLaunchPrefetching`, and `Disable-MMAgent -OperationAPI`, preventing Windows from pre-allocating hundreds of megabytes into RAM before apps are even launched.
   - **Kernel Memory Manager & Page Combining**: Enables NT Kernel `PageCombining` (copy-on-write duplicate memory page coalescing) and prioritizes application working sets over file system cache (`LargeSystemCache = 0`, `DisablePageCombining = 0`).
-  - **Always Unload Inactive DLLs**: Injects `AlwaysUnloadDll = 1` into the Explorer subsystem to instantly release unreferenced dynamic libraries from memory.
-  - **DWM & Visual Effects Lightweighting (Best Performance)**: Disables window transparency, acrylic blur, window dragging animations, and transition effects (`MinAnimate = 0`, `VisualFXSetting = 2`, `DragFullWindows = 0`, `DisallowAnimations = 1`, `UserPreferencesMask = 90 12 01 80 10 00 00 00`) while preserving ClearType font smoothing, minimizing `dwm.exe` direct composition buffers.
+  - **DWM & Visual Effects Lightweighting (Best Performance)**: Disables window transparency, acrylic blur, window dragging animations, and transition effects (`MinAnimate = 0`, `VisualFXSetting = 2`, `DragFullWindows = 0`, `UserPreferencesMask = 90 12 01 80 10 00 00 00`) while preserving ClearType font smoothing, minimizing `dwm.exe` direct composition buffers.
   - **Microsoft Edge & WebView2 Zero-RAM Background Block**: Completely blocks Edge and WebView2 runtime background processes and startup boosting (`BackgroundModeEnabled = 0`, `StartupBoostEnabled = 0`, `PreloadEdgeDefaultEngine = 0`), eliminating 150 MB – 300 MB of hidden webview consumption.
-  - **Extreme Service Pruning & Demand-Start**: Completely disables 35+ non-essential background daemons (`SysMain`, `WSearch`, `FontCache`, `FontCache3.0.0.0`, `WpnService`, `WpnUserService`, `PimIndexMaintenanceSvc`, `UnistoreSvc`, `UserDataSvc`, `MessagingService`, `CDPSvc`, `iphlpsvc`, `WbioSrvc`, `PhoneSvc`, `WpcMonSvc`, `WMPNetworkSvc`, `SmsRouter`, `AppHostSvc`, `SEMgrSvc`, `edgeupdate`, `edgeupdatem`, `GraphicsPerfSvc`, `InventorySvc`, `NaturalAuthentication`, `SharedRealitySvc`, `DoSvc`, `DPS`, `WdiServiceHost`, `DusmSvc`, `SCardSvr`, `ScDeviceEnum`, `icssvc`, `CertPropSvc`, `CscService`).
+  - **Extreme Service Pruning & Demand-Start**: Disables diagnostic/telemetry daemons while safely setting per-user templates and DirectWrite services to Demand-Start (`FontCache`, `WpnService`, `UserDataSvc`, etc. at `Start = 3`), guaranteeing zero idle RAM overhead and 100% logon stability.
   - **Scheduled Task Trimming**: Disables heavy maintenance tasks (`ProcessMemoryDiagnosticEvents`, `RunFullMemoryDiagnostic`, `WinSAT`, `DiskFootprint\Diagnostics`, `ScheduledDefrag`, `Maps`, `Speech`) that wake up and consume RAM in the background.
   - **Guaranteed Stability (Zero Dangerous Hacks)**: Strictly rejects harmful placebo tweaks (Pagefile is kept system-managed; NDU network monitoring driver is preserved; `LargeSystemCache` is not forced to server mode).
-  - **Persistent Auto-RAM-Optimizer (Working Set Trimmer)**: Automatically deploys a background lightweight task (`\Microsoft\Windows\MemoryManagement\AutoWorkingSetTrim`) scheduled on system idle and logon that aggressively trims unreferenced working sets across all processes, locking idle RAM usage to **600 MB – 800 MB**.
+  - **Desktop Maintenance Suite**: Deploys an on-demand maintenance suite on the desktop (`Atlas-ReviOS Tools`) including working set memory trimming, telemetry toggles, and junk cleaners without interfering with logon initialization.
 - **📉 Radical Background & Windows Process Reduction (Perplexity-Verified Safe)**:
   - **Japanese IME (`ctfmon.exe`) Fully Preserved**: Unlike unsafe debloat scripts that disable the Text Services Framework and render Japanese typing broken, `ctfmon.exe` and input frameworks are strictly safeguarded.
   - **No Dangerous Executable Deletions**: Strictly avoids removing or killing `RuntimeBroker.exe`, `SearchHost.exe`, or core DCOM/RPC infrastructure, preserving Start Menu, Settings, and WinRT app stability.
@@ -172,7 +171,13 @@ The resulting minimal OS is **not serviceable via cumulative updates** when WinS
 ## **Instructions**
 
 ### **1. Prerequisites**
-1. Download a Windows 11 ISO from the official Microsoft website (supports 23H2, 24H2, Canary, and IoT Enterprise LTSC).
+
+> [!WARNING]
+> **DO NOT USE `MediaCreationTool.exe` TO DOWNLOAD THE WINDOWS 11 ISO!**  
+> `MediaCreationTool.exe` generates an ISO with solid recovery-compressed `install.esd` rather than `install.wim`. Modifying an `install.esd` image with DISM frequently causes data stream corruption (Error 1392 / 0x80070570) and missing package errors.  
+> **Always download the official Windows 11 ISO directly from Microsoft's website** (choose *"Download Windows 11 Disk Image (ISO) for x64 devices"*), which includes standard, 100% reliable `sources\install.wim`.
+
+1. Download the official Windows 11 Disk Image (ISO) containing `sources\install.wim` directly from [Microsoft Software Download](https://www.microsoft.com/software-download/windows11) (supports 23H2, 24H2, Canary, and IoT Enterprise LTSC).
 2. Right-click the downloaded ISO and select **Mount**. Note the assigned drive letter (e.g. `D:`).
 
 ### **2. Running the Builder**
@@ -210,24 +215,29 @@ You can also run the builder non-interactively with customized flags:
 ### **Available Parameters:**
 | Parameter | Description |
 | :--- | :--- |
-| `-NonInteractive` | Runs without interactive confirmation prompts |
+| `-NonInteractive` (aliases: `-Silent`, `-Unattended`, `-Batch`) | Runs completely unattended without interactive prompts |
+| `-Interactive` | Forces interactive prompt review for all settings |
 | `-SourceDrive <Drive>` | Windows 11 installation media drive letter (e.g. `D:`). Auto-detected if omitted |
 | `-WorkDir <Path>` | Custom directory for temporary file processing (ideal if C: has < 25 GB free) |
-| `-KeepIME` | Retains Asian language input methods (Japanese, Chinese, Korean) |
-| `-KeepDefender` | Retains Windows Defender and related real-time protection services |
-| `-KeepFonts` | Retains international and Asian font families |
-| `-KeepDrivers` | Retains printer, scanner, and legacy drivers in DriverStore |
-| `-KeepWindowsUpdate` | Retains Windows Update services and registry endpoints |
-| `-KeepBluetooth` | Retains Bluetooth peripheral, audio transport, and user services |
-| `-EnableWSL` | Pre-enables WSL2 and Virtual Machine Platform before stripping WinSxS |
-| `-KeepRecovery` | Retains Windows Recovery Environment (WinRE) permanently (Default: disabled safely post-install) |
-| `-SafeDebloat` | Enables safe component store cleanup mode preserving CBS integrity (Default: True) |
-| `-AggressiveWinSxS` | Opts into aggressive WinSxS pruning mode (Experimental, for testing) |
-| `-UltraSlim` | Enables UltraSlim mode to achieve ~3.0 GB ISO (prunes Edge WebView, non-JP CJK fonts, WinSxS dead weight, compresses WinRE) |
-| `-JapaneseKeyboard` | Explicitly enforces Japanese 106/109 keyboard layout (Default: Enabled) |
-| `-NoJapaneseKeyboard` | Skips Japanese 106/109 keyboard layout injection |
-| `-AtlasReviOS` | Enables AtlasOS & ReviOS radical debloat, low-latency, and performance tuning (Default: Enabled) |
-| `-NoAtlasReviOS` | Skips AtlasOS & ReviOS radical debloat and tuning |
+| `-Index <Number>` | Image index inside `install.wim` to modify (e.g. `1` for Home, `3` for Pro) |
+| `-KeepDefender` / `-RemoveDefender` (`-NoDefender`) | Retains or removes Windows Defender (Default: Remove) |
+| `-KeepIME` / `-RemoveIME` (`-NoIME`) | Retains or removes Asian language input methods (Default: Keep) |
+| `-KeepFonts` / `-RemoveFonts` (`-NoFonts`) | Retains or removes international and Asian font families (Default: Keep, or pruned in UltraSlim) |
+| `-KeepDrivers` / `-RemoveDrivers` | Retains or removes printer/scanner drivers in DriverStore (Default: Keep — Recommended to prevent 77% freeze) |
+| `-KeepWindowsUpdate` / `-DisableWindowsUpdate` (`-NoWindowsUpdate`) | Retains or disables Windows Update services (Default: Disable) |
+| `-KeepBluetooth` / `-DisableBluetooth` (`-NoBluetooth`) | Retains or disables Bluetooth peripheral and audio services (Default: Keep) |
+| `-EnableWSL` / `-DisableWSL` (`-NoWSL`) | Pre-enables or disables WSL2 & Virtual Machine Platform (Default: Disable) |
+| `-KeepRecovery` (`-KeepWinRE`) / `-RemoveRecovery` (`-NoRecovery`) | Retains or removes Windows Recovery Environment WinRE (Default: Remove post-install) |
+| `-SafeDebloat` (`-SafeWinSxS`) / `-AggressiveWinSxS` (`-TrimWinSxS`) | Component Store cleanup mode (Default: SafeDebloat — Recommended to prevent 77% freeze) |
+| `-UltraSlim` / `-NoUltraSlim` | Enables or disables UltraSlim ~3.0 GB ISO target mode (Default: Enabled) |
+| `-JapaneseKeyboard` / `-NoJapaneseKeyboard` | Enforces or skips Japanese 106/109 keyboard layout configuration (Default: Enabled) |
+| `-AtlasReviOS` / `-NoAtlasReviOS` | Enables or skips AtlasOS & ReviOS debloat and low-latency tuning (Default: Enabled) |
+| `-BundleOptimizationToolkit` / `-NoBundleOptimizationToolkit` | Bundles or skips Windows Optimization Toolkit on Desktop (Default: Enabled) |
+| `-ExportESD` / `-ExportWIM` (`-NoESD`) | Output image format (Default: install.wim LZX — Fast & Crash-Free) |
+| `-KeepStore` / `-RemoveStore` (`-NoStore`) | Keeps or removes Microsoft Store (`Microsoft.WindowsStore`, `Microsoft.StorePurchaseApp`). winget / App Installer and Store frameworks are always kept (Default: Keep) |
+
+> [!TIP]
+> **CLI Option Priority Guarantee**: Specified CLI switches are strictly honored immediately. When running interactively, options already provided via CLI parameters are automatically applied and their prompts are skipped (preventing accidental overrides by pressing Enter). In unattended mode (`-NonInteractive`), all options execute deterministically without any prompt hangs.
 
 When finished, your bootable ISO will be generated in the script directory as `nano11.iso` with SHA256 verification hash displayed!
 
@@ -300,6 +310,14 @@ Windows のコアファイルは既に 100% 展開・インストール済みで
 
 - **Original Project & Concept:** [NTDEV](https://github.com/ntdevlabs/nano11)
   - [Patreon](http://patreon.com/ntdev) | [PayPal](http://paypal.me/ntdev2) | [Ko-fi](http://ko-fi.com/ntdev)
+- **Optimization & Debloat Tool Integrations:**
+  - [Chris Titus Tech's WinUtil](https://github.com/ChrisTitusTech/winutil) - Open-source Windows utility & OOBE bloat mitigation
+  - [Sophia Script for Windows](https://github.com/farag2/Sophia-Script-for-Windows) - Advanced Windows 11 PowerShell debloater by Dmitry Nefedov (farag2)
+  - [SophiApp](https://github.com/Sophia-Community/SophiApp) - Modern WPF GUI front-end for Sophia Script
+  - [Optimizer](https://github.com/hellzerg/optimizer) - Standalone C# utility for privacy and system performance by Hellzerg
+  - [Bloatynosy](https://github.com/builtbybel/Bloatynosy) - Windows 11 feature debloater and AI manager by Builtbybel
+  - [ReviOS & Revision Tool](https://github.com/meetrevision) - Low-latency OS playbook & standalone performance optimizer
+  - [AtlasOS](https://github.com/atlas-os/atlas) - Open-source gaming & low-latency Windows modification playbook
 - **Contributors:**
   - [Tinnitus97](https://github.com/Tinnitus97) (PR #6: Universal language support, robocopy WinSxS fix)
   - Community bug reports and feature requests from [nano11 Issues](https://github.com/ntdevlabs/nano11/issues)

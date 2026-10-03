@@ -20,29 +20,105 @@
 
 [CmdletBinding()]
 param(
+    [alias("Unattended", "Silent", "Batch")]
     [switch]$NonInteractive,
+    [switch]$Interactive,
     [string]$SourceDrive,
     [string]$WorkDir,
     [string]$Index,
-    [switch]$KeepIME,
+    
+    # 1. Windows Defender
     [switch]$KeepDefender,
+    [alias("NoDefender")]
+    [switch]$RemoveDefender,
+    
+    # 2. Asian IMEs
+    [alias("KeepAsianIME")]
+    [switch]$KeepIME,
+    [alias("NoIME", "RemoveAsianIME")]
+    [switch]$RemoveIME,
+    
+    # 3. Fonts
+    [alias("KeepExtraFonts")]
     [switch]$KeepFonts,
+    [alias("NoFonts")]
+    [switch]$RemoveFonts,
+    
+    # 4. Drivers
     [switch]$KeepDrivers,
+    [switch]$RemoveDrivers,
+    
+    # 5. Windows Update
+    [alias("EnableWindowsUpdate")]
     [switch]$KeepWindowsUpdate,
+    [alias("NoWindowsUpdate")]
+    [switch]$DisableWindowsUpdate,
+    
+    # 6. Bluetooth
     [switch]$KeepBluetooth,
+    [alias("NoBluetooth")]
+    [switch]$DisableBluetooth,
+    
+    # 7. WSL2 & Virtualization
     [switch]$EnableWSL,
+    [alias("NoWSL")]
+    [switch]$DisableWSL,
+    
+    # 8. Recovery Environment (WinRE)
+    [alias("KeepWinRE")]
     [switch]$KeepRecovery,
-    [switch]$KeepWinRE,
+    [alias("RemoveWinRE", "NoWinRE", "NoRecovery")]
+    [switch]$RemoveRecovery,
+    
+    # 9. WinSxS debloat mode
+    [alias("SafeWinSxS")]
     [switch]$SafeDebloat,
+    [alias("TrimWinSxS")]
     [switch]$AggressiveWinSxS,
-    [switch]$TrimWinSxS,
+    
+    # 10. UltraSlim
     [switch]$UltraSlim,
+    [switch]$NoUltraSlim,
+    
+    # 11. Japanese 106/109 Keyboard
     [switch]$JapaneseKeyboard,
     [switch]$NoJapaneseKeyboard,
+    
+    # 12. AtlasOS & ReviOS Tweaks
     [switch]$AtlasReviOS,
     [switch]$NoAtlasReviOS,
-    [switch]$ExportESD
+    
+    # 13. Optimization Toolkit & Revision Tool
+    [alias("BundleRevisionTool")]
+    [switch]$BundleOptimizationToolkit,
+    [alias("NoBundleRevisionTool")]
+    [switch]$NoBundleOptimizationToolkit,
+    
+    # 14. Export payload format
+    [switch]$ExportESD,
+    [alias("NoESD")]
+    [switch]$ExportWIM,
+    
+    # 15. Microsoft Store
+    [switch]$KeepStore,
+    [alias("NoStore", "RemoveMicrosoftStore")]
+    [switch]$RemoveStore
 )
+
+# ==============================================================================
+# Critical Warning: MediaCreationTool.exe ISO is NOT supported
+# ==============================================================================
+Write-Host ""
+Write-Host "==============================================================================" -ForegroundColor Red
+Write-Host " [CRITICAL NOTICE / WARNING]" -ForegroundColor Red
+Write-Host " DO NOT USE MediaCreationTool.exe TO DOWNLOAD THE WINDOWS 11 ISO!" -ForegroundColor Red
+Write-Host " MediaCreationTool.exe creates an ISO with compressed 'install.esd' instead of" -ForegroundColor Yellow
+Write-Host " 'install.wim', which causes DISM stream corruption (Error 1392 / 0x80070570)." -ForegroundColor Yellow
+Write-Host "------------------------------------------------------------------------------" -ForegroundColor Red
+Write-Host " Please download the official ISO directly from Microsoft containing 'install.wim':" -ForegroundColor Cyan
+Write-Host "  https://www.microsoft.com/software-download/windows11" -ForegroundColor Green
+Write-Host "==============================================================================" -ForegroundColor Red
+Write-Host ""
 
 # 1. Check and adjust Execution Policy
 if ((Get-ExecutionPolicy) -eq 'Restricted') {
@@ -61,7 +137,7 @@ if ((Get-ExecutionPolicy) -eq 'Restricted') {
 # 2. Check for Admin rights and restart with full arguments preserved
 $myWindowsID = [System.Security.Principal.WindowsIdentity]::GetCurrent()
 $myWindowsPrincipal = New-Object System.Security.Principal.WindowsPrincipal($myWindowsID)
-if (-not $myWindowsPrincipal.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)) {
+if ((-not $myWindowsPrincipal.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)) -and ($env:NANO11_TEST_MODE -ne "1")) {
     Write-Host "Restarting script with Administrator privileges in a new window..." -ForegroundColor Yellow
     
     # Reconstruct bound parameters for elevated process
@@ -69,7 +145,7 @@ if (-not $myWindowsPrincipal.IsInRole([System.Security.Principal.WindowsBuiltInR
     foreach ($key in $PSBoundParameters.Keys) {
         $val = $PSBoundParameters[$key]
         if ($val -is [System.Management.Automation.SwitchParameter]) {
-            if ($val.IsPresent) { $paramList.Add("-$key") }
+            if ($val.IsPresent) { $paramList.Add("-$key") } else { $paramList.Add("-$key`:$false") }
         } elseif ($val -is [bool]) {
             if ($val) { $paramList.Add("-$key") } else { $paramList.Add("-$key`:$false") }
         } else {
@@ -78,7 +154,7 @@ if (-not $myWindowsPrincipal.IsInRole([System.Security.Principal.WindowsBuiltInR
     }
     
     $newProcess = New-Object System.Diagnostics.ProcessStartInfo "PowerShell"
-    $newProcess.Arguments = "-File `"$($myInvocation.MyCommand.Definition)`" " + ($paramList -join " ")
+    $newProcess.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$($myInvocation.MyCommand.Definition)`" " + ($paramList -join " ")
     $newProcess.Verb = "runas"
     try {
         [System.Diagnostics.Process]::Start($newProcess) | Out-Null
@@ -93,16 +169,16 @@ function Unmount-RegistryHiveWithRetry {
     param(
         [Parameter(Mandatory=$true)]
         [string]$Name,
-        [int]$Retries = 3
+        [int]$Retries = 5
     )
-    $path = "HKLM:\$Name"
     for ($i = 0; $i -le $Retries; $i++) {
-        if (-not (Test-Path -LiteralPath $path)) {
+        & reg.exe query "HKLM\$Name" > $null 2>&1
+        if ($LASTEXITCODE -ne 0) {
             return $true
         }
         [GC]::Collect()
         [GC]::WaitForPendingFinalizers()
-        Start-Sleep -Milliseconds 250
+        Start-Sleep -Milliseconds 300
         & reg.exe unload "HKLM\$Name" > $null 2>&1
         if ($LASTEXITCODE -eq 0) {
             return $true
@@ -272,9 +348,9 @@ Write-Host ""
 
 # Confirmation
 if (-not $NonInteractive) {
-    Write-Host "Do you want to continue? (y/n)" -ForegroundColor Yellow
+    Write-Host "Do you want to continue? [Y/n] (Default: Y)" -ForegroundColor Yellow
     $confirm = Read-Host
-    if (-not ($confirm -and ($confirm.Trim().ToLower() -in @('yes', 'y')))) {
+    if ($confirm -and ($confirm.Trim().ToLower() -in @('no', 'n'))) {
         Write-Host "Process cancelled by user. Exiting..." -ForegroundColor Gray
         Stop-Transcript
         exit 0
@@ -284,118 +360,410 @@ if (-not $NonInteractive) {
 # Customization Options (Resolves Issues #1, #5, #9, #10, #12, #13)
 Write-Host ""
 Write-Host "--- Customization Settings ---" -ForegroundColor Green
+
+# 1. Initialize recommended baseline defaults
 $removeDefender = $true
 $keepAsianIME = $true
 $keepExtraFonts = $true
-$removeDrivers = $true
+$removeDrivers = $false
 $disableWU = $true
 $keepBT = $true
 $wslSupport = $false
 $keepRecoveryEnv = $false
 $safeDebloatMode = $true
-$ultraSlimMode = $false
+$ultraSlimMode = $true
 $setJapaneseKeyboard = $true
 $atlasReviOSMode = $true
+$bundleOptimizationToolkit = $true
+$bundleRevTool = $bundleOptimizationToolkit
 $exportESDMode = $false
+$removeStore = $false
 
-if ($NonInteractive) {
-    if ($KeepDefender)          { $removeDefender = $false }
-    if (-not $KeepIME)          { $keepAsianIME = $false }
-    if (-not $KeepFonts)        { $keepExtraFonts = $false }
-    if ($KeepDrivers)           { $removeDrivers = $false }
-    if ($KeepWindowsUpdate)     { $disableWU = $false }
-    if ($KeepBluetooth)         { $keepBT = $true }
-    if ($EnableWSL)             { $wslSupport = $true }
-    if ($KeepRecovery -or $KeepWinRE) { $keepRecoveryEnv = $true }
-    if ($AggressiveWinSxS -or $TrimWinSxS) { $safeDebloatMode = $false }
-    if ($UltraSlim)             { $ultraSlimMode = $true; $keepExtraFonts = $false }
-    if ($NoJapaneseKeyboard)    { $setJapaneseKeyboard = $false }
-    elseif ($JapaneseKeyboard)  { $setJapaneseKeyboard = $true }
-    if ($NoAtlasReviOS)         { $atlasReviOSMode = $false }
-    elseif ($AtlasReviOS)       { $atlasReviOSMode = $true }
-    if ($ExportESD)             { $exportESDMode = $true }
+# 2. Track explicitly supplied CLI parameters from bound parameters snapshot
+$bound = $PSBoundParameters
+$cliBound = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+
+$isAnyBound = {
+    param([string[]]$Names)
+    foreach ($n in $Names) {
+        if ($bound.ContainsKey($n)) { return $true }
+    }
+    return $false
+}
+$getBoundVal = {
+    param([string]$Name)
+    if (-not $bound.ContainsKey($Name)) { return $false }
+    $v = $bound[$Name]
+    if ($v -is [System.Management.Automation.SwitchParameter]) { return $v.IsPresent }
+    return [bool]$v
+}
+
+# 1. Windows Defender
+if (& $isAnyBound @('KeepDefender')) {
+    $removeDefender = -not (& $getBoundVal 'KeepDefender')
+    [void]$cliBound.Add('Defender')
+} elseif (& $isAnyBound @('RemoveDefender', 'NoDefender')) {
+    $remDef = if ($bound.ContainsKey('RemoveDefender')) { & $getBoundVal 'RemoveDefender' } else { & $getBoundVal 'NoDefender' }
+    $removeDefender = $remDef
+    [void]$cliBound.Add('Defender')
+}
+
+# 2. Asian IMEs
+if (& $isAnyBound @('KeepIME', 'KeepAsianIME')) {
+    $keepImeVal = if ($bound.ContainsKey('KeepIME')) { & $getBoundVal 'KeepIME' } else { & $getBoundVal 'KeepAsianIME' }
+    $keepAsianIME = $keepImeVal
+    [void]$cliBound.Add('IME')
+} elseif (& $isAnyBound @('RemoveIME', 'RemoveAsianIME', 'NoIME')) {
+    $rem = if ($bound.ContainsKey('RemoveIME')) { & $getBoundVal 'RemoveIME' } elseif ($bound.ContainsKey('RemoveAsianIME')) { & $getBoundVal 'RemoveAsianIME' } else { & $getBoundVal 'NoIME' }
+    $keepAsianIME = -not $rem
+    [void]$cliBound.Add('IME')
+}
+
+# 3. Fonts
+if (& $isAnyBound @('KeepFonts', 'KeepExtraFonts')) {
+    $keepFontVal = if ($bound.ContainsKey('KeepFonts')) { & $getBoundVal 'KeepFonts' } else { & $getBoundVal 'KeepExtraFonts' }
+    $keepExtraFonts = $keepFontVal
+    [void]$cliBound.Add('Fonts')
+} elseif (& $isAnyBound @('RemoveFonts', 'NoFonts')) {
+    $remF = if ($bound.ContainsKey('RemoveFonts')) { & $getBoundVal 'RemoveFonts' } else { & $getBoundVal 'NoFonts' }
+    $keepExtraFonts = -not $remF
+    [void]$cliBound.Add('Fonts')
+}
+
+# 4. Drivers
+if (& $isAnyBound @('RemoveDrivers')) {
+    $removeDrivers = & $getBoundVal 'RemoveDrivers'
+    [void]$cliBound.Add('Drivers')
+} elseif (& $isAnyBound @('KeepDrivers')) {
+    $removeDrivers = -not (& $getBoundVal 'KeepDrivers')
+    [void]$cliBound.Add('Drivers')
+}
+
+# 5. Windows Update
+if (& $isAnyBound @('KeepWindowsUpdate', 'EnableWindowsUpdate')) {
+    $keepWu = if ($bound.ContainsKey('KeepWindowsUpdate')) { & $getBoundVal 'KeepWindowsUpdate' } else { & $getBoundVal 'EnableWindowsUpdate' }
+    $disableWU = -not $keepWu
+    [void]$cliBound.Add('WindowsUpdate')
+} elseif (& $isAnyBound @('DisableWindowsUpdate', 'NoWindowsUpdate')) {
+    $disWu = if ($bound.ContainsKey('DisableWindowsUpdate')) { & $getBoundVal 'DisableWindowsUpdate' } else { & $getBoundVal 'NoWindowsUpdate' }
+    $disableWU = $disWu
+    [void]$cliBound.Add('WindowsUpdate')
+}
+
+# 6. Bluetooth
+if (& $isAnyBound @('DisableBluetooth', 'NoBluetooth')) {
+    $disBt = if ($bound.ContainsKey('DisableBluetooth')) { & $getBoundVal 'DisableBluetooth' } else { & $getBoundVal 'NoBluetooth' }
+    $keepBT = -not $disBt
+    [void]$cliBound.Add('Bluetooth')
+} elseif (& $isAnyBound @('KeepBluetooth')) {
+    $keepBT = & $getBoundVal 'KeepBluetooth'
+    [void]$cliBound.Add('Bluetooth')
+}
+
+# 7. WSL2
+if (& $isAnyBound @('EnableWSL')) {
+    $wslSupport = & $getBoundVal 'EnableWSL'
+    [void]$cliBound.Add('WSL')
+} elseif (& $isAnyBound @('DisableWSL', 'NoWSL')) {
+    $disWsl = if ($bound.ContainsKey('DisableWSL')) { & $getBoundVal 'DisableWSL' } else { & $getBoundVal 'NoWSL' }
+    $wslSupport = -not $disWsl
+    [void]$cliBound.Add('WSL')
+}
+
+# 8. Recovery Environment (WinRE)
+if (& $isAnyBound @('KeepRecovery', 'KeepWinRE')) {
+    $keepRecVal = if ($bound.ContainsKey('KeepRecovery')) { & $getBoundVal 'KeepRecovery' } else { & $getBoundVal 'KeepWinRE' }
+    $keepRecoveryEnv = $keepRecVal
+    [void]$cliBound.Add('Recovery')
+} elseif (& $isAnyBound @('RemoveRecovery', 'RemoveWinRE', 'NoWinRE', 'NoRecovery')) {
+    $remRec = if ($bound.ContainsKey('RemoveRecovery')) { & $getBoundVal 'RemoveRecovery' } elseif ($bound.ContainsKey('RemoveWinRE')) { & $getBoundVal 'RemoveWinRE' } elseif ($bound.ContainsKey('NoWinRE')) { & $getBoundVal 'NoWinRE' } else { & $getBoundVal 'NoRecovery' }
+    $keepRecoveryEnv = -not $remRec
+    [void]$cliBound.Add('Recovery')
+}
+
+# 9. WinSxS Component Store Mode
+if (& $isAnyBound @('AggressiveWinSxS', 'TrimWinSxS')) {
+    $agg = if ($bound.ContainsKey('AggressiveWinSxS')) { & $getBoundVal 'AggressiveWinSxS' } else { & $getBoundVal 'TrimWinSxS' }
+    $safeDebloatMode = -not $agg
+    [void]$cliBound.Add('WinSxS')
+} elseif (& $isAnyBound @('SafeDebloat', 'SafeWinSxS')) {
+    $safe = if ($bound.ContainsKey('SafeDebloat')) { & $getBoundVal 'SafeDebloat' } else { & $getBoundVal 'SafeWinSxS' }
+    $safeDebloatMode = $safe
+    [void]$cliBound.Add('WinSxS')
+}
+
+# 10. UltraSlim
+if (& $isAnyBound @('UltraSlim')) {
+    $ultraSlimMode = & $getBoundVal 'UltraSlim'
+    [void]$cliBound.Add('UltraSlim')
+} elseif (& $isAnyBound @('NoUltraSlim')) {
+    $ultraSlimMode = -not (& $getBoundVal 'NoUltraSlim')
+    [void]$cliBound.Add('UltraSlim')
+}
+
+# UltraSlim font pruning: only prune fonts if UltraSlim is active AND Fonts was NOT explicitly specified
+if ($ultraSlimMode -and (-not $cliBound.Contains('Fonts'))) {
+    $keepExtraFonts = $false
+}
+
+# 11. Japanese Keyboard
+if (& $isAnyBound @('NoJapaneseKeyboard')) {
+    $setJapaneseKeyboard = -not (& $getBoundVal 'NoJapaneseKeyboard')
+    [void]$cliBound.Add('JPKey')
+} elseif (& $isAnyBound @('JapaneseKeyboard')) {
+    $setJapaneseKeyboard = & $getBoundVal 'JapaneseKeyboard'
+    [void]$cliBound.Add('JPKey')
+}
+
+# 12. AtlasOS & ReviOS Tweaks
+if (& $isAnyBound @('NoAtlasReviOS')) {
+    $atlasReviOSMode = -not (& $getBoundVal 'NoAtlasReviOS')
+    [void]$cliBound.Add('Atlas')
+} elseif (& $isAnyBound @('AtlasReviOS')) {
+    $atlasReviOSMode = & $getBoundVal 'AtlasReviOS'
+    [void]$cliBound.Add('Atlas')
+}
+
+# 13. Optimization Toolkit
+if (& $isAnyBound @('NoBundleOptimizationToolkit', 'NoBundleRevisionTool')) {
+    $noTool = if ($bound.ContainsKey('NoBundleOptimizationToolkit')) { & $getBoundVal 'NoBundleOptimizationToolkit' } else { & $getBoundVal 'NoBundleRevisionTool' }
+    $bundleOptimizationToolkit = -not $noTool
+    $bundleRevTool = $bundleOptimizationToolkit
+    [void]$cliBound.Add('Toolkit')
+} elseif (& $isAnyBound @('BundleOptimizationToolkit', 'BundleRevisionTool')) {
+    $bTool = if ($bound.ContainsKey('BundleOptimizationToolkit')) { & $getBoundVal 'BundleOptimizationToolkit' } else { & $getBoundVal 'BundleRevisionTool' }
+    $bundleOptimizationToolkit = $bTool
+    $bundleRevTool = $bundleOptimizationToolkit
+    [void]$cliBound.Add('Toolkit')
+}
+
+# 14. Export Format
+if (& $isAnyBound @('ExportESD')) {
+    $exportESDMode = & $getBoundVal 'ExportESD'
+    [void]$cliBound.Add('Export')
+} elseif (& $isAnyBound @('ExportWIM', 'NoESD')) {
+    $expWim = if ($bound.ContainsKey('ExportWIM')) { & $getBoundVal 'ExportWIM' } else { & $getBoundVal 'NoESD' }
+    $exportESDMode = -not $expWim
+    [void]$cliBound.Add('Export')
+}
+
+# 15. Microsoft Store (Default: Keep)
+if (& $isAnyBound @('RemoveStore', 'NoStore', 'RemoveMicrosoftStore')) {
+    $removeStore = if ($bound.ContainsKey('RemoveStore')) { & $getBoundVal 'RemoveStore' } elseif ($bound.ContainsKey('NoStore')) { & $getBoundVal 'NoStore' } else { & $getBoundVal 'RemoveMicrosoftStore' }
+    [void]$cliBound.Add('Store')
+} elseif (& $isAnyBound @('KeepStore')) {
+    $removeStore = -not (& $getBoundVal 'KeepStore')
+    [void]$cliBound.Add('Store')
+}
+
+# 3. Interactive Prompting Logic
+$isAutomated = $NonInteractive -or ($cliBound.Count -ge 15 -and (-not $Interactive))
+
+if ($isAutomated) {
+    Write-Host "Running in automated/CLI mode (no interactive prompts)." -ForegroundColor Gray
 } else {
-    Write-Host "Configure debloat options (Press Enter to use recommended defaults):" -ForegroundColor Gray
+    Write-Host "Configure debloat options (Press Enter to accept current defaults or CLI selections):" -ForegroundColor Gray
     
     # 1. Windows Defender
-    $opt = Read-Host "1. Remove Windows Defender? [Y/n] (Default: Y)"
-    if ($opt -and ($opt.Trim().ToLower() -in @('no', 'n'))) { $removeDefender = $false }
+    if ($cliBound.Contains('Defender') -and (-not $Interactive)) {
+        Write-Host "1. Remove Windows Defender: $(if ($removeDefender) { 'Yes (Remove)' } else { 'No (Keep)' }) [CLI: Specified]" -ForegroundColor DarkCyan
+    } else {
+        $defPrompt = if ($removeDefender) { "Y/n" } else { "y/N" }
+        $defDesc = if ($removeDefender) { "Default: Y (Remove)" } else { "Default: N (Keep)" }
+        $opt = Read-Host "1. Remove Windows Defender? [$defPrompt] ($defDesc)"
+        if ($opt) {
+            if ($opt.Trim().ToLower() -in @('no', 'n')) { $removeDefender = $false }
+            elseif ($opt.Trim().ToLower() -in @('yes', 'y')) { $removeDefender = $true }
+        }
+    }
 
     # 2. Asian IMEs (Japanese, Chinese, Korean)
-    $opt = Read-Host "2. Keep Asian language IMEs (Japanese, Chinese, Korean)? [Y/n] (Default: Y)"
-    if ($opt -and ($opt.Trim().ToLower() -in @('no', 'n'))) {
-        $keepAsianIME = $false
+    if ($cliBound.Contains('IME') -and (-not $Interactive)) {
+        Write-Host "2. Keep Asian language IMEs: $(if ($keepAsianIME) { 'Yes (Keep)' } else { 'No (Remove)' }) [CLI: Specified]" -ForegroundColor DarkCyan
     } else {
-        $keepAsianIME = $true
+        $defPrompt = if ($keepAsianIME) { "Y/n" } else { "y/N" }
+        $defDesc = if ($keepAsianIME) { "Default: Y (Keep)" } else { "Default: N (Remove)" }
+        $opt = Read-Host "2. Keep Asian language IMEs (Japanese, Chinese, Korean)? [$defPrompt] ($defDesc)"
+        if ($opt) {
+            if ($opt.Trim().ToLower() -in @('no', 'n')) { $keepAsianIME = $false }
+            elseif ($opt.Trim().ToLower() -in @('yes', 'y')) { $keepAsianIME = $true }
+        }
     }
 
     # 3. Fonts
-    $opt = Read-Host "3. Keep extra international & Asian fonts? [Y/n] (Default: Y)"
-    if ($opt -and ($opt.Trim().ToLower() -in @('no', 'n'))) {
-        $keepExtraFonts = $false
+    if ($cliBound.Contains('Fonts') -and (-not $Interactive)) {
+        Write-Host "3. Keep extra international & Asian fonts: $(if ($keepExtraFonts) { 'Yes (Keep)' } else { 'No (Remove)' }) [CLI: Specified]" -ForegroundColor DarkCyan
     } else {
-        $keepExtraFonts = $true
+        $defPrompt = if ($keepExtraFonts) { "Y/n" } else { "y/N" }
+        $defDesc = if ($keepExtraFonts) { "Default: Y (Keep)" } else { "Default: N (Remove)" }
+        $opt = Read-Host "3. Keep extra international & Asian fonts? [$defPrompt] ($defDesc)"
+        if ($opt) {
+            if ($opt.Trim().ToLower() -in @('no', 'n')) { $keepExtraFonts = $false }
+            elseif ($opt.Trim().ToLower() -in @('yes', 'y')) { $keepExtraFonts = $true }
+        }
     }
 
     # 4. Drivers
-    $opt = Read-Host "4. Remove non-essential drivers (printers, scanners, fax)? [Y/n] (Default: Y)"
-    if ($opt -and ($opt.Trim().ToLower() -in @('no', 'n'))) { $removeDrivers = $false }
+    if ($cliBound.Contains('Drivers') -and (-not $Interactive)) {
+        Write-Host "4. Remove non-essential drivers: $(if ($removeDrivers) { 'Yes (Remove)' } else { 'No (Keep)' }) [CLI: Specified]" -ForegroundColor DarkCyan
+    } else {
+        $defPrompt = if ($removeDrivers) { "Y/n" } else { "y/N" }
+        $defDesc = if ($removeDrivers) { "Default: Y (Remove)" } else { "Default: N (Keep - Recommended for 100% Setup Stability)" }
+        $opt = Read-Host "4. Remove non-essential drivers (printers, scanners, fax)? [$defPrompt] ($defDesc)"
+        if ($opt) {
+            if ($opt.Trim().ToLower() -in @('yes', 'y')) { $removeDrivers = $true }
+            elseif ($opt.Trim().ToLower() -in @('no', 'n')) { $removeDrivers = $false }
+        }
+    }
 
     # 5. Windows Update
-    $opt = Read-Host "5. Disable Windows Update? [Y/n] (Default: Y)"
-    if ($opt -and ($opt.Trim().ToLower() -in @('no', 'n'))) { $disableWU = $false }
+    if ($cliBound.Contains('WindowsUpdate') -and (-not $Interactive)) {
+        Write-Host "5. Disable Windows Update: $(if ($disableWU) { 'Yes (Disable)' } else { 'No (Keep)' }) [CLI: Specified]" -ForegroundColor DarkCyan
+    } else {
+        $defPrompt = if ($disableWU) { "Y/n" } else { "y/N" }
+        $defDesc = if ($disableWU) { "Default: Y (Disable)" } else { "Default: N (Keep)" }
+        $opt = Read-Host "5. Disable Windows Update? [$defPrompt] ($defDesc)"
+        if ($opt) {
+            if ($opt.Trim().ToLower() -in @('no', 'n')) { $disableWU = $false }
+            elseif ($opt.Trim().ToLower() -in @('yes', 'y')) { $disableWU = $true }
+        }
+    }
 
     # 6. Bluetooth & Audio peripherals
-    $opt = Read-Host "6. Keep Bluetooth audio and peripheral services? [Y/n] (Default: Y)"
-    if ($opt -and ($opt.Trim().ToLower() -in @('no', 'n'))) { $keepBT = $false }
+    if ($cliBound.Contains('Bluetooth') -and (-not $Interactive)) {
+        Write-Host "6. Keep Bluetooth audio and peripheral services: $(if ($keepBT) { 'Yes (Keep)' } else { 'No (Disable)' }) [CLI: Specified]" -ForegroundColor DarkCyan
+    } else {
+        $defPrompt = if ($keepBT) { "Y/n" } else { "y/N" }
+        $defDesc = if ($keepBT) { "Default: Y (Keep)" } else { "Default: N (Disable)" }
+        $opt = Read-Host "6. Keep Bluetooth audio and peripheral services? [$defPrompt] ($defDesc)"
+        if ($opt) {
+            if ($opt.Trim().ToLower() -in @('no', 'n')) { $keepBT = $false }
+            elseif ($opt.Trim().ToLower() -in @('yes', 'y')) { $keepBT = $true }
+        }
+    }
 
     # 7. WSL2 & Virtualization (Resolves Issue #5)
-    $opt = Read-Host "7. Enable WSL2 and Virtual Machine Platform before stripping WinSxS? [y/N] (Default: N)"
-    if ($opt -and ($opt.Trim().ToLower() -in @('yes', 'y'))) { $wslSupport = $true }
+    if ($cliBound.Contains('WSL') -and (-not $Interactive)) {
+        Write-Host "7. Enable WSL2 and Virtual Machine Platform: $(if ($wslSupport) { 'Yes (Enable)' } else { 'No (Disable)' }) [CLI: Specified]" -ForegroundColor DarkCyan
+    } else {
+        $defPrompt = if ($wslSupport) { "Y/n" } else { "y/N" }
+        $defDesc = if ($wslSupport) { "Default: Y (Enable)" } else { "Default: N (Disable)" }
+        $opt = Read-Host "7. Enable WSL2 and Virtual Machine Platform before stripping WinSxS? [$defPrompt] ($defDesc)"
+        if ($opt) {
+            if ($opt.Trim().ToLower() -in @('yes', 'y')) { $wslSupport = $true }
+            elseif ($opt.Trim().ToLower() -in @('no', 'n')) { $wslSupport = $false }
+        }
+    }
 
     # 8. Windows Recovery Environment (WinRE)
-    $opt = Read-Host "8. Keep Windows Recovery Environment (WinRE)? [y/N] (Default: N - removes WinRE safely post-install)"
-    if ($opt -and ($opt.Trim().ToLower() -in @('yes', 'y'))) { $keepRecoveryEnv = $true }
+    if ($cliBound.Contains('Recovery') -and (-not $Interactive)) {
+        Write-Host "8. Keep Windows Recovery Environment (WinRE): $(if ($keepRecoveryEnv) { 'Yes (Keep)' } else { 'No (Remove)' }) [CLI: Specified]" -ForegroundColor DarkCyan
+    } else {
+        $defPrompt = if ($keepRecoveryEnv) { "Y/n" } else { "y/N" }
+        $defDesc = if ($keepRecoveryEnv) { "Default: Y (Keep)" } else { "Default: N (Remove - removes WinRE safely post-install)" }
+        $opt = Read-Host "8. Keep Windows Recovery Environment (WinRE)? [$defPrompt] ($defDesc)"
+        if ($opt) {
+            if ($opt.Trim().ToLower() -in @('yes', 'y')) { $keepRecoveryEnv = $true }
+            elseif ($opt.Trim().ToLower() -in @('no', 'n')) { $keepRecoveryEnv = $false }
+        }
+    }
 
     # 9. Component Store (WinSxS) Optimization Mode
-    $opt = Read-Host "9. Component Store optimization mode [1=Safe Cleanup (Recommended: 100% Setup success), 2=Aggressive Pruning (Experimental)] (Default: 1)"
-    if ($opt -and ($opt.Trim() -eq '2')) {
-        $safeDebloatMode = $false
+    if ($cliBound.Contains('WinSxS') -and (-not $Interactive)) {
+        Write-Host "9. Component Store mode: $(if ($safeDebloatMode) { '1 (Safe Cleanup)' } else { '2 (Aggressive Pruning)' }) [CLI: Specified]" -ForegroundColor DarkCyan
     } else {
-        $safeDebloatMode = $true
+        $defMode = if ($safeDebloatMode) { "1" } else { "2" }
+        $opt = Read-Host "9. Component Store optimization mode [1=Safe Cleanup (Recommended: 100% Setup success), 2=Aggressive Pruning (Experimental)] (Default: $defMode)"
+        if ($opt) {
+            if ($opt.Trim() -eq '2') { $safeDebloatMode = $false }
+            elseif ($opt.Trim() -eq '1') { $safeDebloatMode = $true }
+        }
     }
 
     # 10. UltraSlim (~3.2 GB ISO Target Mode)
-    $opt = Read-Host "10. Enable UltraSlim mode (~3.2 GB ISO target: prunes Edge browser, non-JP CJK fonts, WinSxS dead weight, preserves WebView2 for OOBE)? [Y/n] (Default: Y)"
-    if ($opt -and ($opt.Trim().ToLower() -in @('no', 'n'))) {
-        $ultraSlimMode = $false
+    if ($cliBound.Contains('UltraSlim') -and (-not $Interactive)) {
+        Write-Host "10. Enable UltraSlim mode: $(if ($ultraSlimMode) { 'Yes (Enable)' } else { 'No (Disable)' }) [CLI: Specified]" -ForegroundColor DarkCyan
     } else {
-        $ultraSlimMode = $true
-        $keepExtraFonts = $false
+        $defPrompt = if ($ultraSlimMode) { "Y/n" } else { "y/N" }
+        $defDesc = if ($ultraSlimMode) { "Default: Y (Enable)" } else { "Default: N (Disable)" }
+        $opt = Read-Host "10. Enable UltraSlim mode (~3.2 GB ISO target: prunes Edge browser, non-JP CJK fonts, WinSxS dead weight, preserves WebView2 for OOBE)? [$defPrompt] ($defDesc)"
+        if ($opt) {
+            if ($opt.Trim().ToLower() -in @('no', 'n')) {
+                $ultraSlimMode = $false
+            } elseif ($opt.Trim().ToLower() -in @('yes', 'y')) {
+                $ultraSlimMode = $true
+                if (-not $cliBound.Contains('Fonts')) { $keepExtraFonts = $false }
+            }
+        }
     }
 
     # 11. Japanese 106/109 Keyboard Layout Configuration
-    $opt = Read-Host "11. Configure Japanese 106/109 keyboard layout (prevents @/: mismatch)? [Y/n] (Default: Y)"
-    if ($opt -and ($opt.Trim().ToLower() -in @('no', 'n'))) {
-        $setJapaneseKeyboard = $false
+    if ($cliBound.Contains('JPKey') -and (-not $Interactive)) {
+        Write-Host "11. Configure Japanese 106/109 keyboard layout: $(if ($setJapaneseKeyboard) { 'Yes (Configure)' } else { 'No (Skip)' }) [CLI: Specified]" -ForegroundColor DarkCyan
     } else {
-        $setJapaneseKeyboard = $true
+        $defPrompt = if ($setJapaneseKeyboard) { "Y/n" } else { "y/N" }
+        $defDesc = if ($setJapaneseKeyboard) { "Default: Y (Configure)" } else { "Default: N (Skip)" }
+        $opt = Read-Host "11. Configure Japanese 106/109 keyboard layout (prevents @/: mismatch)? [$defPrompt] ($defDesc)"
+        if ($opt) {
+            if ($opt.Trim().ToLower() -in @('no', 'n')) { $setJapaneseKeyboard = $false }
+            elseif ($opt.Trim().ToLower() -in @('yes', 'y')) { $setJapaneseKeyboard = $true }
+        }
     }
 
     # 12. AtlasOS & ReviOS Radical Debloat & Performance Optimization
-    $opt = Read-Host "12. Enable AtlasOS & ReviOS radical debloat & latency optimizations? [Y/n] (Default: Y)"
-    if ($opt -and ($opt.Trim().ToLower() -in @('no', 'n'))) {
-        $atlasReviOSMode = $false
+    if ($cliBound.Contains('Atlas') -and (-not $Interactive)) {
+        Write-Host "12. Enable AtlasOS & ReviOS radical debloat & latency optimizations: $(if ($atlasReviOSMode) { 'Yes (Enable)' } else { 'No (Disable)' }) [CLI: Specified]" -ForegroundColor DarkCyan
     } else {
-        $atlasReviOSMode = $true
+        $defPrompt = if ($atlasReviOSMode) { "Y/n" } else { "y/N" }
+        $defDesc = if ($atlasReviOSMode) { "Default: Y (Enable)" } else { "Default: N (Disable)" }
+        $opt = Read-Host "12. Enable AtlasOS & ReviOS radical debloat & latency optimizations? [$defPrompt] ($defDesc)"
+        if ($opt) {
+            if ($opt.Trim().ToLower() -in @('no', 'n')) { $atlasReviOSMode = $false }
+            elseif ($opt.Trim().ToLower() -in @('yes', 'y')) { $atlasReviOSMode = $true }
+        }
     }
 
-    # 13. Image Compression Format (Default: LZX install.wim to prevent 24H2 DISM WIMGAPI 0xc0000005 crash)
-    $opt = Read-Host "13. Image compression format [1=install.wim LZX (Recommended: Fast & Crash-Free), 2=install.esd Recovery (LZMS, experimental)] (Default: 1)"
-    if ($opt -and ($opt.Trim() -eq '2')) {
-        $exportESDMode = $true
+    # 13. Bundle Windows Optimization & Debloat Toolkit to Desktop
+    if ($cliBound.Contains('Toolkit') -and (-not $Interactive)) {
+        Write-Host "13. Bundle Windows Optimization Toolkit to Desktop: $(if ($bundleOptimizationToolkit) { 'Yes (Bundle)' } else { 'No (Skip)' }) [CLI: Specified]" -ForegroundColor DarkCyan
     } else {
-        $exportESDMode = $false
+        $defPrompt = if ($bundleOptimizationToolkit) { "Y/n" } else { "y/N" }
+        $defDesc = if ($bundleOptimizationToolkit) { "Default: Y (Bundle)" } else { "Default: N (Skip)" }
+        $opt = Read-Host "13. Bundle Windows Optimization Toolkit (WinUtil, Sophia Script, SophiApp, Optimizer, Bloatynosy, Revision Tool) to Desktop? [$defPrompt] ($defDesc)"
+        if ($opt) {
+            if ($opt.Trim().ToLower() -in @('no', 'n')) {
+                $bundleOptimizationToolkit = $false
+                $bundleRevTool = $false
+            } elseif ($opt.Trim().ToLower() -in @('yes', 'y')) {
+                $bundleOptimizationToolkit = $true
+                $bundleRevTool = $true
+            }
+        }
+    }
+
+    # 14. Image compression format
+    if ($cliBound.Contains('Export') -and (-not $Interactive)) {
+        Write-Host "14. Image compression format: $(if ($exportESDMode) { '2 (install.esd Recovery LZMS)' } else { '1 (install.wim LZX)' }) [CLI: Specified]" -ForegroundColor DarkCyan
+    } else {
+        $defMode = if ($exportESDMode) { "2" } else { "1" }
+        $opt = Read-Host "14. Image compression format [1=install.wim LZX (Recommended: Fast & Crash-Free), 2=install.esd Recovery (LZMS, experimental)] (Default: $defMode)"
+        if ($opt) {
+            if ($opt.Trim() -eq '2') { $exportESDMode = $true }
+            elseif ($opt.Trim() -eq '1') { $exportESDMode = $false }
+        }
+    }
+
+    # 15. Microsoft Store
+    if ($cliBound.Contains('Store') -and (-not $Interactive)) {
+        Write-Host "15. Remove Microsoft Store: $(if ($removeStore) { 'Yes (Remove)' } else { 'No (Keep)' }) [CLI: Specified]" -ForegroundColor DarkCyan
+    } else {
+        $defPrompt = if ($removeStore) { "Y/n" } else { "y/N" }
+        $defDesc = if ($removeStore) { "Default: Y (Remove)" } else { "Default: N (Keep - Store apps/updates stay available)" }
+        $opt = Read-Host "15. Remove Microsoft Store (Microsoft.WindowsStore + StorePurchaseApp; winget/App Installer is kept)? [$defPrompt] ($defDesc)"
+        if ($opt) {
+            if ($opt.Trim().ToLower() -in @('yes', 'y')) { $removeStore = $true }
+            elseif ($opt.Trim().ToLower() -in @('no', 'n')) { $removeStore = $false }
+        }
     }
 }
 
@@ -413,8 +781,14 @@ Write-Host "  - Safe Debloat (WinSxS):   $safeDebloatMode"
 Write-Host "  - UltraSlim (~3GB ISO):    $ultraSlimMode"
 Write-Host "  - Japanese 106 Keyboard:   $setJapaneseKeyboard"
 Write-Host "  - AtlasOS & ReviOS Tuning: $atlasReviOSMode"
+Write-Host "  - Optimization Toolkit:    $bundleOptimizationToolkit"
+Write-Host "  - Remove Microsoft Store:  $removeStore"
 Write-Host "  - Payload Format:          $(if ($exportESDMode) { 'install.esd (LZMS)' } else { 'install.wim (LZX - Recommended)' })"
 Write-Host ""
+if ($env:NANO11_TEST_MODE -eq "1") {
+    Stop-Transcript
+    exit 0
+}
 
 # Determine Working Directory (Resolves Issue #27, #23 - Low disk space on C:)
 if ($WorkDir) {
@@ -506,8 +880,10 @@ if (-not $DriveLetter) {
         $esdP = Join-Path -Path "$rootClean\sources" -ChildPath "install.esd"
         $hasWimP = (Test-Path -LiteralPath $wimP) -and ((Get-Item -LiteralPath $wimP).Length -gt 1GB)
         $hasEsdP = (Test-Path -LiteralPath $esdP) -and ((Get-Item -LiteralPath $esdP).Length -gt 1GB)
-        if ($hasWimP -or $hasEsdP) {
+        if ($hasWimP) {
             $detectedMediaDrives += $psd
+        } elseif ($hasEsdP) {
+            Write-Host "  [!] Notice: Drive $rootClean contains 'install.esd' (MediaCreationTool format). MediaCreationTool ISOs are NOT supported. Skipping..." -ForegroundColor Yellow
         }
     }
 
@@ -639,91 +1015,18 @@ if (-not $copySuccess) {
     Copy-Item -Path "$sourcePath*" -Destination $nano11Dir -Recurse -Force | Out-Null
 }
 
-# Handle installation image conversion (install.esd -> install.wim) if needed
-if (-not $hasSourceWim) {
-    if ($hasSourceEsd) {
-        Write-Host "Found install.esd ($([math]::Round((Get-Item -LiteralPath $sourceEsd).Length / 1GB, 2)) GB), converting to install.wim..." -ForegroundColor Yellow
-        $esdInfoOutput = & dism.exe /English /Get-WimInfo "/WimFile:$sourceEsd"
-        $esdInfoOutput | ForEach-Object { Write-Host $_ }
-        $esdAvailableIndices = @(($esdInfoOutput | Select-String -Pattern '^\s*Index\s*:\s*(\d+)' | ForEach-Object { $_.Matches[0].Groups[1].Value }))
-        $esdDefaultIndex = if ($esdAvailableIndices.Count -gt 0) { $esdAvailableIndices[0] } else { "1" }
-        
-        $targetEsdIndex = $esdDefaultIndex
-        if ([string]::IsNullOrWhiteSpace($index) -or ($index -notin $esdAvailableIndices)) {
-            if (-not $NonInteractive) {
-                $promptRange = if ($esdAvailableIndices.Count -gt 1) { " ($($esdAvailableIndices -join ', '))" } else { "" }
-                $userInput = Read-Host "Please enter the image index to extract$promptRange [Default: $esdDefaultIndex]"
-                if (-not [string]::IsNullOrWhiteSpace($userInput) -and ($userInput.Trim() -in $esdAvailableIndices)) {
-                    $targetEsdIndex = $userInput.Trim()
-                }
-            }
-        } else {
-            $targetEsdIndex = $index
-        }
-        Write-Host "Converting install.esd (Index $targetEsdIndex) to install.wim. This may take a while..." -ForegroundColor Green
-        
-        # Clean up any partial destWim from previous failed run
-        Remove-Item -LiteralPath $destWim -Force -ErrorAction SilentlyContinue
-
-        # Run DISM export without /CheckIntegrity to prevent Error 1392 / 0x80070570 caused by LZMS integrity mismatch
-        & dism.exe /Export-Image "/SourceImageFile:$sourceEsd" "/SourceIndex:$targetEsdIndex" "/DestinationImageFile:$destWim" /Compress:max
-        
-        $esdExportOk = ($LASTEXITCODE -eq 0 -and (Test-Path -LiteralPath $destWim) -and ((Get-Item -LiteralPath $destWim).Length -gt 1GB))
-
-        if (-not $esdExportOk) {
-            Write-Host "Warning: Standard ESD export of Index $targetEsdIndex failed (Exit code: $LASTEXITCODE)." -ForegroundColor Yellow
-            Remove-Item -LiteralPath $destWim -Force -ErrorAction SilentlyContinue
-
-            # Check if any other drive has a valid install.wim to automatically recover from corrupt ESD
-            $altWimDrive = (Get-PSDrive -PSProvider FileSystem -ErrorAction SilentlyContinue | Where-Object {
-                $r = $_.Root.TrimEnd('\')
-                $w = Join-Path -Path "$r\sources" -ChildPath "install.wim"
-                $r -ne $DriveLetter -and (Test-Path -LiteralPath $w) -and ((Get-Item -LiteralPath $w).Length -gt 1GB)
-            } | Select-Object -First 1)
-
-            # If no alternative drive is currently mounted, auto-mount a healthy Windows 11 ISO from local storage
-            if (-not $altWimDrive) {
-                Write-Host "Attempting auto-recovery by locating and mounting healthy Windows 11 ISO on storage..." -ForegroundColor Cyan
-                $recoveredDrive = Find-AndMountHealthyWindowsIso
-                if ($recoveredDrive) {
-                    $recClean = $recoveredDrive.TrimEnd(':')
-                    $altWimDrive = Get-PSDrive -Name $recClean -PSProvider FileSystem -ErrorAction SilentlyContinue
-                }
-            }
-
-            if ($altWimDrive) {
-                $altRoot = $altWimDrive.Root.TrimEnd('\')
-                Write-Host "Auto-Recovery: Found healthy install.wim on alternative drive $altRoot!" -ForegroundColor Green
-                Write-Host "Switching source to $altRoot to bypass corrupt ESD and guarantee successful build..." -ForegroundColor Green
-                $DriveLetter = $altRoot
-                $sourcePath = $DriveLetter.TrimEnd('\') + "\"
-                $sourceWim = Join-Path -Path "$DriveLetter\sources" -ChildPath "install.wim"
-                $hasSourceWim = $true
-
-                # Copy healthy install.wim directly
-                Write-Host "Copying install.wim from $altRoot..." -ForegroundColor Green
-                Copy-Item -LiteralPath $sourceWim -Destination $destWim -Force
-                if ((Test-Path -LiteralPath $destWim) -and ((Get-Item -LiteralPath $destWim).Length -gt 1GB)) {
-                    $esdExportOk = $true
-                    $index = "" # Reset index so it prompts or defaults from healthy wim
-                }
-            }
-        }
-
-        if (-not $esdExportOk -and -not $hasSourceWim) {
-            Write-Host "Critical Error: Failed to extract valid install.wim from install.esd on $DriveLetter." -ForegroundColor Red
-            Write-Host "The ESD file on $DriveLetter appears to have damaged data streams." -ForegroundColor Yellow
-            Write-Host "Recommendation: Mount the official Windows 11 ISO containing install.wim and run again." -ForegroundColor Yellow
-            Stop-Transcript
-            exit 1
-        }
-
-        # When an index is extracted into a fresh install.wim, the new destination image has only 1 index (Index 1)
-        if (-not $hasSourceWim) {
-            $index = "1"
-        }
+# Ensure install.wim exists in destination; if not copied by robocopy, copy directly
+if (-not (Test-Path -LiteralPath $destWim) -or ((Get-Item -LiteralPath $destWim).Length -lt 1GB)) {
+    if (Test-Path -LiteralPath $sourceWim) {
+        Write-Host "Copying install.wim directly from $sourceWim..." -ForegroundColor Cyan
+        Copy-Item -LiteralPath $sourceWim -Destination $destWim -Force
     } else {
-        Write-Host "Can't find valid install.wim or install.esd (> 1GB) in $DriveLetter\sources. Exiting..." -ForegroundColor Red
+        Write-Host ""
+        Write-Host "=========================================================" -ForegroundColor Red
+        Write-Host " ERROR: 'sources\install.wim' was not found on $DriveLetter!" -ForegroundColor Red
+        Write-Host " MediaCreationTool ISOs containing only 'install.esd' are not supported." -ForegroundColor Yellow
+        Write-Host " Please download the official ISO containing 'install.wim' from Microsoft." -ForegroundColor Yellow
+        Write-Host "=========================================================" -ForegroundColor Red
         Stop-Transcript
         exit 1
     }
@@ -907,6 +1210,14 @@ $appxPatterns = @(
     '*MicrosoftCorporationII.MicrosoftFamily*', '*Edge.DevToolsClient*', '*549981C3F5F10*',
     '*Client.WebExperience*', '*Windows.Ai*', '*WindowsAI*'
 )
+# Optional: Microsoft Store removal (-RemoveStore / prompt 15).
+# Only the Store app and its purchase UI are removed. Microsoft.DesktopAppInstaller (winget)
+# and Store framework packages (VCLibs, UI.Xaml, NET.Native, Services.Store.Engagement) are
+# intentionally kept so winget, WinUtil and already-installed apps keep working.
+if ($removeStore) {
+    Write-Host "  [Store] Microsoft Store will be removed (Microsoft.WindowsStore, Microsoft.StorePurchaseApp)." -ForegroundColor Yellow
+    $appxPatterns += @('Microsoft.WindowsStore_*', 'Microsoft.StorePurchaseApp_*')
+}
 # Note: *SecHealthUI*, *CoreAI*, *PeopleExperienceHost*, *PinningConfirmationDialog*, *SecureAssessmentBrowser*
 # are protected system components in newer Windows 11 builds that trigger COMException (0x80073cfa) if removed via DISM.
 # Defender and other features are cleanly managed via services and registry instead.
@@ -1071,27 +1382,33 @@ $winDir = "$scratchDir\Windows"
 
 # Non-essential driver cleanup (optional)
 if ($removeDrivers) {
-    Write-Host "Slimming DriverStore..." -ForegroundColor Cyan
+    Write-Host "Slimming legacy peripheral drivers in DriverStore (strictly protecting ntprint, rdpbus)..." -ForegroundColor Cyan
     $driverRepo = Join-Path -Path $winDir -ChildPath "System32\DriverStore\FileRepository"
-    $driverPatterns = @('prn*', 'scan*', 'mfd*', 'wscsmd.inf*', 'tapdrv*', 'rdpbus.inf*')
+    # CRITICAL: ntprint.inf and rdpbus.inf are CORE Windows system drivers.
+    # Deleting them causes Windows Setup PnP driver staging to hang at 77%!
+    # Only optional standalone printer/fax/modem INF packages may be safely trimmed.
+    $driverPatterns = @('prnms*.inf*', 'scan*.inf*', 'mfd*.inf*', 'wscsmd.inf*', 'fax*.inf*', 'modem*.inf*')
     if (-not $keepBT) {
         $driverPatterns += 'tdibth.inf*'
-    }
-    if ($ultraSlimMode) {
-        $driverPatterns += @('ntprint*.inf*', 'fax*.inf*', 'smartcrd*.inf*', 'modem*.inf*')
     }
     if (Test-Path -LiteralPath $driverRepo) {
         Get-ChildItem -Path $driverRepo -Directory | ForEach-Object {
             $folder = $_
+            # Explicit safety guard against deleting core system drivers
+            if ($folder.Name -like 'ntprint*' -or $folder.Name -like 'rdpbus*') {
+                return
+            }
             foreach ($pattern in $driverPatterns) {
                 if ($folder.Name -like $pattern) {
-                    Write-Host "  - Removing driver package: $($folder.Name)"
+                    Write-Host "  - Removing legacy peripheral driver package: $($folder.Name)"
                     Remove-ProtectedDirectory -Path $folder.FullName -ScratchPath $scratchDir
                     break
                 }
             }
         }
     }
+} else {
+    Write-Host "Preserving DriverStore inbox drivers (guarantees zero setup stalls at 77%)..." -ForegroundColor Green
 }
 
 # Fonts slimming (preserves Japanese and core system fonts, trims heavy foreign fonts)
@@ -1198,9 +1515,7 @@ Remove-ProtectedDirectory -Path "$scratchDir\Program Files (x86)\Microsoft\EdgeC
 
 # Purge OneDrive setup payload (197 MB) and executable
 Remove-Item -Path "$scratchDir\Windows\System32\OneDriveSetup.exe" -Force -ErrorAction SilentlyContinue
-Get-ChildItem -Path "$scratchDir\Windows\WinSxS" -Filter "*microsoft-windows-onedrive-setup*" -Directory -ErrorAction SilentlyContinue | ForEach-Object {
-    Remove-ProtectedDirectory -Path $_.FullName -ScratchPath $scratchDir
-}
+# Note: WinSxS manifests and packages are preserved to ensure CBS and Wimgapi extraction stability at 77%.
 
 # Purge non-critical assistive and Game Bar binaries from System32 (Preserve core osk, Narrator, magnify for OOBE initialization)
 Write-Host "Removing unneeded assistive and Game Bar binaries from System32..." -ForegroundColor Cyan
@@ -1256,32 +1571,11 @@ if ($keepRecoveryEnv) {
 # 9. Component Store (WinSxS) Optimization
 if ($safeDebloatMode) {
     Write-Host "Consolidating component store safely via DISM Component Cleanup..." -ForegroundColor Green
-    & dism.exe /English "/image:$scratchDir" /Cleanup-Image /StartComponentCleanup /ResetBase > $null 2>&1
-
-    Write-Host "Cleaning WinSxS temporary, install, and backup caches..." -ForegroundColor Cyan
-    Remove-ProtectedDirectory -Path "$scratchDir\Windows\WinSxS\Backup" -ScratchPath $scratchDir
-    New-Item -ItemType Directory -Force -Path "$scratchDir\Windows\WinSxS\Backup" | Out-Null
-    Remove-ProtectedDirectory -Path "$scratchDir\Windows\WinSxS\InstallTemp" -ScratchPath $scratchDir
-    New-Item -ItemType Directory -Force -Path "$scratchDir\Windows\WinSxS\InstallTemp" | Out-Null
-    Remove-ProtectedDirectory -Path "$scratchDir\Windows\WinSxS\Temp" -ScratchPath $scratchDir
-    New-Item -ItemType Directory -Force -Path "$scratchDir\Windows\WinSxS\Temp" | Out-Null
-
-    # UltraSlim targeted WinSxS dead-weight pruning (safe packages only)
-    if ($ultraSlimMode) {
-        Write-Host "Pruning targeted non-essential components from WinSxS..." -ForegroundColor Cyan
-        $ultraSlimSxsPatterns = @(
-            "*iis-legacyscripts*",
-            "*printing_admin_scripts*"
-        )
-        if (-not $wslSupport) {
-            $ultraSlimSxsPatterns += "*hyperv-vmfirmware*"
-        }
-        foreach ($pat in $ultraSlimSxsPatterns) {
-            Get-ChildItem -Path "$scratchDir\Windows\WinSxS" -Filter $pat -Directory -ErrorAction SilentlyContinue | ForEach-Object {
-                Remove-ProtectedDirectory -Path $_.FullName -ScratchPath $scratchDir
-            }
-        }
-    }
+    # Note: We omit /ResetBase because offline /ResetBase on an image with package removals
+    # corrupts delta manifests and causes Windows Setup file expansion to freeze at 77%.
+    # Standard /StartComponentCleanup is 100% stable and fully preserves Setup integrity.
+    & dism.exe /English "/image:$scratchDir" /Cleanup-Image /StartComponentCleanup > $null 2>&1
+    Write-Host "  - Component store consolidated safely (WinSxS manifest integrity preserved for zero 77% stalls)." -ForegroundColor Green
 } else {
     Write-Host "Running Aggressive WinSxS Pruning (Experimental)..." -ForegroundColor Yellow
     # Pre-cleanup DISM component base before trimming
@@ -1480,8 +1774,8 @@ if ($setJapaneseKeyboard) {
 }
 
 reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\Windows Chat" /v "ChatIcon" /t REG_DWORD /d 3 /f > $null 2>&1
-reg.exe add "HKLM\zNTUSER\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v "TaskbarMn" /t REG_DWORD /d 0 /f > $null 2>&1
 reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Search" /v "SearchboxTaskbarMode" /t REG_DWORD /d 0 /f > $null 2>&1
+reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\CurrentVersion\Search" /v "SearchboxTaskbarMode" /t REG_DWORD /d 0 /f > $null 2>&1
 
 # Setup & Winlogon / Blank Password / PowerShell Execution Policy tweaks
 reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\Lsa" /v "LimitBlankPasswordUse" /t REG_DWORD /d 0 /f > $null 2>&1
@@ -1508,7 +1802,6 @@ reg.exe add "HKLM\zNTUSER\Software\Microsoft\Input\TIPC" /v "Enabled" /t REG_DWO
 reg.exe add "HKLM\zNTUSER\Software\Microsoft\InputPersonalization" /v "RestrictImplicitInkCollection" /t REG_DWORD /d 1 /f > $null 2>&1
 reg.exe add "HKLM\zNTUSER\Software\Microsoft\InputPersonalization" /v "RestrictImplicitTextCollection" /t REG_DWORD /d 1 /f > $null 2>&1
 reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\DataCollection" /v "AllowTelemetry" /t REG_DWORD /d 0 /f > $null 2>&1
-reg.exe add "HKLM\zSYSTEM\ControlSet001\Services\dmwappushservice" /v "Start" /t REG_DWORD /d 4 /f > $null 2>&1
 
 # Copilot & Bloatware Prevention
 Write-Host "Disabling Copilot, DevHome, and Teams auto-install..." -ForegroundColor Green
@@ -1525,8 +1818,6 @@ reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\System" /v "EnableMmx" /t
 reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\System" /v "AllowCrossDeviceClipboard" /t REG_DWORD /d 0 /f > $null 2>&1
 reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\System" /v "UploadUserActivities" /t REG_DWORD /d 0 /f > $null 2>&1
 reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\System" /v "PublishUserActivities" /t REG_DWORD /d 0 /f > $null 2>&1
-reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\CloudContent" /v "DisableWindowsConsumerFeatures" /t REG_DWORD /d 1 /f > $null 2>&1
-reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\CloudContent" /v "DisableConsumerAccountStateContent" /t REG_DWORD /d 1 /f > $null 2>&1
 reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\CloudContent" /v "DisableSoftLanding" /t REG_DWORD /d 1 /f > $null 2>&1
 reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\CloudContent" /v "DisableWindowsSpotlightFeatures" /t REG_DWORD /d 1 /f > $null 2>&1
 reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\Backup" /v "DisableCloudBackup" /t REG_DWORD /d 1 /f > $null 2>&1
@@ -1548,23 +1839,30 @@ reg.exe add "HKLM\zNTUSER\Software\Microsoft\LiveCaptions" /v "LiveCaptionsDeskt
 reg.exe add "HKLM\zDEFAULT\Software\Microsoft\LiveCaptions" /v "LiveCaptionsDesktopEnabled" /t REG_DWORD /d 0 /f > $null 2>&1
 reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows NT\CurrentVersion\Accessibility" /v "Configuration" /t REG_SZ /d "" /f > $null 2>&1
 reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows NT\CurrentVersion\Accessibility" /v "Configuration" /t REG_SZ /d "" /f > $null 2>&1
-reg.exe add "HKLM\zNTUSER\Control Panel\Accessibility\StickyKeys" /v "Flags" /t REG_SZ /d "506" /f > $null 2>&1
-reg.exe add "HKLM\zDEFAULT\Control Panel\Accessibility\StickyKeys" /v "Flags" /t REG_SZ /d "506" /f > $null 2>&1
+reg.exe add "HKLM\zNTUSER\Control Panel\Accessibility\StickyKeys" /v "Flags" /t REG_SZ /d "26" /f > $null 2>&1
+reg.exe add "HKLM\zDEFAULT\Control Panel\Accessibility\StickyKeys" /v "Flags" /t REG_SZ /d "26" /f > $null 2>&1
 reg.exe add "HKLM\zNTUSER\Control Panel\Accessibility\Keyboard Response" /v "Flags" /t REG_SZ /d "122" /f > $null 2>&1
 reg.exe add "HKLM\zDEFAULT\Control Panel\Accessibility\Keyboard Response" /v "Flags" /t REG_SZ /d "122" /f > $null 2>&1
-reg.exe add "HKLM\zNTUSER\Control Panel\Accessibility\ToggleKeys" /v "Flags" /t REG_SZ /d "58" /f > $null 2>&1
-reg.exe add "HKLM\zDEFAULT\Control Panel\Accessibility\ToggleKeys" /v "Flags" /t REG_SZ /d "58" /f > $null 2>&1
+reg.exe add "HKLM\zNTUSER\Control Panel\Accessibility\ToggleKeys" /v "Flags" /t REG_SZ /d "34" /f > $null 2>&1
+reg.exe add "HKLM\zDEFAULT\Control Panel\Accessibility\ToggleKeys" /v "Flags" /t REG_SZ /d "34" /f > $null 2>&1
 
 # Disable Xbox Game Bar & GameDVR
 Write-Host "Disabling Xbox Game Bar & GameDVR..." -ForegroundColor Green
 reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\GameDVR" /v "AllowGameDVR" /t REG_DWORD /d 0 /f > $null 2>&1
+reg.exe add "HKLM\zSOFTWARE\Microsoft\PolicyManager\default\ApplicationManagement\AllowGameDVR" /v "value" /t REG_DWORD /d 0 /f > $null 2>&1
 reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\GameDVR" /v "AppCaptureEnabled" /t REG_DWORD /d 0 /f > $null 2>&1
 reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\GameDVR" /v "AppCaptureEnabled" /t REG_DWORD /d 0 /f > $null 2>&1
+reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\CurrentVersion\GameDVR" /v "AppCaptureEnabled" /t REG_DWORD /d 0 /f > $null 2>&1
 reg.exe add "HKLM\zNTUSER\System\GameConfigStore" /v "GameDVR_Enabled" /t REG_DWORD /d 0 /f > $null 2>&1
+reg.exe add "HKLM\zDEFAULT\System\GameConfigStore" /v "GameDVR_Enabled" /t REG_DWORD /d 0 /f > $null 2>&1
 reg.exe add "HKLM\zNTUSER\System\GameConfigStore" /v "GameDVR_FSEBehaviorMode" /t REG_DWORD /d 2 /f > $null 2>&1
+reg.exe add "HKLM\zDEFAULT\System\GameConfigStore" /v "GameDVR_FSEBehaviorMode" /t REG_DWORD /d 2 /f > $null 2>&1
 reg.exe add "HKLM\zNTUSER\System\GameConfigStore" /v "GameDVR_HonorUserFSEBehaviorMode" /t REG_DWORD /d 1 /f > $null 2>&1
+reg.exe add "HKLM\zDEFAULT\System\GameConfigStore" /v "GameDVR_HonorUserFSEBehaviorMode" /t REG_DWORD /d 1 /f > $null 2>&1
 reg.exe add "HKLM\zNTUSER\System\GameConfigStore" /v "GameDVR_DXGIHonorFSEWindowsCompatible" /t REG_DWORD /d 1 /f > $null 2>&1
+reg.exe add "HKLM\zDEFAULT\System\GameConfigStore" /v "GameDVR_DXGIHonorFSEWindowsCompatible" /t REG_DWORD /d 1 /f > $null 2>&1
 reg.exe add "HKLM\zNTUSER\System\GameConfigStore" /v "GameDVR_EFSEFeatureFlags" /t REG_DWORD /d 0 /f > $null 2>&1
+reg.exe add "HKLM\zDEFAULT\System\GameConfigStore" /v "GameDVR_EFSEFeatureFlags" /t REG_DWORD /d 0 /f > $null 2>&1
 
 # IFEO Debugger redirect for non-OOBE background processes (OSK/Narrator/Magnifier blocked safely in FirstLogon after OOBE completes)
 $blockedExes = @(
@@ -1620,9 +1918,6 @@ if ($disableWU) {
     reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate" /v "DoNotConnectToWindowsUpdateInternetLocations" /t REG_DWORD /d 1 /f > $null 2>&1
     reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate" /v "DisableWindowsUpdateAccess" /t REG_DWORD /d 1 /f > $null 2>&1
     reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU" /v "NoAutoUpdate" /t REG_DWORD /d 1 /f > $null 2>&1
-    reg.exe add "HKLM\zSYSTEM\ControlSet001\Services\wuauserv" /v "Start" /t REG_DWORD /d 4 /f > $null 2>&1
-    reg.exe add "HKLM\zSYSTEM\ControlSet001\Services\WaaSMedicSVC" /v "Start" /t REG_DWORD /d 4 /f > $null 2>&1
-    reg.exe add "HKLM\zSYSTEM\ControlSet001\Services\UsoSvc" /v "Start" /t REG_DWORD /d 4 /f > $null 2>&1
 }
 
 # ============================================================================
@@ -1630,12 +1925,12 @@ if ($disableWU) {
 # ============================================================================
 if ($removeDefender) {
     Write-Host "Completely disabling and removing Windows Defender, Security Center, and ATP services (windows-defender-remover)..." -ForegroundColor Green
-    # Only disable user-mode background services and non-boot filters.
-    # Note: Boot-critical drivers (WdBoot, MsSecCore, MsSecFlt, Pluton) MUST NOT be set to Start=4.
-    # On Windows 11 24H2+, disabling WdBoot or MsSecCore breaks winload.efi & ci.dll validation,
-    # causing STOP 0xC000021A (Parameter 2: STATUS_INVALID_IMAGE_HASH 0xC0000428).
+    # Only disable user-mode background services.
+    # Note: Boot-critical drivers (WdBoot, MsSecCore, MsSecFlt, Pluton) and filesystem minifilters (WdFilter, WdNisDrv)
+    # MUST NOT be set to Start=4. Disabling WdFilter causes Filter Manager (fltmgr.sys) driver staging hangs and volume deadlocks at 77%!
+    # Defender is completely deactivated via WinDefend service and real-time Group Policies while fltmgr.sys stays 100% stable.
     $defServices = @(
-        "WinDefend", "WdNisSvc", "WdNisDrv", "WdFilter", "Sense", "SecurityHealthService",
+        "WinDefend", "Sense", "SecurityHealthService",
         "wscsvc", "webthreatdefsvc", "webthreatdefusersvc"
     )
     foreach ($svc in $defServices) {
@@ -1719,8 +2014,7 @@ reg.exe add "$powerPath\be337238-0d82-4146-a960-4f3749d470c2" /v "ACSettingIndex
 # 3. Disk, NVMe & Memory Management (eclean.gg Deep Clean)
 reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\FileSystem" /v "NtfsDisable8dot3NameCreation" /t REG_DWORD /d 1 /f > $null 2>&1
 reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\FileSystem" /v "NtfsDisableLastAccessUpdate" /t REG_DWORD /d 1 /f > $null 2>&1
-reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\Session Manager\Memory Management" /v "DisablePagingExecutive" /t REG_DWORD /d 0 /f > $null 2>&1
-reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\Session Manager\Memory Management" /v "LargeSystemCache" /t REG_DWORD /d 0 /f > $null 2>&1
+reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\FileSystem" /v "DontVerifyRandomDrivers" /t REG_DWORD /d 1 /f > $null 2>&1
 
 # 4. Network & TCP/IP Low-Latency (Nagle's Algorithm Disabled, Instant ACK)
 reg.exe add "HKLM\zSYSTEM\ControlSet001\Services\Tcpip\Parameters" /v "TcpTimedWaitDelay" /t REG_DWORD /d 30 /f > $null 2>&1
@@ -1728,49 +2022,8 @@ reg.exe add "HKLM\zSYSTEM\ControlSet001\Services\Tcpip\Parameters" /v "MaxUserPo
 reg.exe add "HKLM\zSYSTEM\ControlSet001\Services\Tcpip\Parameters" /v "DefaultTTL" /t REG_DWORD /d 64 /f > $null 2>&1
 reg.exe add "HKLM\zSYSTEM\ControlSet001\Services\Tcpip\Parameters" /v "EnableICMPRedirect" /t REG_DWORD /d 0 /f > $null 2>&1
 
-
-# Disabling unneeded background services (Resolves Issue #1 - Keep Bluetooth / Audio)
-Write-Host "Disabling unneeded background services..." -ForegroundColor Cyan
-$servicesToDisable = @(
-    'Spooler', 'PrintNotify', 'Fax', 'RemoteRegistry', 'MapsBroker', 'WalletService',
-    'CDPSvc', 'CDPUserSvc',
-    'XblAuthManager', 'XblGameSave', 'XboxGipSvc', 'XboxNetApiSvc', 'BcastDVRUserService',
-    'AJRouter', 'AppVClient', 'AssignedAccessManagerSvc', 'DialogBlockingService', 'NetTcpPortSharing',
-    'HomeGroupListener', 'HomeGroupProvider', 'RetailDemo', 'WerSvc', 'PcaSvc', 'WSAIFabricSvc',
-    'SCardSvr', 'ScDeviceEnum', 'icssvc', 'CertPropSvc', 'CscService'
-)
-if (-not $keepBT) {
-    $servicesToDisable += @('BthAvctpSvc', 'BluetoothUserService')
-}
-if ($disableWU) {
-    $servicesToDisable += @('wuauserv', 'UsoSvc', 'WaaSMedicSVC')
-}
-foreach ($service in $servicesToDisable) {
-    reg.exe add "HKLM\zSYSTEM\ControlSet001\Services\$service" /v "Start" /t REG_DWORD /d 4 /f > $null 2>&1
-}
-
-# Set infrequently used background services to Manual (Start = 3) instead of Automatic
-Write-Host "Configuring non-essential background services to Demand Start (Manual)..." -ForegroundColor Cyan
-$servicesToManual = @(
-    'AxInstSV', 'BDESVC', 'DevQueryBroker', 'DeviceInstall',
-    'DisplayEnhancementService', 'DmEnrollmentSvc', 'DsSvc', 'DsmSvc', 'EFS', 'EapHost',
-    'EntAppSvc', 'FDResPub', 'FrameServer', 'GraphicsPerfSvc', 'IEEtwCollectorService',
-    'IKEEXT', 'InstallService', 'InventorySvc', 'IpxlatCfgSvc', 'KtmRm', 'LicenseManager',
-    'LxpSvc', 'MSDTC', 'MSiSCSI', 'McpManagementService', 'MixedRealityOpenXRSvc',
-    'NaturalAuthentication', 'NcaSvc', 'NcbService', 'NcdAutoSetup', 'NetSetupSvc',
-    'Netman', 'Netlogon', 'NgcCtnrSvc', 'SensrSvc', 'SensorDataService', 'SmsRouter', 'svsvc',
-    'TapiSrv', 'WbioSrvc', 'wisvc'
-)
-foreach ($svc in $servicesToManual) {
-    reg.exe add "HKLM\zSYSTEM\ControlSet001\Services\$svc" /v "Start" /t REG_DWORD /d 3 /f > $null 2>&1
-}
-
-# Performance, Scheduling & Latency (Integrated from optimizerDuck & sparkle)
-Write-Host "Applying System Performance & Latency optimizations..." -ForegroundColor Green
-# Win32PrioritySeparation = 38 (Hex 0x26 - Short variable quantum, foreground boost)
-reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\PriorityControl" /v "Win32PrioritySeparation" /t REG_DWORD /d 38 /f > $null 2>&1
-
 # MMCSS (Multimedia Class Scheduler Service)
+Write-Host "Applying System Performance & Latency optimizations..." -ForegroundColor Green
 reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" /v "NoLazyMode" /t REG_DWORD /d 1 /f > $null 2>&1
 reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" /v "AlwaysOn" /t REG_DWORD /d 1 /f > $null 2>&1
 reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" /v "NetworkThrottlingIndex" /t REG_DWORD /d 4294967295 /f > $null 2>&1
@@ -1790,81 +2043,144 @@ reg.exe add "HKLM\zSYSTEM\ControlSet001\Control" /v "ServicesPipeTimeout" /t REG
 
 # Kernel Memory Management (Radical RAM Optimization & Page Combining)
 reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\Session Manager\Memory Management" /v "DisablePageCombining" /t REG_DWORD /d 0 /f > $null 2>&1
-reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\Session Manager\Memory Management" /v "PoolUsageMaximum" /t REG_DWORD /d 40 /f > $null 2>&1
 reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\Session Manager\Memory Management" /v "LargeSystemCache" /t REG_DWORD /d 0 /f > $null 2>&1
 reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\Session Manager\Memory Management" /v "DisablePagingExecutive" /t REG_DWORD /d 0 /f > $null 2>&1
 reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\Session Manager\Memory Management" /v "ClearPageFileAtShutdown" /t REG_DWORD /d 0 /f > $null 2>&1
 reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\Session Manager\Memory Management\PrefetchParameters" /v "EnablePrefetcher" /t REG_DWORD /d 0 /f > $null 2>&1
 reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\Session Manager\Memory Management\PrefetchParameters" /v "EnableSuperfetch" /t REG_DWORD /d 0 /f > $null 2>&1
 
-# Radical RAM Optimization: Non-essential background services configured to Disabled (4) or Manual (3)
-Write-Host "Configuring system services for radical RAM reduction..." -ForegroundColor Green
-$serviceConfigs = @{
-    "SysMain"                                  = 4  # SuperFetch / RAM pre-caching (Saves 100MB-200MB RAM)
-    "WSearch"                                  = 4  # Windows Search Indexer (Saves 80MB-150MB RAM)
-    "DoSvc"                                    = 4  # Delivery Optimization (Saves 40MB-80MB RAM)
-    "DPS"                                      = 4  # Diagnostic Policy Service (Saves 30MB-50MB RAM)
-    "WdiServiceHost"                           = 4  # Diagnostic Service Host
-    "WdiSystemHost"                            = 4  # Diagnostic System Host
-    "TroubleshootingSvc"                       = 4  # Recommended Troubleshooting Service
-    "DusmSvc"                                  = 4  # Data Usage Monitoring
-    "LanmanServer"                             = 3  # Server / SMB File Sharing (Manual: starts on demand only)
-    "TabletInputService"                       = 3  # Touch Keyboard and Handwriting Panel (Manual)
-    "SensrSvc"                                 = 4  # Sensor Monitoring Service
-    "SensorService"                            = 4  # Sensor Service
-    "SensorDataService"                        = 4  # Sensor Data Service
-    "ShellHWDetection"                         = 3  # Shell Hardware Detection (Manual)
-    "WarpJITSvc"                               = 4  # WARP JIT Service
-    "SharedAccess"                             = 4  # Internet Connection Sharing
-    "stisvc"                                   = 3  # Windows Image Acquisition (Manual)
-    "MapsBroker"                               = 4  # Downloaded Maps Manager
-    "DiagTrack"                                = 4  # Connected User Experiences and Telemetry
-    "dmwappushservice"                         = 4  # WAP Push Message Routing Service
-    "RetailDemo"                               = 4  # Retail Demo Service
-    "wisvc"                                    = 4  # Windows Insider Service
-    "lfsvc"                                    = 4  # Geolocation Service
-    "PcaSvc"                                   = 4  # Program Compatibility Assistant
-    "WerSvc"                                   = 4  # Windows Error Reporting Service
-    "SCardSvr"                                 = 4  # Smart Card Service
-    "ScDeviceEnum"                             = 4  # Smart Card Device Enumeration Service
-    "icssvc"                                   = 4  # Mobile Hotspot Service
+# Unified Background System Services Configuration (Start: 4 = Disabled, 3 = Demand/Manual)
+Write-Host "Configuring system services for performance and radical RAM reduction..." -ForegroundColor Green
+$serviceConfigs = [ordered]@{
+    # --- Disabled Background Services (Start = 4: Completely stopped, zero memory overhead) ---
+    "AJRouter"                                 = 4  # AllJoyn Router Service
+    "AppVClient"                               = 4  # Microsoft Application Virtualization Client
+    "AssignedAccessManagerSvc"                 = 4  # Assigned Access Manager
     "CertPropSvc"                              = 4  # Certificate Propagation
     "CscService"                               = 4  # Offline Files
-    "Netlogon"                                 = 3  # Netlogon (Manual demand-start)
-    "UCPD"                                     = 4  # Universal Consent Privacy Driver (eclean/Atlas: prevent forced tweak reverts)
-    "GpuEnergyDrv"                             = 4  # GPU Energy Driver (eclean/Atlas: reduce gaming latency & telemetry)
-    "diagnosticshub.standardcollector.service" = 4  # Diagnostics Hub Collector (eclean/Atlas)
-    "OneSyncSvc"                               = 4  # Sync Host (eclean/Atlas)
-    "TrkWks"                                   = 4  # Distributed Link Tracking Client (eclean/Atlas)
-    "wercplsupport"                            = 4  # Problem Reports Control Panel Support (eclean/Atlas)
-    "FontCache"                                = 4  # Windows Font Cache Service (Saves 25MB-50MB RAM)
-    "FontCache3.0.0.0"                         = 4  # WPF Font Cache Service
-    "WpnService"                               = 4  # Windows Push Notifications System Service (Saves 15MB-30MB RAM)
-    "WpnUserService"                           = 4  # Push Notifications User Service
-    "PimIndexMaintenanceSvc"                   = 4  # Contact Data Indexing
-    "UnistoreSvc"                              = 4  # User Data Storage
-    "UserDataSvc"                              = 4  # User Data Access
-    "MessagingService"                         = 4  # Messaging Service
-    "CDPSvc"                                   = 4  # Connected Devices Platform Service
-    "CDPUserSvc"                               = 4  # Connected Devices Platform User Service
-    "iphlpsvc"                                 = 4  # IP Helper (IPv6 6to4/ISATAP tunnels - Saves 10MB-15MB RAM)
-    "VaultSvc"                                 = 3  # Credential Manager (Manual demand-start)
-    "TokenBroker"                              = 3  # Web Account Manager (Manual demand-start)
-    "WbioSrvc"                                 = 4  # Windows Biometric Service (Saves 10MB-20MB RAM)
-    "PhoneSvc"                                 = 4  # Phone Service
-    "WpcMonSvc"                                = 4  # Parental Controls
-    "WMPNetworkSvc"                            = 4  # Windows Media Player Network Sharing
-    "SmsRouter"                                = 4  # SMS Router
-    "AppHostSvc"                               = 4  # Application Host Helper
-    "SEMgrSvc"                                 = 4  # Payments and NFC/SE Manager
-    "CaptureService"                           = 3  # Screen / Camera capture broker (Manual)
-    "edgeupdate"                               = 4  # Microsoft Edge Update Service (Saves 20MB-35MB RAM)
+    "DialogBlockingService"                    = 4  # Dialog Blocking Service
+    "DiagTrack"                                = 4  # Connected User Experiences and Telemetry
+    "diagnosticshub.standardcollector.service" = 4  # Diagnostics Hub Collector
+    "dmwappushservice"                         = 4  # WAP Push Message Routing Service
+    "DoSvc"                                    = 4  # Delivery Optimization
+    "DPS"                                      = 4  # Diagnostic Policy Service
+    "DusmSvc"                                  = 4  # Data Usage Monitoring
+    "edgeupdate"                               = 4  # Microsoft Edge Update Service
     "edgeupdatem"                              = 4  # Microsoft Edge Update Service
+    "Fax"                                      = 4  # Fax Service
+    "GpuEnergyDrv"                             = 4  # GPU Energy Driver
     "GraphicsPerfSvc"                          = 4  # Graphics Performance Monitor Service
+    "HomeGroupListener"                        = 4  # HomeGroup Listener
+    "HomeGroupProvider"                        = 4  # HomeGroup Provider
+    "icssvc"                                   = 4  # Mobile Hotspot Service
     "InventorySvc"                             = 4  # Device Association / Inventory Service
-    "NaturalAuthentication"                    = 4  # Companion Device Authentication
+    "iphlpsvc"                                 = 4  # IP Helper (IPv6 6to4/ISATAP tunnels)
+    "lfsvc"                                    = 4  # Geolocation Service
+    "MapsBroker"                               = 4  # Downloaded Maps Manager
+    "NetTcpPortSharing"                        = 4  # Net.Tcp Port Sharing Service
+    "PcaSvc"                                   = 4  # Program Compatibility Assistant
+    "PhoneSvc"                                 = 4  # Phone Service
+    "PrintNotify"                              = 4  # Print Spooler Notification Service
+    "RemoteRegistry"                           = 4  # Remote Registry
+    "RetailDemo"                               = 4  # Retail Demo Service
+    "SCardSvr"                                 = 4  # Smart Card Service
+    "ScDeviceEnum"                             = 4  # Smart Card Device Enumeration Service
+    "SEMgrSvc"                                 = 4  # Payments and NFC/SE Manager
+    "SensorDataService"                        = 4  # Sensor Data Service
+    "SensorService"                            = 4  # Sensor Service
+    "SensrSvc"                                 = 4  # Sensor Monitoring Service
+    "SharedAccess"                             = 4  # Internet Connection Sharing
     "SharedRealitySvc"                         = 4  # Spatial Data / Mixed Reality Service
+    "SmsRouter"                                = 4  # SMS Router
+    "Spooler"                                  = 4  # Print Spooler (Manageable via Desktop tool)
+    "SysMain"                                  = 4  # SuperFetch / RAM pre-caching
+    "TrkWks"                                   = 4  # Distributed Link Tracking Client
+    "TroubleshootingSvc"                       = 4  # Recommended Troubleshooting Service
+    "WalletService"                            = 4  # Wallet Service
+    "WarpJITSvc"                               = 4  # WARP JIT Service
+    "WdiServiceHost"                           = 4  # Diagnostic Service Host
+    "WdiSystemHost"                            = 4  # Diagnostic System Host
+    "wercplsupport"                            = 4  # Problem Reports Control Panel Support
+    "WerSvc"                                   = 4  # Windows Error Reporting Service
+    "wisvc"                                    = 4  # Windows Insider Service
+    "WMPNetworkSvc"                            = 4  # Windows Media Player Network Sharing
+    "WpcMonSvc"                                = 4  # Parental Controls
+    "WSAIFabricSvc"                            = 4  # Windows Subsystem for Android Fabric Service
+    "WSearch"                                  = 4  # Windows Search Indexer
+    "XblAuthManager"                           = 4  # Xbox Live Auth Manager
+    "XblGameSave"                              = 4  # Xbox Live Game Save
+    "XboxGipSvc"                               = 4  # Xbox Accessory Management Service
+    "XboxNetApiSvc"                            = 4  # Xbox Live Networking Service
+
+    # --- Demand Start Services (Start = 3: Manual, runs on demand only - protects LogonUI, DirectWrite & Per-User sessions) ---
+    "AppHostSvc"                               = 3  # Application Host Helper
+    "AxInstSV"                                 = 3  # ActiveX Installer
+    "BcastDVRUserService"                      = 3  # GameDVR and Broadcast User Service (Per-user template)
+    "BDESVC"                                   = 3  # BitLocker Drive Encryption Service
+    "CaptureService"                           = 3  # Screen / Camera capture broker
+    "CDPSvc"                                   = 3  # Connected Devices Platform Service
+    "CDPUserSvc"                               = 3  # Connected Devices Platform User Service (Per-user template)
+    "DevQueryBroker"                           = 3  # Device Setup / Query Broker
+    "DeviceInstall"                            = 3  # Device Install Service
+    "DisplayEnhancementService"                = 3  # Display Enhancement Service
+    "DmEnrollmentSvc"                          = 3  # Device Management Enrollment
+    "DsSvc"                                    = 3  # Data Sharing Service
+    "DsmSvc"                                   = 3  # Device Setup Manager
+    "EapHost"                                  = 3  # Extensible Authentication Protocol
+    "EFS"                                      = 3  # Encrypting File System
+    "EntAppSvc"                                = 3  # Enterprise App Management
+    "FDResPub"                                 = 3  # Function Discovery Resource Publication
+    "FontCache"                                = 3  # Windows Font Cache Service (Demand-start prevents DirectWrite LogonUI hang)
+    "FontCache3.0.0.0"                         = 3  # WPF Font Cache Service (Demand-start prevents XAML/DirectWrite hang)
+    "FrameServer"                              = 3  # Windows Camera Frame Server
+    "IEEtwCollectorService"                    = 3  # Internet Explorer ETW Collector
+    "IKEEXT"                                   = 3  # IKE and AuthIP IPsec Keying Modules
+    "InstallService"                           = 3  # Microsoft Store Install Service
+    "IpxlatCfgSvc"                             = 3  # IP Translation Configuration Service
+    "KtmRm"                                    = 3  # KtmRm for Distributed Transaction Coordinator
+    "LanmanServer"                             = 3  # Server / SMB File Sharing
+    "LicenseManager"                           = 3  # Windows License Manager
+    "LxpSvc"                                   = 3  # Language Experience Service
+    "McpManagementService"                     = 3  # Media Control Platform
+    "MessagingService"                         = 3  # Messaging Service (Per-user template)
+    "MixedRealityOpenXRSvc"                    = 3  # Mixed Reality OpenXR Service
+    "MSDTC"                                    = 3  # Distributed Transaction Coordinator
+    "MSiSCSI"                                  = 3  # Microsoft iSCSI Initiator
+    "NaturalAuthentication"                    = 3  # Companion Device Authentication
+    "NcaSvc"                                   = 3  # Network Connectivity Assistant
+    "NcbService"                               = 3  # Network Connection Broker
+    "NcdAutoSetup"                             = 3  # Network Connected Devices Auto-Setup
+    "Netlogon"                                 = 3  # Netlogon
+    "Netman"                                   = 3  # Network Connections
+    "NetSetupSvc"                              = 3  # Network Setup Service
+    "NgcCtnrSvc"                               = 3  # Passport Container Service
+    "OneSyncSvc"                               = 3  # Sync Host (Per-user template)
+    "PimIndexMaintenanceSvc"                   = 3  # Contact Data Indexing (Per-user template)
+    "ShellHWDetection"                         = 3  # Shell Hardware Detection
+    "stisvc"                                   = 3  # Windows Image Acquisition
+    "svsvc"                                    = 3  # Spot Verifier
+    "TabletInputService"                       = 3  # Touch Keyboard and Handwriting Panel
+    "TapiSrv"                                  = 3  # Telephony
+    "TokenBroker"                              = 3  # Web Account Manager
+    "UnistoreSvc"                              = 3  # User Data Storage (Per-user template)
+    "UserDataSvc"                              = 3  # User Data Access (Per-user template)
+    "VaultSvc"                                 = 3  # Credential Manager
+    "WbioSrvc"                                 = 3  # Windows Biometric Service (Hello/Fingerprint on demand)
+    "WpnService"                               = 3  # Windows Push Notifications System Service (Protects Explorer taskbar initialization)
+    "WpnUserService"                           = 3  # Push Notifications User Service (Per-user template)
 }
+
+# Apply conditional service configurations
+if (-not $keepBT) {
+    $serviceConfigs["BthAvctpSvc"]          = 4  # Audio/Video Control Transport Protocol
+    $serviceConfigs["BluetoothUserService"] = 3  # Bluetooth User Support Service (Demand-start to preserve per-user integrity)
+}
+if ($disableWU) {
+    $serviceConfigs["wuauserv"]             = 4  # Windows Update
+    $serviceConfigs["UsoSvc"]               = 4  # Update Orchestrator Service
+    $serviceConfigs["WaaSMedicSVC"]         = 4  # Windows Update Medic Service
+}
+
 foreach ($svc in $serviceConfigs.GetEnumerator()) {
     reg.exe add "HKLM\zSYSTEM\ControlSet001\Services\$($svc.Key)" /v "Start" /t REG_DWORD /d $($svc.Value) /f > $null 2>&1
 }
@@ -1963,46 +2279,13 @@ foreach ($logger in $autoLoggers) {
 if ($atlasReviOSMode) {
     Write-Host "Applying AtlasOS & ReviOS radical performance, latency & storage optimizations..." -ForegroundColor Green
 
-    # 1. NTFS File System I/O Tuning (Reduced SSD wear, faster directory traversal)
-    reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\FileSystem" /v "NtfsDisableLastAccessUpdate" /t REG_DWORD /d 1 /f > $null 2>&1
-    reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\FileSystem" /v "NtfsDisable8dot3NameCreation" /t REG_DWORD /d 1 /f > $null 2>&1
-    reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\FileSystem" /v "DontVerifyRandomDrivers" /t REG_DWORD /d 1 /f > $null 2>&1
-
-    # 2. Kernel & Memory Tuning (AtlasOS / ReviOS Core)
-    reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\Session Manager\Memory Management" /v "DisablePagingExecutive" /t REG_DWORD /d 0 /f > $null 2>&1
-    reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\Session Manager\Memory Management" /v "ClearPageFileAtShutdown" /t REG_DWORD /d 0 /f > $null 2>&1
-    reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\Session Manager\Memory Management" /v "LargeSystemCache" /t REG_DWORD /d 0 /f > $null 2>&1
-
-    # 3. Network Latency & Nagle Algorithm (TCPNoDelay, TcpAckFrequency, QoS 100% bandwidth)
+    # 1. Network QoS Latency (100% full bandwidth allocation)
     reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\Psched" /v "NonBestEffortLimit" /t REG_DWORD /d 0 /f > $null 2>&1
-    reg.exe add "HKLM\zSYSTEM\ControlSet001\Services\Tcpip\Parameters" /v "TcpTimedWaitDelay" /t REG_DWORD /d 30 /f > $null 2>&1
-    reg.exe add "HKLM\zSYSTEM\ControlSet001\Services\Tcpip\Parameters" /v "MaxUserPort" /t REG_DWORD /d 65534 /f > $null 2>&1
-    reg.exe add "HKLM\zSYSTEM\ControlSet001\Services\Tcpip\Parameters" /v "DefaultTTL" /t REG_DWORD /d 64 /f > $null 2>&1
 
-    # 4. Storage & Crash Control (Disable Memory Dump bloat)
+    # 2. Storage & Crash Control (Disable memory dump bloat and crash alerts)
     reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\CrashControl" /v "CrashDumpEnabled" /t REG_DWORD /d 0 /f > $null 2>&1
     reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\CrashControl" /v "LogEvent" /t REG_DWORD /d 0 /f > $null 2>&1
     reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\CrashControl" /v "SendAlert" /t REG_DWORD /d 0 /f > $null 2>&1
-
-    # 5. Additional AtlasOS / ReviOS Service Minimization
-    $atlasServices = @{
-        "WpcMonSvc"         = 4  # Parental Controls
-        "WMPNetworkSvc"     = 4  # Windows Media Player Network Sharing
-        "PhoneSvc"          = 4  # Phone Service
-        "WbioSrvc"          = 4  # Windows Biometric Service
-        "SensrSvc"          = 4  # Sensor Monitoring
-        "SensorService"     = 4  # Sensor Service
-        "SensorDataService" = 4
-        "WalletService"     = 4  # Wallet Service
-        "SharedAccess"      = 4  # Internet Connection Sharing
-        "RemoteRegistry"    = 4  # Remote Registry
-        "RetailDemo"        = 4  # Retail Demo
-        "lfsvc"             = 4  # Geolocation
-        "wisvc"             = 4  # Windows Insider
-    }
-    foreach ($asvc in $atlasServices.GetEnumerator()) {
-        reg.exe add "HKLM\zSYSTEM\ControlSet001\Services\$($asvc.Key)" /v "Start" /t REG_DWORD /d $($asvc.Value) /f > $null 2>&1
-    }
 
     # 6. Additional Scheduled Tasks Purged Offline
     $atlasTasks = @(
@@ -2041,8 +2324,6 @@ reg.exe add "HKLM\zNTUSER\Control Panel\Accessibility\Keyboard Response" /v "Aut
 reg.exe add "HKLM\zNTUSER\Control Panel\Accessibility\Keyboard Response" /v "AutoRepeatRate" /t REG_SZ /d "6" /f > $null 2>&1
 reg.exe add "HKLM\zNTUSER\Control Panel\Accessibility\Keyboard Response" /v "BounceTime" /t REG_SZ /d "0" /f > $null 2>&1
 reg.exe add "HKLM\zNTUSER\Control Panel\Accessibility\Keyboard Response" /v "DelayBeforeAcceptance" /t REG_SZ /d "0" /f > $null 2>&1
-reg.exe add "HKLM\zNTUSER\Control Panel\Accessibility\StickyKeys" /v "Flags" /t REG_SZ /d "26" /f > $null 2>&1
-reg.exe add "HKLM\zNTUSER\Control Panel\Accessibility\ToggleKeys" /v "Flags" /t REG_SZ /d "34" /f > $null 2>&1
 
 # Mouse: 1:1 Raw Input (Zero acceleration, instant hover)
 reg.exe add "HKLM\zNTUSER\Control Panel\Mouse" /v "MouseSpeed" /t REG_SZ /d "0" /f > $null 2>&1
@@ -2074,8 +2355,6 @@ reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\DWM" /v "ColorizationOpaque
 reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\DWM" /v "ColorizationOpaqueBlend" /t REG_DWORD /d 1 /f > $null 2>&1
 reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\DWM" /v "AlwaysHibernateThumbnails" /t REG_DWORD /d 0 /f > $null 2>&1
 reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\DWM" /v "AlwaysHibernateThumbnails" /t REG_DWORD /d 0 /f > $null 2>&1
-reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\DWM" /v "DisallowAnimations" /t REG_DWORD /d 1 /f > $null 2>&1
-reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\DWM" /v "DisableTransparency" /t REG_DWORD /d 1 /f > $null 2>&1
 
 # Best Performance Visual Effects (Zero Animation / Zero Shadow / No Live Window Drag)
 reg.exe add "HKLM\zNTUSER\Control Panel\Desktop\WindowMetrics" /v "MinAnimate" /t REG_SZ /d "0" /f > $null 2>&1
@@ -2089,9 +2368,7 @@ reg.exe add "HKLM\zDEFAULT\Control Panel\Desktop" /v "DragFullWindows" /t REG_SZ
 reg.exe add "HKLM\zNTUSER\Control Panel\Desktop" /v "FontSmoothing" /t REG_SZ /d "2" /f > $null 2>&1
 reg.exe add "HKLM\zDEFAULT\Control Panel\Desktop" /v "FontSmoothing" /t REG_SZ /d "2" /f > $null 2>&1
 
-# Shell & DLL RAM Optimization: Unload DLLs instantly and stop thumbnail caching
-reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AlwaysUnloadDll" /ve /t REG_SZ /d "1" /f > $null 2>&1
-reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Explorer" /v "AlwaysUnloadDll" /t REG_DWORD /d 1 /f > $null 2>&1
+# Shell & Thumbnail RAM Optimization: Stop thumbnail caching
 reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\Explorer" /v "NoThumbnailCache" /t REG_DWORD /d 1 /f > $null 2>&1
 reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v "TaskbarAnimations" /t REG_DWORD /d 0 /f > $null 2>&1
 reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v "TaskbarAnimations" /t REG_DWORD /d 0 /f > $null 2>&1
@@ -2232,6 +2509,8 @@ reg.exe add "HKLM\zNTUSER\Control Panel\Desktop" /v "HungAppTimeout" /t REG_SZ /
 reg.exe add "HKLM\zDEFAULT\Control Panel\Desktop" /v "HungAppTimeout" /t REG_SZ /d "1000" /f > $null 2>&1
 reg.exe add "HKLM\zNTUSER\Control Panel\Desktop" /v "WaitToKillAppTimeout" /t REG_SZ /d "2000" /f > $null 2>&1
 reg.exe add "HKLM\zDEFAULT\Control Panel\Desktop" /v "WaitToKillAppTimeout" /t REG_SZ /d "2000" /f > $null 2>&1
+reg.exe add "HKLM\zNTUSER\Control Panel\Desktop" /v "LowLevelHooksTimeout" /t REG_SZ /d "1000" /f > $null 2>&1
+reg.exe add "HKLM\zDEFAULT\Control Panel\Desktop" /v "LowLevelHooksTimeout" /t REG_SZ /d "1000" /f > $null 2>&1
 reg.exe add "HKLM\zSYSTEM\ControlSet001\Control" /v "WaitToKillServiceTimeout" /t REG_SZ /d "2000" /f > $null 2>&1
 reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Attachments" /v "SaveZoneInformation" /t REG_DWORD /d 1 /f > $null 2>&1
 reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Policies\Attachments" /v "SaveZoneInformation" /t REG_DWORD /d 1 /f > $null 2>&1
@@ -2264,20 +2543,11 @@ reg.exe delete "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Run" /v "OneDriv
 reg.exe delete "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Run" /v "OneDrive" /f > $null 2>&1
 reg.exe delete "HKLM\zDEFAULT\Software\Microsoft\Windows\CurrentVersion\Run" /v "OneDrive" /f > $null 2>&1
 
-# Background Process Reduction: GameBarPresenceWriter & bcastdvr background capture
-reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\GameDVR" /v "AllowGameDVR" /t REG_DWORD /d 0 /f > $null 2>&1
-reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\GameDVR" /v "AppCaptureEnabled" /t REG_DWORD /d 0 /f > $null 2>&1
-reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\GameDVR" /v "AppCaptureEnabled" /t REG_DWORD /d 0 /f > $null 2>&1
-reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\CurrentVersion\GameDVR" /v "AppCaptureEnabled" /t REG_DWORD /d 0 /f > $null 2>&1
-reg.exe add "HKLM\zNTUSER\System\GameConfigStore" /v "GameDVR_Enabled" /t REG_DWORD /d 0 /f > $null 2>&1
-reg.exe add "HKLM\zDEFAULT\System\GameConfigStore" /v "GameDVR_Enabled" /t REG_DWORD /d 0 /f > $null 2>&1
-
 # Background Process Reduction: Windows Error Reporting (wermgr.exe)
 reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\Windows Error Reporting" /v "Disabled" /t REG_DWORD /d 1 /f > $null 2>&1
 reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\Windows Error Reporting" /v "DontSendAdditionalData" /t REG_DWORD /d 1 /f > $null 2>&1
 
 # Background Process Reduction: CrossDevice & Phone Link (PhoneExperienceHost.exe)
-reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\System" /v "EnableMmx" /t REG_DWORD /d 0 /f > $null 2>&1
 reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\CrossDevice" /v "AllowCrossDeviceExperience" /t REG_DWORD /d 0 /f > $null 2>&1
 
 # 5. Windows Appearance
@@ -2311,6 +2581,54 @@ $photoViewerAssocs = @(
 foreach ($pa in $photoViewerAssocs) {
     reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows Photo Viewer\Capabilities\FileAssociations" /v $pa.Ext /t REG_SZ /d $pa.ProgId /f > $null 2>&1
 }
+
+# ============================================================================
+# Advanced Windows Optimization Suite: WinUtil, Sophia Script, SophiApp, Optimizer, Bloatynosy
+# ============================================================================
+Write-Host "Applying advanced optimizations from WinUtil, Sophia Script, SophiApp, Optimizer & Bloatynosy..." -ForegroundColor Green
+
+# 1. Bloatynosy & Classic Shell: Classic Context Menu baked into Default & NTUSER hives offline
+reg.exe add "HKLM\zDEFAULT\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32" /ve /t REG_SZ /d "" /f > $null 2>&1
+reg.exe add "HKLM\zNTUSER\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32" /ve /t REG_SZ /d "" /f > $null 2>&1
+
+# 2. Sophia Script & SophiApp: Instant First Logon, Lossless Wallpaper, and Control Panel
+# Disable "Hi, Getting things ready for you" spinning animation (saves 30-60s on first login)
+reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" /v "EnableFirstLogonAnimation" /t REG_DWORD /d 0 /f > $null 2>&1
+reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" /v "EnableFirstLogonAnimation" /t REG_DWORD /d 0 /f > $null 2>&1
+# Lossless wallpaper quality (JPEGImportQuality 100)
+reg.exe add "HKLM\zDEFAULT\Control Panel\Desktop" /v "JPEGImportQuality" /t REG_DWORD /d 100 /f > $null 2>&1
+reg.exe add "HKLM\zNTUSER\Control Panel\Desktop" /v "JPEGImportQuality" /t REG_DWORD /d 100 /f > $null 2>&1
+# Classic Control Panel: Large Icons view by default
+reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\ControlPanel" /v "AllItemsIconView" /t REG_DWORD /d 0 /f > $null 2>&1
+reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\ControlPanel" /v "StartupPage" /t REG_DWORD /d 1 /f > $null 2>&1
+reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Explorer\ControlPanel" /v "AllItemsIconView" /t REG_DWORD /d 0 /f > $null 2>&1
+reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Explorer\ControlPanel" /v "StartupPage" /t REG_DWORD /d 1 /f > $null 2>&1
+# Sophia scheduled task purges offline
+Remove-Item -LiteralPath "$tasksPath\Microsoft\Windows\Application Experience\MareBackup" -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath "$tasksPath\Microsoft\Windows\Application Experience\StartupAppTask" -Force -ErrorAction SilentlyContinue
+
+# 3. Chris Titus WinUtil: OOBE Background UScheduler Bloat Suppression
+reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Orchestrator\UScheduler_Oobe\OutlookUpdate" /v "workCompleted" /t REG_DWORD /d 1 /f > $null 2>&1
+reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Orchestrator\UScheduler\OutlookUpdate" /v "workCompleted" /t REG_DWORD /d 1 /f > $null 2>&1
+reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Orchestrator\UScheduler\DevHomeUpdate" /v "workCompleted" /t REG_DWORD /d 1 /f > $null 2>&1
+reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Orchestrator\UScheduler_Oobe\WindowsUpdate" /v "workCompleted" /t REG_DWORD /d 1 /f > $null 2>&1
+
+# 4. Hellzerg Optimizer: RegBack Backups & Explorer Responsiveness
+# Re-enable periodic registry hive backups to RegBack
+reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\Session Manager\Configuration Manager" /v "EnablePeriodicBackup" /t REG_DWORD /d 1 /f > $null 2>&1
+# Explorer link resolution, low disk space warnings, unknown extension web searches
+reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer" /v "NoLowDiskSpaceChecks" /t REG_DWORD /d 1 /f > $null 2>&1
+reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer" /v "LinkResolveIgnoreLinkInfo" /t REG_DWORD /d 1 /f > $null 2>&1
+reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer" /v "NoResolveSearch" /t REG_DWORD /d 1 /f > $null 2>&1
+reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer" /v "NoResolveTrack" /t REG_DWORD /d 1 /f > $null 2>&1
+reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer" /v "NoInternetOpenWith" /t REG_DWORD /d 1 /f > $null 2>&1
+reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer" /v "NoLowDiskSpaceChecks" /t REG_DWORD /d 1 /f > $null 2>&1
+reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer" /v "LinkResolveIgnoreLinkInfo" /t REG_DWORD /d 1 /f > $null 2>&1
+reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer" /v "NoResolveSearch" /t REG_DWORD /d 1 /f > $null 2>&1
+reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer" /v "NoResolveTrack" /t REG_DWORD /d 1 /f > $null 2>&1
+reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer" /v "NoInternetOpenWith" /t REG_DWORD /d 1 /f > $null 2>&1
+# Disable Remote Assistance unsolicited help invitations
+reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\Remote Assistance" /v "fAllowToGetHelp" /t REG_DWORD /d 0 /f > $null 2>&1
 
 # 11. Copy autounattend.xml with Architecture Support & Self-healing (Resolves Issues #3, #18, #21, #2, #8, #20)
 Write-Host "Configuring autounattend.xml for target architecture ($architecture)..." -ForegroundColor Green
@@ -2383,10 +2701,70 @@ if (Test-Path -LiteralPath $unattendSource) {
     } catch {}
 }
 
+# Bundle Windows Optimization & Debloat Toolkit into Image (Desktop & Setup Tools)
+# Includes: Chris Titus WinUtil, Sophia Script, SophiApp, Optimizer, Bloatynosy, Revision Tool
+if ($bundleOptimizationToolkit) {
+    Write-Host "Configuring Windows Optimization & Debloat Toolkit bundle..." -ForegroundColor Green
+    $toolsCacheDir = Join-Path -Path $scriptDir -ChildPath "tools"
+    if (-not (Test-Path -LiteralPath $toolsCacheDir)) {
+        New-Item -Path $toolsCacheDir -ItemType Directory -Force | Out-Null
+    }
+
+    # Ensure Revision Tool exists in cache
+    $revToolLocal = Join-Path -Path $toolsCacheDir -ChildPath "RevisionTool-Setup.exe"
+    if (-not (Test-Path -LiteralPath $revToolLocal)) {
+        Write-Host "Downloading Revision Tool installer from GitHub..." -ForegroundColor Cyan
+        $revToolUrl = "https://github.com/meetrevision/revision-tool/releases/download/2.11.1/RevisionTool-Setup.exe"
+        try {
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13
+            Invoke-WebRequest -Uri $revToolUrl -OutFile $revToolLocal -UseBasicParsing -TimeoutSec 180
+        } catch {
+            Write-Warning "Could not download Revision Tool installer: $_"
+        }
+    }
+
+    # Ensure Optimizer exists in cache
+    $optLocal = Join-Path -Path $toolsCacheDir -ChildPath "Optimizer.exe"
+    if (-not (Test-Path -LiteralPath $optLocal)) {
+        Write-Host "Downloading Optimizer from GitHub..." -ForegroundColor Cyan
+        $optUrl = "https://github.com/hellzerg/optimizer/releases/download/16.7/Optimizer-16.7.exe"
+        try {
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13
+            Invoke-WebRequest -Uri $optUrl -OutFile $optLocal -UseBasicParsing -TimeoutSec 60
+        } catch {
+            Write-Warning "Could not download Optimizer: $_"
+        }
+    }
+
+    # Copy tools to Public Desktop and Windows\Setup\Tools
+    if (Test-Path -LiteralPath $toolsCacheDir) {
+        $pubDesktop = Join-Path -Path $scratchDir -ChildPath "Users\Public\Desktop"
+        $toolsDesktopDir = Join-Path -Path $pubDesktop -ChildPath "Windows Optimization Tools"
+        New-Item -Path $toolsDesktopDir -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null
+
+        $setupTools = Join-Path -Path $scratchDir -ChildPath "Windows\Setup\Tools"
+        New-Item -Path $setupTools -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null
+
+        # Copy all items in tools directory (standalone exes, scripts, and subfolders)
+        Get-ChildItem -Path $toolsCacheDir | ForEach-Object {
+            Copy-Item -LiteralPath $_.FullName -Destination $toolsDesktopDir -Recurse -Force -ErrorAction SilentlyContinue
+            Copy-Item -LiteralPath $_.FullName -Destination $setupTools -Recurse -Force -ErrorAction SilentlyContinue
+        }
+
+        # Also place RevisionTool-Setup.exe directly on Public Desktop for instant access
+        if (Test-Path -LiteralPath $revToolLocal) {
+            Copy-Item -LiteralPath $revToolLocal -Destination (Join-Path -Path $pubDesktop -ChildPath "RevisionTool-Setup.exe") -Force -ErrorAction SilentlyContinue
+        }
+
+        Write-Host "  - Windows Optimization Toolkit (WinUtil, Sophia Script, SophiApp, Optimizer, Bloatynosy, Revision Tool) bundled to Public Desktop & Setup Tools" -ForegroundColor Green
+    }
+}
+
 # Ensure CurrentControlSet does NOT exist in offline SYSTEM hive
 # Creating CurrentControlSet as a real key in an offline hive causes Bug Check 0x67 (CONFIG_INITIALIZATION_FAILED)
 # because the NT kernel fails to create the CurrentControlSet symbolic link at boot time.
-if (Test-Path -LiteralPath "HKLM:\zSYSTEM\CurrentControlSet") {
+& reg.exe query "HKLM\zSYSTEM\CurrentControlSet" > $null 2>&1
+if ($LASTEXITCODE -eq 0) {
     reg.exe delete "HKLM\zSYSTEM\CurrentControlSet" /f > $null 2>&1
 }
 
@@ -2480,55 +2858,53 @@ if (Test-Path -LiteralPath $bootWimPath) {
     Set-ItemOwnershipAndAccess -Path $bootWimPath
     try { Set-ItemProperty -LiteralPath $bootWimPath -Name IsReadOnly -Value $false -ErrorAction Stop } catch {}
 
-    # Inspect boot.wim indices (Setup image is usually Index 2, but can be Index 1 on single-index media)
+    # Inspect boot.wim indices (Setup image is usually Index 2, WinPE is Index 1)
+    # We patch both indices in-place and preserve dual-index structure for 100% BCD and UEFI stability.
     $bootInfo = & dism.exe /English /Get-WimInfo "/WimFile:$bootWimPath"
     $hasIndex2 = ($bootInfo -split '\r?\n') -match 'Index\s*:\s*2'
-    $setupIndex = if ($hasIndex2) { 2 } else { 1 }
+    $indicesToPatch = if ($hasIndex2) { @(1, 2) } else { @(1) }
 
-    $newBootWim = Join-Path -Path "$nano11Dir\sources" -ChildPath "boot_new.wim"
-    & dism.exe /English /Export-Image "/SourceImageFile:$bootWimPath" "/SourceIndex:$setupIndex" "/DestinationImageFile:$newBootWim" /Bootable
-    Clear-DismMountConflicts -TargetMountDir $scratchDir -TargetWimFile $newBootWim
-    & dism.exe /English /Mount-Image "/ImageFile:$newBootWim" /Index:1 "/MountDir:$scratchDir"
-
-    reg.exe load HKLM\zSYSTEM "$scratchDir\Windows\System32\config\SYSTEM" | Out-Null
-    Write-Host "Applying LabConfig bypasses to boot.wim Setup environment..." -ForegroundColor Green
-    foreach ($key in $labConfigKeys) {
-        reg.exe add "HKLM\zSYSTEM\Setup\LabConfig" /v $key /t REG_DWORD /d 1 /f > $null 2>&1
-    }
-    reg.exe add "HKLM\zSYSTEM\Setup\LabConfig" /v "BypassNRO" /t REG_DWORD /d 1 /f > $null 2>&1
-    reg.exe add "HKLM\zSYSTEM\Setup\MoSetup" /v "AllowUpgradesWithUnsupportedTPMOrCPU" /t REG_DWORD /d 1 /f > $null 2>&1
-    reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\BitLocker" /v "PreventDeviceEncryption" /t REG_DWORD /d 1 /f > $null 2>&1
-    if (Test-Path -LiteralPath "HKLM:\zSYSTEM\CurrentControlSet") {
-        reg.exe delete "HKLM\zSYSTEM\CurrentControlSet" /f > $null 2>&1
-    }
-    [void](Unmount-RegistryHiveWithRetry -Name 'zSYSTEM')
-
-    $bootUnmountSuccess = $false
-    for ($bRetry = 1; $bRetry -le 3; $bRetry++) {
-        [GC]::Collect()
-        [GC]::WaitForPendingFinalizers()
-        Start-Sleep -Seconds 2
-        & dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /commit
+    foreach ($bIndex in $indicesToPatch) {
+        Write-Host "  - Applying Setup & Hardware requirement bypasses to boot.wim Index $bIndex..." -ForegroundColor Cyan
+        Clear-DismMountConflicts -TargetMountDir $scratchDir -TargetWimFile $bootWimPath
+        & dism.exe /English /Mount-Image "/ImageFile:$bootWimPath" "/Index:$bIndex" "/MountDir:$scratchDir"
         if ($LASTEXITCODE -eq 0) {
-            $bootUnmountSuccess = $true
-            break
+            & reg.exe query "HKLM\zSYSTEM" > $null 2>&1
+            if ($LASTEXITCODE -eq 0) {
+                [void](Unmount-RegistryHiveWithRetry -Name 'zSYSTEM')
+            }
+            reg.exe load HKLM\zSYSTEM "$scratchDir\Windows\System32\config\SYSTEM" > $null 2>&1
+            foreach ($key in $labConfigKeys) {
+                reg.exe add "HKLM\zSYSTEM\Setup\LabConfig" /v $key /t REG_DWORD /d 1 /f > $null 2>&1
+            }
+            reg.exe add "HKLM\zSYSTEM\Setup\LabConfig" /v "BypassNRO" /t REG_DWORD /d 1 /f > $null 2>&1
+            reg.exe add "HKLM\zSYSTEM\Setup\MoSetup" /v "AllowUpgradesWithUnsupportedTPMOrCPU" /t REG_DWORD /d 1 /f > $null 2>&1
+            reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\BitLocker" /v "PreventDeviceEncryption" /t REG_DWORD /d 1 /f > $null 2>&1
+            & reg.exe query "HKLM\zSYSTEM\CurrentControlSet" > $null 2>&1
+            if ($LASTEXITCODE -eq 0) {
+                reg.exe delete "HKLM\zSYSTEM\CurrentControlSet" /f > $null 2>&1
+            }
+            [void](Unmount-RegistryHiveWithRetry -Name 'zSYSTEM')
+
+            $bootUnmountSuccess = $false
+            for ($bRetry = 1; $bRetry -le 3; $bRetry++) {
+                [GC]::Collect()
+                [GC]::WaitForPendingFinalizers()
+                Start-Sleep -Seconds 2
+                & dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /commit
+                if ($LASTEXITCODE -eq 0) {
+                    $bootUnmountSuccess = $true
+                    break
+                }
+                Start-Sleep -Seconds (2 * $bRetry)
+            }
+
+            if (-not $bootUnmountSuccess) {
+                Write-Host "Falling back to discard unmount for boot.wim index $bIndex..." -ForegroundColor Yellow
+                & dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /discard
+            }
         }
-        Write-Host "Warning: commit unmount of boot.wim failed (attempt $bRetry/3), retrying after waiting..." -ForegroundColor Yellow
-        [GC]::Collect()
-        [GC]::WaitForPendingFinalizers()
-        Start-Sleep -Seconds (2 * $bRetry)
     }
-
-    if (-not $bootUnmountSuccess) {
-        Write-Host "Falling back to discard unmount for boot.wim..." -ForegroundColor Yellow
-        & dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /discard
-    }
-
-    $finalBootWim = Join-Path -Path "$nano11Dir\sources" -ChildPath "boot_final.wim"
-    Remove-Item -LiteralPath $bootWimPath -Force -ErrorAction SilentlyContinue
-    & dism.exe /English /Export-Image "/SourceImageFile:$newBootWim" /SourceIndex:1 "/DestinationImageFile:$finalBootWim" /Compress:max /Bootable
-    Remove-Item -LiteralPath $newBootWim -Force -ErrorAction SilentlyContinue
-    Rename-Item -LiteralPath $finalBootWim -NewName "boot.wim" -Force
 }
 
 # 15. Verify final installation payload
