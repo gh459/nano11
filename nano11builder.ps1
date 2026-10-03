@@ -149,7 +149,8 @@ if ((-not $myWindowsPrincipal.IsInRole([System.Security.Principal.WindowsBuiltIn
         } elseif ($val -is [bool]) {
             if ($val) { $paramList.Add("-$key") } else { $paramList.Add("-$key`:$false") }
         } else {
-            $paramList.Add("-$key `"$val`"")
+            $escaped = "$val" -replace '"', '\"' -replace '(\\+)$', '$1$1'
+            $paramList.Add("-$key `"$escaped`"")
         }
     }
     
@@ -158,10 +159,11 @@ if ((-not $myWindowsPrincipal.IsInRole([System.Security.Principal.WindowsBuiltIn
     $newProcess.Verb = "runas"
     try {
         [System.Diagnostics.Process]::Start($newProcess) | Out-Null
+        exit 0
     } catch {
         Write-Host "Failed to elevate privileges: $_" -ForegroundColor Red
+        exit 1
     }
-    exit 0
 }
 
 # Helper function: Safely unmount offline registry hive with retry and garbage collection
@@ -2516,7 +2518,7 @@ reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Attachment
 reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Policies\Attachments" /v "SaveZoneInformation" /t REG_DWORD /d 1 /f > $null 2>&1
 reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\CurrentVersion\Policies\Attachments" /v "SaveZoneInformation" /t REG_DWORD /d 1 /f > $null 2>&1
 reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" /v "EnableLinkedConnections" /t REG_DWORD /d 1 /f > $null 2>&1
-reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" /v "ConsentPromptBehaviorAdmin" /t REG_DWORD /d 0 /f > $null 2>&1
+reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" /v "ConsentPromptBehaviorAdmin" /t REG_DWORD /d 5 /f > $null 2>&1
 reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" /v "PromptOnSecureDesktop" /t REG_DWORD /d 0 /f > $null 2>&1
 reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer" /v "RecycleBinDrives" /t REG_DWORD /d 1 /f > $null 2>&1
 if (-not $removeDefender) {
