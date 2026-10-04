@@ -944,63 +944,129 @@ function Show-Nano11GUI {
     $grpMedia = New-Object System.Windows.Forms.GroupBox
     $grpMedia.Text = " 1. Windows 11 メディア & 作業フォルダー (Media & Workspace) "
     $grpMedia.Location = New-Object System.Drawing.Point(15, 10)
-    $grpMedia.Size = New-Object System.Drawing.Size(670, 115)
+    $grpMedia.Size = New-Object System.Drawing.Size(670, 138)
     $grpMedia.ForeColor = [System.Drawing.Color]::FromArgb(0, 190, 255)
     $mainPanel.Controls.Add($grpMedia)
 
     $lblSource = New-Object System.Windows.Forms.Label
     $lblSource.Text = "ソース ドライブ / ISO:"
-    $lblSource.Location = New-Object System.Drawing.Point(15, 28)
-    $lblSource.Size = New-Object System.Drawing.Size(120, 20)
+    $lblSource.Location = New-Object System.Drawing.Point(15, 26)
+    $lblSource.Size = New-Object System.Drawing.Size(125, 20)
     $lblSource.ForeColor = [System.Drawing.Color]::FromArgb(235, 238, 245)
     $grpMedia.Controls.Add($lblSource)
 
     $cmbSource = New-Object System.Windows.Forms.ComboBox
-    $cmbSource.Location = New-Object System.Drawing.Point(140, 25)
-    $cmbSource.Size = New-Object System.Drawing.Size(390, 24)
+    $cmbSource.Location = New-Object System.Drawing.Point(145, 23)
+    $cmbSource.Size = New-Object System.Drawing.Size(260, 24)
     $cmbSource.BackColor = [System.Drawing.Color]::FromArgb(35, 38, 46)
     $cmbSource.ForeColor = [System.Drawing.Color]::White
     $cmbSource.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDown
     $grpMedia.Controls.Add($cmbSource)
 
-    # Populate cmbSource with detected drives
-    $drivesWithWim = @()
-    foreach ($psd in (Get-PSDrive -PSProvider FileSystem -ErrorAction SilentlyContinue)) {
-        if (-not $psd.Root) { continue }
-        $r = $psd.Root.TrimEnd('\')
-        $wim = Join-Path -Path "$r\sources" -ChildPath "install.wim"
-        if ((Test-Path -LiteralPath $wim) -and ((Get-Item -LiteralPath $wim).Length -gt 1GB)) {
-            $drivesWithWim += "$r (Windows インストールメディア)"
+    # Function to populate and refresh available source drives and ISOs
+    $populateSources = {
+        $cmbSource.Items.Clear()
+        $detectedSources = @()
+
+        # 1. Detected media drives with install.wim or install.esd
+        foreach ($psd in (Get-PSDrive -PSProvider FileSystem -ErrorAction SilentlyContinue)) {
+            if (-not $psd.Root) { continue }
+            $r = $psd.Root.TrimEnd('\')
+            $wim = Join-Path -Path "$r\sources" -ChildPath "install.wim"
+            $esd = Join-Path -Path "$r\sources" -ChildPath "install.esd"
+            $vol = Get-Volume -DriveLetter ($r.TrimEnd(':')) -ErrorAction SilentlyContinue
+            $volLabel = if ($vol -and $vol.FileSystemLabel) { " [$($vol.FileSystemLabel)]" } else { "" }
+            if ((Test-Path -LiteralPath $wim) -and ((Get-Item -LiteralPath $wim).Length -gt 500MB)) {
+                $detectedSources += "$r\$volLabel (Windows 11 メディア - install.wim)"
+            } elseif ((Test-Path -LiteralPath $esd) -and ((Get-Item -LiteralPath $esd).Length -gt 500MB)) {
+                $detectedSources += "$r\$volLabel (Windows 11 メディア - install.esd)"
+            }
+        }
+
+        # 2. Candidate ISO files in common paths
+        $searchDirs = @("E:\", "D:\", "C:\", (Split-Path -Parent $PSScriptRoot), $env:USERPROFILE, [Environment]::GetFolderPath("Desktop"), [Environment]::GetFolderPath("Downloads"))
+        foreach ($p in $searchDirs) {
+            if (Test-Path -LiteralPath $p) {
+                $foundIsos = Get-ChildItem -Path $p -Filter "*.iso" -File -ErrorAction SilentlyContinue |
+                    Where-Object { $_.Length -gt 3GB -and ($_.Name -like "*Win11*" -or $_.Name -like "*Windows11*" -or $_.Name -like "*26300*" -or $_.Name -like "*24H2*") -and $_.Name -notlike "*nano11*" }
+                foreach ($iso in $foundIsos) {
+                    $detectedSources += $iso.FullName
+                }
+            }
+        }
+
+        # 3. All ready system drives (Virtual DVD, Removable USB, Local)
+        try {
+            foreach ($d in [System.IO.DriveInfo]::GetDrives()) {
+                if ($d.IsReady) {
+                    $dName = $d.Name
+                    $dLabel = if ($d.VolumeLabel) { " [$($d.VolumeLabel)]" } else { "" }
+                    $dType = switch ($d.DriveType) {
+                        'CDRom' { "仮想DVD/光学ドライブ" }
+                        'Removable' { "USBリムーバブル" }
+                        'Fixed' { "ローカルディスク" }
+                        default { "$($d.DriveType)" }
+                    }
+                    $entry = "$dName$dLabel ($dType)"
+                    $alreadyListed = $false
+                    foreach ($existing in $detectedSources) {
+                        if ($existing.StartsWith($dName, [System.StringComparison]::OrdinalIgnoreCase)) {
+                            $alreadyListed = $true; break
+                        }
+                    }
+                    if (-not $alreadyListed) {
+                        $detectedSources += $entry
+                    }
+                }
+            }
+        } catch {}
+
+        foreach ($srcItem in $detectedSources) {
+            [void]$cmbSource.Items.Add($srcItem)
         }
     }
-    if ($drivesWithWim.Count -gt 0) {
-        $cmbSource.Items.AddRange($drivesWithWim)
-        $cmbSource.SelectedIndex = 0
-    }
-    # Auto-detect ISOs
-    $candIsos = @()
-    foreach ($p in @("E:\", "D:\", (Split-Path -Parent $PSScriptRoot), $env:USERPROFILE)) {
-        if (Test-Path -LiteralPath $p) {
-            $candIsos += Get-ChildItem -Path $p -Filter "*.iso" -File -ErrorAction SilentlyContinue |
-                Where-Object { $_.Length -gt 4GB -and ($_.Name -like "*Win11*" -or $_.Name -like "*Windows11*" -or $_.Name -like "*26300*") -and $_.Name -notlike "*nano11*" }
-        }
-    }
-    foreach ($iso in $candIsos) {
-        $cmbSource.Items.Add($iso.FullName)
-    }
+    & $populateSources
+
     if ($InitialSettings.SourceDrive) {
         $cmbSource.Text = $InitialSettings.SourceDrive
-    } elseif ($cmbSource.Items.Count -eq 0) {
+    } elseif ($cmbSource.Items.Count -gt 0) {
+        $cmbSource.SelectedIndex = 0
+    } else {
         $cmbSource.Text = "E:\"
     }
 
+    $toolTip = New-Object System.Windows.Forms.ToolTip
+
+    # Button: Browse Drive (FolderBrowserDialog for Virtual DVD / USB / Directory)
+    $btnBrowseDrive = New-Object System.Windows.Forms.Button
+    $btnBrowseDrive.Text = "💿 ドライブ選択..."
+    $btnBrowseDrive.Location = New-Object System.Drawing.Point(412, 22)
+    $btnBrowseDrive.Size = New-Object System.Drawing.Size(102, 26)
+    $btnBrowseDrive.BackColor = [System.Drawing.Color]::FromArgb(45, 50, 60)
+    $btnBrowseDrive.ForeColor = [System.Drawing.Color]::White
+    $btnBrowseDrive.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $toolTip.SetToolTip($btnBrowseDrive, "マウントされた仮想DVDドライブやUSBメモリのドライブレターを選択します")
+    $btnBrowseDrive.Add_Click({
+        $fbd = New-Object System.Windows.Forms.FolderBrowserDialog
+        $fbd.Description = "Windows 11 インストールメディア（マウント済み仮想DVDドライブ、USBメモリ、または展開フォルダー）を選択してください"
+        $fbd.ShowNewFolderButton = $false
+        if ($fbd.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+            $p = $fbd.SelectedPath
+            if ($p -match '^[A-Za-z]:\\?$') { $p = $p.Substring(0, 2) + "\" }
+            $cmbSource.Text = $p
+        }
+    })
+    $grpMedia.Controls.Add($btnBrowseDrive)
+
+    # Button: Browse ISO (OpenFileDialog for .iso file)
     $btnBrowseIso = New-Object System.Windows.Forms.Button
-    $btnBrowseIso.Text = "ISO 参照..."
-    $btnBrowseIso.Location = New-Object System.Drawing.Point(540, 24)
-    $btnBrowseIso.Size = New-Object System.Drawing.Size(115, 26)
+    $btnBrowseIso.Text = "📁 ISO 参照..."
+    $btnBrowseIso.Location = New-Object System.Drawing.Point(520, 22)
+    $btnBrowseIso.Size = New-Object System.Drawing.Size(95, 26)
     $btnBrowseIso.BackColor = [System.Drawing.Color]::FromArgb(45, 50, 60)
     $btnBrowseIso.ForeColor = [System.Drawing.Color]::White
     $btnBrowseIso.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $toolTip.SetToolTip($btnBrowseIso, "公式 Windows 11 の .iso ファイルを直接選択します")
     $btnBrowseIso.Add_Click({
         $ofd = New-Object System.Windows.Forms.OpenFileDialog
         $ofd.Filter = "Windows 11 ISO (*.iso)|*.iso|All Files (*.*)|*.*"
@@ -1011,16 +1077,40 @@ function Show-Nano11GUI {
     })
     $grpMedia.Controls.Add($btnBrowseIso)
 
+    # Button: Refresh Drives
+    $btnRefresh = New-Object System.Windows.Forms.Button
+    $btnRefresh.Text = "🔄"
+    $btnRefresh.Location = New-Object System.Drawing.Point(621, 22)
+    $btnRefresh.Size = New-Object System.Drawing.Size(34, 26)
+    $btnRefresh.BackColor = [System.Drawing.Color]::FromArgb(45, 50, 60)
+    $btnRefresh.ForeColor = [System.Drawing.Color]::White
+    $btnRefresh.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $toolTip.SetToolTip($btnRefresh, "マウント済み仮想DVDや接続されたUSBドライブを再検出します")
+    $btnRefresh.Add_Click({
+        & $populateSources
+        [System.Windows.Forms.MessageBox]::Show("接続ドライブおよび ISO ファイル一覧を再スキャンしました。", "再検出完了", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+    })
+    $grpMedia.Controls.Add($btnRefresh)
+
+    # Hint Label
+    $lblHint = New-Object System.Windows.Forms.Label
+    $lblHint.Text = "※ マウント済み仮想DVDドライブ（例: D:\）、USBメモリ、または .iso ファイルを指定してください"
+    $lblHint.Location = New-Object System.Drawing.Point(145, 51)
+    $lblHint.Size = New-Object System.Drawing.Size(510, 16)
+    $lblHint.ForeColor = [System.Drawing.Color]::FromArgb(150, 155, 165)
+    $lblHint.Font = New-Object System.Drawing.Font($uiFontName, 8)
+    $grpMedia.Controls.Add($lblHint)
+
     $lblWork = New-Object System.Windows.Forms.Label
     $lblWork.Text = "作業フォルダー:"
-    $lblWork.Location = New-Object System.Drawing.Point(15, 68)
-    $lblWork.Size = New-Object System.Drawing.Size(120, 20)
+    $lblWork.Location = New-Object System.Drawing.Point(15, 80)
+    $lblWork.Size = New-Object System.Drawing.Size(125, 20)
     $lblWork.ForeColor = [System.Drawing.Color]::FromArgb(235, 238, 245)
     $grpMedia.Controls.Add($lblWork)
 
     $txtWork = New-Object System.Windows.Forms.TextBox
-    $txtWork.Location = New-Object System.Drawing.Point(140, 65)
-    $txtWork.Size = New-Object System.Drawing.Size(390, 24)
+    $txtWork.Location = New-Object System.Drawing.Point(145, 77)
+    $txtWork.Size = New-Object System.Drawing.Size(370, 24)
     $txtWork.BackColor = [System.Drawing.Color]::FromArgb(35, 38, 46)
     $txtWork.ForeColor = [System.Drawing.Color]::White
     if ($InitialSettings.WorkDir) {
@@ -1033,8 +1123,8 @@ function Show-Nano11GUI {
 
     $btnBrowseWork = New-Object System.Windows.Forms.Button
     $btnBrowseWork.Text = "フォルダー参照..."
-    $btnBrowseWork.Location = New-Object System.Drawing.Point(540, 64)
-    $btnBrowseWork.Size = New-Object System.Drawing.Size(115, 26)
+    $btnBrowseWork.Location = New-Object System.Drawing.Point(520, 76)
+    $btnBrowseWork.Size = New-Object System.Drawing.Size(135, 26)
     $btnBrowseWork.BackColor = [System.Drawing.Color]::FromArgb(45, 50, 60)
     $btnBrowseWork.ForeColor = [System.Drawing.Color]::White
     $btnBrowseWork.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
@@ -1050,7 +1140,7 @@ function Show-Nano11GUI {
     # 2. Configuration Profiles GroupBox
     $grpProfile = New-Object System.Windows.Forms.GroupBox
     $grpProfile.Text = " 2. 構成プロファイル & プリセット (Profile & Presets) "
-    $grpProfile.Location = New-Object System.Drawing.Point(15, 135)
+    $grpProfile.Location = New-Object System.Drawing.Point(15, 158)
     $grpProfile.Size = New-Object System.Drawing.Size(670, 75)
     $grpProfile.ForeColor = [System.Drawing.Color]::FromArgb(0, 190, 255)
     $mainPanel.Controls.Add($grpProfile)
@@ -1101,7 +1191,7 @@ function Show-Nano11GUI {
     # 3. Customization & Debloat Options GroupBox
     $grpOpts = New-Object System.Windows.Forms.GroupBox
     $grpOpts.Text = " 3. デブロート & カスタマイズ設定 (Debloat & Options) "
-    $grpOpts.Location = New-Object System.Drawing.Point(15, 220)
+    $grpOpts.Location = New-Object System.Drawing.Point(15, 243)
     $grpOpts.Size = New-Object System.Drawing.Size(670, 275)
     $grpOpts.ForeColor = [System.Drawing.Color]::FromArgb(0, 190, 255)
     $mainPanel.Controls.Add($grpOpts)
@@ -1146,7 +1236,7 @@ function Show-Nano11GUI {
     # 4. Output Payload Format GroupBox
     $grpPayload = New-Object System.Windows.Forms.GroupBox
     $grpPayload.Text = " 4. 出力イメージ形式 (Payload Export Format) "
-    $grpPayload.Location = New-Object System.Drawing.Point(15, 505)
+    $grpPayload.Location = New-Object System.Drawing.Point(15, 528)
     $grpPayload.Size = New-Object System.Drawing.Size(670, 75)
     $grpPayload.ForeColor = [System.Drawing.Color]::FromArgb(0, 190, 255)
     $mainPanel.Controls.Add($grpPayload)
