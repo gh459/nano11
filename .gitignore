@@ -1,0 +1,36 @@
+# ==============================================================================
+# nano11 Repository .gitignore
+# ==============================================================================
+
+# ISO Images & Disk Payloads
+*.iso
+*.wim
+*.esd
+*.swm
+*.vhdx
+*.vhd
+
+# Temporary Workspaces & Mount Points
+nano11_workspace/
+mount/
+scratch/
+temp/
+*.tmp
+*.bak
+
+# Logs & Visual Reports
+logs/nano11_*.log
+*.log
+nano11_report.html
+
+# Windows OS & Explorer Metadata
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+ehthumbs.db
+
+# Developer & Editor Caches
+.vscode/
+.idea/
+*.suo
+*.user
