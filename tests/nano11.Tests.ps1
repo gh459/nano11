@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
     Pester test suite for nano11 project.
@@ -12,6 +12,32 @@ $profilesDir = Join-Path -Path $repoRoot -ChildPath "profiles"
 $toolsDir = Join-Path -Path $repoRoot -ChildPath "tools"
 
 Describe "nano11 Core Architecture & Integrity Suite" {
+
+    Context "Encoding & Localization Integrity" {
+        It "nano11builder.ps1 should be UTF-8 with BOM for PowerShell 5.1 parser compatibility" {
+            $bytes = [System.IO.File]::ReadAllBytes($builderScript)
+            ($bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) | Should Be $true
+        }
+
+        It "nano11-GUI.bat should exist, be UTF-8 without BOM, and contain chcp 65001" {
+            $guiBat = Join-Path -Path $repoRoot -ChildPath "nano11-GUI.bat"
+            Test-Path -LiteralPath $guiBat | Should Be $true
+            $bytes = [System.IO.File]::ReadAllBytes($guiBat)
+            # Must NOT have UTF-8 BOM (cmd.exe parser failure)
+            ($bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) | Should Be $false
+            $batText = [System.IO.File]::ReadAllText($guiBat, [System.Text.Encoding]::UTF8)
+            ($batText -match 'chcp 65001') | Should Be $true
+            ($batText -match 'nano11builder\.ps1') | Should Be $true
+        }
+
+        It "Show-Nano11GUI should contain localized Japanese strings" {
+            $scriptContent = [System.IO.File]::ReadAllText($builderScript, [System.Text.Encoding]::UTF8)
+            ($scriptContent -match 'nano11 ビルド開始') | Should Be $true
+            ($scriptContent -match 'Windows 11 メディア & 作業フォルダー') | Should Be $true
+            ($scriptContent -match '構成プロファイル & プリセット') | Should Be $true
+            ($scriptContent -match 'Windows Defender とセキュリティUIの完全削除') | Should Be $true
+        }
+    }
 
     Context "Script Syntax & Static Analysis" {
         It "nano11builder.ps1 should pass AST parsing with 0 syntax errors" {

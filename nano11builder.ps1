@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
     nano11 Builder - Universal, Language-Independent Windows 11 Image Reducer
@@ -143,6 +143,12 @@ if ($PSVersionTable.PSVersion.Major -ge 7) {
 
 # Unified nano11 Version
 $script:Nano11Version = "2.1"
+
+# Ensure UTF-8 Console and Output encoding to prevent mojibake in Windows terminals
+try {
+    [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+    $OutputEncoding = [System.Text.Encoding]::UTF8
+} catch {}
 
 # ==============================================================================
 # Critical Warning: MediaCreationTool.exe ISO is NOT supported
@@ -885,8 +891,16 @@ function Show-Nano11GUI {
     Add-Type -AssemblyName System.Drawing
     [System.Windows.Forms.Application]::EnableVisualStyles()
 
+    $uiFontName = "Segoe UI"
+    foreach ($fName in @("Yu Gothic UI", "Meiryo UI", "Segoe UI")) {
+        try {
+            $testFont = New-Object System.Drawing.Font($fName, 9)
+            if ($testFont.Name -eq $fName) { $uiFontName = $fName; break }
+        } catch {}
+    }
+
     $form = New-Object System.Windows.Forms.Form
-    $form.Text = "nano11 Builder - Next-Gen Windows 11 Customizer & Debloater"
+    $form.Text = "nano11 Builder - 次世代 Windows 11 軽量化＆カスタマイズ設定ツール"
     $form.Size = New-Object System.Drawing.Size(720, 830)
     $form.MinimumSize = New-Object System.Drawing.Size(720, 830)
     $form.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterScreen
@@ -894,7 +908,7 @@ function Show-Nano11GUI {
     $form.MaximizeBox = $false
     $form.BackColor = [System.Drawing.Color]::FromArgb(26, 28, 34)
     $form.ForeColor = [System.Drawing.Color]::FromArgb(235, 238, 245)
-    $form.Font = New-Object System.Drawing.Font("Segoe UI", 9)
+    $form.Font = New-Object System.Drawing.Font($uiFontName, 9)
 
     # Header Panel
     $headerPanel = New-Object System.Windows.Forms.Panel
@@ -904,16 +918,16 @@ function Show-Nano11GUI {
     $form.Controls.Add($headerPanel)
 
     $titleLabel = New-Object System.Windows.Forms.Label
-    $titleLabel.Text = "⚡ nano11 Builder v2.0"
-    $titleLabel.Font = New-Object System.Drawing.Font("Segoe UI", 14, [System.Drawing.FontStyle]::Bold)
+    $titleLabel.Text = "⚡ nano11 Builder v2.1"
+    $titleLabel.Font = New-Object System.Drawing.Font($uiFontName, 14, [System.Drawing.FontStyle]::Bold)
     $titleLabel.ForeColor = [System.Drawing.Color]::FromArgb(0, 190, 255)
     $titleLabel.Location = New-Object System.Drawing.Point(16, 10)
     $titleLabel.AutoSize = $true
     $headerPanel.Controls.Add($titleLabel)
 
     $subTitleLabel = New-Object System.Windows.Forms.Label
-    $subTitleLabel.Text = "Automated, Ultra-Slim, Gaming & Multi-Language Windows 11 Image Creator"
-    $subTitleLabel.Font = New-Object System.Drawing.Font("Segoe UI", 8.5)
+    $subTitleLabel.Text = "全自動・超軽量・低遅延ゲーミング＆多言語対応 Windows 11 ビルドツール"
+    $subTitleLabel.Font = New-Object System.Drawing.Font($uiFontName, 8.5)
     $subTitleLabel.ForeColor = [System.Drawing.Color]::FromArgb(160, 165, 175)
     $subTitleLabel.Location = New-Object System.Drawing.Point(18, 38)
     $subTitleLabel.AutoSize = $true
@@ -928,14 +942,14 @@ function Show-Nano11GUI {
 
     # 1. Media & Path Settings GroupBox
     $grpMedia = New-Object System.Windows.Forms.GroupBox
-    $grpMedia.Text = " 1. Windows 11 Media & Workspace "
+    $grpMedia.Text = " 1. Windows 11 メディア & 作業フォルダー (Media & Workspace) "
     $grpMedia.Location = New-Object System.Drawing.Point(15, 10)
     $grpMedia.Size = New-Object System.Drawing.Size(670, 115)
     $grpMedia.ForeColor = [System.Drawing.Color]::FromArgb(0, 190, 255)
     $mainPanel.Controls.Add($grpMedia)
 
     $lblSource = New-Object System.Windows.Forms.Label
-    $lblSource.Text = "Source Drive / ISO:"
+    $lblSource.Text = "ソース ドライブ / ISO:"
     $lblSource.Location = New-Object System.Drawing.Point(15, 28)
     $lblSource.Size = New-Object System.Drawing.Size(120, 20)
     $lblSource.ForeColor = [System.Drawing.Color]::FromArgb(235, 238, 245)
@@ -956,7 +970,7 @@ function Show-Nano11GUI {
         $r = $psd.Root.TrimEnd('\')
         $wim = Join-Path -Path "$r\sources" -ChildPath "install.wim"
         if ((Test-Path -LiteralPath $wim) -and ((Get-Item -LiteralPath $wim).Length -gt 1GB)) {
-            $drivesWithWim += "$r (Windows Installation Media)"
+            $drivesWithWim += "$r (Windows インストールメディア)"
         }
     }
     if ($drivesWithWim.Count -gt 0) {
@@ -981,7 +995,7 @@ function Show-Nano11GUI {
     }
 
     $btnBrowseIso = New-Object System.Windows.Forms.Button
-    $btnBrowseIso.Text = "Browse ISO..."
+    $btnBrowseIso.Text = "ISO 参照..."
     $btnBrowseIso.Location = New-Object System.Drawing.Point(540, 24)
     $btnBrowseIso.Size = New-Object System.Drawing.Size(115, 26)
     $btnBrowseIso.BackColor = [System.Drawing.Color]::FromArgb(45, 50, 60)
@@ -990,7 +1004,7 @@ function Show-Nano11GUI {
     $btnBrowseIso.Add_Click({
         $ofd = New-Object System.Windows.Forms.OpenFileDialog
         $ofd.Filter = "Windows 11 ISO (*.iso)|*.iso|All Files (*.*)|*.*"
-        $ofd.Title = "Select Official Windows 11 ISO Image"
+        $ofd.Title = "公式 Windows 11 ISO イメージを選択してください"
         if ($ofd.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
             $cmbSource.Text = $ofd.FileName
         }
@@ -998,7 +1012,7 @@ function Show-Nano11GUI {
     $grpMedia.Controls.Add($btnBrowseIso)
 
     $lblWork = New-Object System.Windows.Forms.Label
-    $lblWork.Text = "Working Directory:"
+    $lblWork.Text = "作業フォルダー:"
     $lblWork.Location = New-Object System.Drawing.Point(15, 68)
     $lblWork.Size = New-Object System.Drawing.Size(120, 20)
     $lblWork.ForeColor = [System.Drawing.Color]::FromArgb(235, 238, 245)
@@ -1018,7 +1032,7 @@ function Show-Nano11GUI {
     $grpMedia.Controls.Add($txtWork)
 
     $btnBrowseWork = New-Object System.Windows.Forms.Button
-    $btnBrowseWork.Text = "Browse Dir..."
+    $btnBrowseWork.Text = "フォルダー参照..."
     $btnBrowseWork.Location = New-Object System.Drawing.Point(540, 64)
     $btnBrowseWork.Size = New-Object System.Drawing.Size(115, 26)
     $btnBrowseWork.BackColor = [System.Drawing.Color]::FromArgb(45, 50, 60)
@@ -1026,7 +1040,7 @@ function Show-Nano11GUI {
     $btnBrowseWork.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
     $btnBrowseWork.Add_Click({
         $fbd = New-Object System.Windows.Forms.FolderBrowserDialog
-        $fbd.Description = "Select NTFS Working Directory with at least 25GB free space"
+        $fbd.Description = "空き容量が25GB以上ある NTFS ドライブ上の作業フォルダーを選択してください"
         if ($fbd.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
             $txtWork.Text = $fbd.SelectedPath
         }
@@ -1035,14 +1049,14 @@ function Show-Nano11GUI {
 
     # 2. Configuration Profiles GroupBox
     $grpProfile = New-Object System.Windows.Forms.GroupBox
-    $grpProfile.Text = " 2. Configuration Profile & Presets "
+    $grpProfile.Text = " 2. 構成プロファイル & プリセット (Profile & Presets) "
     $grpProfile.Location = New-Object System.Drawing.Point(15, 135)
     $grpProfile.Size = New-Object System.Drawing.Size(670, 75)
     $grpProfile.ForeColor = [System.Drawing.Color]::FromArgb(0, 190, 255)
     $mainPanel.Controls.Add($grpProfile)
 
     $lblPreset = New-Object System.Windows.Forms.Label
-    $lblPreset.Text = "Preset:"
+    $lblPreset.Text = "プリセット:"
     $lblPreset.Location = New-Object System.Drawing.Point(15, 28)
     $lblPreset.Size = New-Object System.Drawing.Size(60, 20)
     $lblPreset.ForeColor = [System.Drawing.Color]::FromArgb(235, 238, 245)
@@ -1055,19 +1069,19 @@ function Show-Nano11GUI {
     $cmbPreset.ForeColor = [System.Drawing.Color]::White
     $cmbPreset.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
     $cmbPreset.Items.AddRange(@(
-        "⚡ Extreme Slim & Gaming (Max Debloat, Latency Tuning)",
-        "🛡️ Balanced Pro (Safe: Windows Update & Defender Kept)",
-        "💾 FAT32 USB Split-WIM (3.8GB SWM Chunks for UEFI)",
-        "🎮 Handheld Gaming (ROG Ally, Steam Deck, Legion Go)",
-        "💻 VM & Developer Workstation (WSL2, Hyper-V, WinUpdate)",
-        "🎵 Audio & DAW Production (Minimal Latency, VST Protected)",
-        "🔧 Custom Configuration"
+        "⚡ Extreme Slim & Gaming (最大軽量化・超低遅延チューニング)",
+        "🛡️ Balanced Pro (安全構成: Windows Update & Defender 保持)",
+        "💾 FAT32 USB Split-WIM (UEFI対応 3.8GB 分割SWM形式)",
+        "🎮 ポータブルゲーミングPC (ROG Ally, Steam Deck, Legion Go)",
+        "💻 VM & 開発者向け (WSL2, Hyper-V, WinUpdate 有効)",
+        "🎵 DTM & オーディオ制作 (低遅延・VST音源保護・高安定性)",
+        "🔧 カスタム構成 (手動カスタマイズ)"
     ))
     $cmbPreset.SelectedIndex = 0
     $grpProfile.Controls.Add($cmbPreset)
 
     $btnLoadProfile = New-Object System.Windows.Forms.Button
-    $btnLoadProfile.Text = "📂 Load JSON..."
+    $btnLoadProfile.Text = "📂 JSON 読込..."
     $btnLoadProfile.Location = New-Object System.Drawing.Point(405, 24)
     $btnLoadProfile.Size = New-Object System.Drawing.Size(120, 26)
     $btnLoadProfile.BackColor = [System.Drawing.Color]::FromArgb(45, 50, 60)
@@ -1076,7 +1090,7 @@ function Show-Nano11GUI {
     $grpProfile.Controls.Add($btnLoadProfile)
 
     $btnSaveProfile = New-Object System.Windows.Forms.Button
-    $btnSaveProfile.Text = "💾 Save JSON..."
+    $btnSaveProfile.Text = "💾 JSON 保存..."
     $btnSaveProfile.Location = New-Object System.Drawing.Point(535, 24)
     $btnSaveProfile.Size = New-Object System.Drawing.Size(120, 26)
     $btnSaveProfile.BackColor = [System.Drawing.Color]::FromArgb(45, 50, 60)
@@ -1086,7 +1100,7 @@ function Show-Nano11GUI {
 
     # 3. Customization & Debloat Options GroupBox
     $grpOpts = New-Object System.Windows.Forms.GroupBox
-    $grpOpts.Text = " 3. Debloat & Customization Options "
+    $grpOpts.Text = " 3. デブロート & カスタマイズ設定 (Debloat & Options) "
     $grpOpts.Location = New-Object System.Drawing.Point(15, 220)
     $grpOpts.Size = New-Object System.Drawing.Size(670, 275)
     $grpOpts.ForeColor = [System.Drawing.Color]::FromArgb(0, 190, 255)
@@ -1111,34 +1125,34 @@ function Show-Nano11GUI {
     }
 
     # Left Column (X = 15)
-    $chkDefender    = & $createChk "Remove Windows Defender & SecHealthUI" 15 25 (& $getInitVal 'RemoveDefender' $true)
-    $chkIME         = & $createChk "Keep Asian IMEs (Japanese, Chinese, Korean)" 15 55 (& $getInitVal 'KeepAsianIME' $true)
-    $chkFonts       = & $createChk "Keep Extra International & Asian Fonts" 15 85 (& $getInitVal 'KeepExtraFonts' $false)
-    $chkDrivers     = & $createChk "Remove Legacy Storage & Network Drivers" 15 115 (& $getInitVal 'RemoveDrivers' $false)
-    $chkWU          = & $createChk "Disable Automatic Windows Update" 15 145 (& $getInitVal 'DisableWindowsUpdate' $true)
-    $chkBT          = & $createChk "Keep Bluetooth Services & Peripherals" 15 175 (& $getInitVal 'KeepBluetooth' $true)
-    $chkWSL         = & $createChk "Enable WSL2 & Virtual Machine Platform" 15 205 (& $getInitVal 'WSLSupport' $false)
-    $chkRecovery    = & $createChk "Keep Recovery Environment (WinRE)" 15 235 (& $getInitVal 'KeepRecoveryEnv' $false)
+    $chkDefender    = & $createChk "Windows Defender とセキュリティUIの完全削除" 15 25 (& $getInitVal 'RemoveDefender' $true)
+    $chkIME         = & $createChk "日本語・アジア系IMEの保持 (日本語入力対応)" 15 55 (& $getInitVal 'KeepAsianIME' $true)
+    $chkFonts       = & $createChk "国際フォント・追加アジア系フォントの保持" 15 85 (& $getInitVal 'KeepExtraFonts' $false)
+    $chkDrivers     = & $createChk "レガシー ストレージ & ネットワークドライバー削除" 15 115 (& $getInitVal 'RemoveDrivers' $false)
+    $chkWU          = & $createChk "自動 Windows Update の無効化" 15 145 (& $getInitVal 'DisableWindowsUpdate' $true)
+    $chkBT          = & $createChk "Bluetooth サービス & 周辺機器サポートの保持" 15 175 (& $getInitVal 'KeepBluetooth' $true)
+    $chkWSL         = & $createChk "WSL2 & 仮想マシンプラットフォームの有効化" 15 205 (& $getInitVal 'WSLSupport' $false)
+    $chkRecovery    = & $createChk "回復環境 (WinRE) の保持" 15 235 (& $getInitVal 'KeepRecoveryEnv' $false)
 
     # Right Column (X = 345)
-    $chkSafeDebloat = & $createChk "Safe WinSxS Component Store Debloat" 345 25 (& $getInitVal 'SafeDebloatMode' $true)
-    $chkUltraSlim   = & $createChk "UltraSlim Mode (~3GB Final ISO Target)" 345 55 (& $getInitVal 'UltraSlimMode' $true)
-    $chkJPKey       = & $createChk "Configure Japanese 106/109 Keyboard" 345 85 (& $getInitVal 'SetJapaneseKeyboard' $true)
-    $chkAtlas       = & $createChk "AtlasOS & ReviOS Low-Latency Tweaks" 345 115 (& $getInitVal 'AtlasReviOSMode' $true)
-    $chkToolkit     = & $createChk "Bundle Optimization Toolkit to Desktop" 345 145 (& $getInitVal 'BundleOptimizationToolkit' $true)
-    $chkStore       = & $createChk "Remove Microsoft Store & PurchaseApp" 345 175 (& $getInitVal 'RemoveStore' $false)
-    $chkVHDX        = & $createChk "High-Speed VHDX Scratch Disk" 345 205 (& $getInitVal 'UseVHDX' $false)
+    $chkSafeDebloat = & $createChk "安全な WinSxS コンポーネントストア軽量化" 345 25 (& $getInitVal 'SafeDebloatMode' $true)
+    $chkUltraSlim   = & $createChk "UltraSlim モード (~3GB ISO目標・極限削減)" 345 55 (& $getInitVal 'UltraSlimMode' $true)
+    $chkJPKey       = & $createChk "日本語 106/109 キーボード自動構成" 345 85 (& $getInitVal 'SetJapaneseKeyboard' $true)
+    $chkAtlas       = & $createChk "AtlasOS & ReviOS 超低遅延・レスポンス最適化" 345 115 (& $getInitVal 'AtlasReviOSMode' $true)
+    $chkToolkit     = & $createChk "最適化ツールキットをデスクトップに配置" 345 145 (& $getInitVal 'BundleOptimizationToolkit' $true)
+    $chkStore       = & $createChk "Microsoft Store と購入アプリの完全削除" 345 175 (& $getInitVal 'RemoveStore' $false)
+    $chkVHDX        = & $createChk "超高速 VHDX スクラッチディスクを使用" 345 205 (& $getInitVal 'UseVHDX' $false)
 
     # 4. Output Payload Format GroupBox
     $grpPayload = New-Object System.Windows.Forms.GroupBox
-    $grpPayload.Text = " 4. Payload Export Format "
+    $grpPayload.Text = " 4. 出力イメージ形式 (Payload Export Format) "
     $grpPayload.Location = New-Object System.Drawing.Point(15, 505)
     $grpPayload.Size = New-Object System.Drawing.Size(670, 75)
     $grpPayload.ForeColor = [System.Drawing.Color]::FromArgb(0, 190, 255)
     $mainPanel.Controls.Add($grpPayload)
 
     $radWIM = New-Object System.Windows.Forms.RadioButton
-    $radWIM.Text = "install.wim (LZX - Standard Fast)"
+    $radWIM.Text = "install.wim (LZX - 推奨・高速・高安定)"
     $radWIM.Location = New-Object System.Drawing.Point(15, 28)
     $radWIM.Size = New-Object System.Drawing.Size(200, 25)
     $radWIM.ForeColor = [System.Drawing.Color]::FromArgb(235, 238, 245)
@@ -1146,14 +1160,14 @@ function Show-Nano11GUI {
     $grpPayload.Controls.Add($radWIM)
 
     $radESD = New-Object System.Windows.Forms.RadioButton
-    $radESD.Text = "install.esd (LZMS - Ultra Compact)"
+    $radESD.Text = "install.esd (LZMS - 超高圧縮)"
     $radESD.Location = New-Object System.Drawing.Point(225, 28)
     $radESD.Size = New-Object System.Drawing.Size(205, 25)
     $radESD.ForeColor = [System.Drawing.Color]::FromArgb(235, 238, 245)
     $grpPayload.Controls.Add($radESD)
 
     $radSWM = New-Object System.Windows.Forms.RadioButton
-    $radSWM.Text = "install.swm (Split-WIM - FAT32 USB)"
+    $radSWM.Text = "install.swm (Split-WIM - FAT32 USB対応)"
     $radSWM.Location = New-Object System.Drawing.Point(440, 28)
     $radSWM.Size = New-Object System.Drawing.Size(215, 25)
     $radSWM.ForeColor = [System.Drawing.Color]::FromArgb(235, 238, 245)
@@ -1327,7 +1341,7 @@ function Show-Nano11GUI {
                 }
                 $cmbPreset.SelectedIndex = 6
                 $script:updatingPreset = $false
-                [System.Windows.Forms.MessageBox]::Show("Profile loaded successfully from:`n$($ofd.FileName)", "Profile Loaded", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+                [System.Windows.Forms.MessageBox]::Show("プロファイルを正常に読み込みました:`n$($ofd.FileName)", "プロファイル読込完了", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
             }
         }
     })
@@ -1359,7 +1373,7 @@ function Show-Nano11GUI {
                 PayloadFormat             = if ($radESD.Checked) { "ESD" } elseif ($radSWM.Checked) { "SWM" } else { "WIM" }
             }
             Export-Nano11Profile -FilePath $sfd.FileName -Config $saveCfg
-            [System.Windows.Forms.MessageBox]::Show("Profile saved successfully to:`n$($sfd.FileName)", "Profile Saved", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+            [System.Windows.Forms.MessageBox]::Show("プロファイルを正常に保存しました:`n$($sfd.FileName)", "プロファイル保存完了", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
         }
     })
 
@@ -1371,17 +1385,18 @@ function Show-Nano11GUI {
     $form.Controls.Add($bottomPanel)
 
     $btnBuild = New-Object System.Windows.Forms.Button
-    $btnBuild.Text = "🚀 Start nano11 Build"
+    $btnBuild.Text = "🚀 nano11 ビルド開始"
     $btnBuild.Location = New-Object System.Drawing.Point(340, 14)
     $btnBuild.Size = New-Object System.Drawing.Size(200, 38)
     $btnBuild.BackColor = [System.Drawing.Color]::FromArgb(0, 120, 215)
     $btnBuild.ForeColor = [System.Drawing.Color]::White
-    $btnBuild.Font = New-Object System.Drawing.Font("Segoe UI", 10.5, [System.Drawing.FontStyle]::Bold)
+    $btnBuild.Font = New-Object System.Drawing.Font($uiFontName, 10.5, [System.Drawing.FontStyle]::Bold)
     $btnBuild.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
     $bottomPanel.Controls.Add($btnBuild)
 
     $btnCancel = New-Object System.Windows.Forms.Button
-    $btnCancel.Text = "Cancel"
+    $btnCancel.Text = "キャンセル"
+    $btnCancel.Font = New-Object System.Drawing.Font($uiFontName, 9.5)
     $btnCancel.Location = New-Object System.Drawing.Point(555, 14)
     $btnCancel.Size = New-Object System.Drawing.Size(130, 38)
     $btnCancel.BackColor = [System.Drawing.Color]::FromArgb(45, 50, 60)
@@ -1396,7 +1411,7 @@ function Show-Nano11GUI {
         # Validate Source Drive / ISO
         $srcText = $cmbSource.Text.Trim()
         if (-not $srcText) {
-            [System.Windows.Forms.MessageBox]::Show("Please select or browse for a Windows 11 installation drive or ISO.", "Source Required", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+            [System.Windows.Forms.MessageBox]::Show("Windows 11 のインストールメディア(ドライブ)または ISO イメージを指定してください。", "ソース指定が必要", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
             return
         }
 
