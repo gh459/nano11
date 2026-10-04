@@ -1463,6 +1463,13 @@ function Show-Nano11GUI {
         $form.Close()
     })
 
+    # Ensure Form pops up in foreground when launched
+    $form.TopMost = $true
+    $form.Add_Shown({
+        $form.Activate()
+        $form.TopMost = $false
+    })
+
     # Show Dialog
     $diagResult = $form.ShowDialog()
     if ($diagResult -eq [System.Windows.Forms.DialogResult]::OK) {
