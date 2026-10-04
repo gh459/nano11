@@ -266,6 +266,11 @@ You can also run the builder non-interactively with customized flags or pre-buil
 | `-GUI` (alias: `-UI`) | Launches the dark-themed Graphical User Interface frontend |
 | `-Profile <extreme\|balanced\|handheld\|vm\|audio\|fat32>` (alias: `-Preset`) | Applies a pre-packaged configuration profile preset |
 | `-UseVHDX` (alias: `-FastVHDX`) | Dynamically mounts an expandable 30 GB VHDX volume as the DISM scratch directory, eliminating host fragmentation and accelerating build times |
+| `-DryRun` (supports `-WhatIf`) | Resolves and verifies configuration, options, and paths without modifying disks or servicing images |
+| `-Validate` | Mounts the final exported `install.wim` in read-only mode and verifies that essential binaries (`osk.exe`, `ctfmon.exe`, `sysprep.exe`, `cmd.exe`) exist |
+| `-Resume` | Detects an existing valid build workspace and resumes processing from where it was left off |
+| `-SkipEiCfg` | Skips generating `sources\ei.cfg` (preserves OEM/LTSC channel behavior) |
+| `-NoPostInstallAssets` | Omits bundling desktop and setup tool utilities (`Install-Browser`, `Nano11 Control Center`) into the image |
 | `-CheckHealth` | Executes DISM `/Cleanup-Image /CheckHealth` verification on the mounted image |
 | `-TestSelf` | Runs the built-in diagnostic and AST static analysis self-test suite |
 | `-AllIndices` | Flag to indicate multi-index processing for multi-edition installation media |
@@ -289,9 +294,6 @@ You can also run the builder non-interactively with customized flags or pre-buil
 | `-UltraSlim` / `-NoUltraSlim` | Enables or disables UltraSlim ~3.0 GB ISO target mode (Default: Enabled) |
 | `-JapaneseKeyboard` / `-NoJapaneseKeyboard` | Enforces or skips Japanese 106/109 keyboard layout configuration (Default: Enabled) |
 | `-AtlasReviOS` / `-NoAtlasReviOS` | Enables or skips AtlasOS & ReviOS debloat and low-latency tuning (Default: Enabled) |
-| `-BundleOptimizationToolkit` / `-NoBundleOptimizationToolkit` | Bundles or skips Windows Optimization Toolkit on Desktop (Default: Enabled) |
-| `-ExportESD` / `-ExportWIM` (`-NoESD`) | Output image format (Default: install.wim LZX — Fast & Crash-Free) |
-| `-KeepStore` / `-RemoveStore` (`-NoStore`) | Keeps or removes Microsoft Store (`Microsoft.WindowsStore`, `Microsoft.StorePurchaseApp`). winget / App Installer and Store frameworks are always kept (Default: Keep) |
 | `-BundleOptimizationToolkit` / `-NoBundleOptimizationToolkit` | Bundles or skips Windows Optimization Toolkit on Desktop (Default: Enabled) |
 | `-ExportESD` / `-ExportWIM` (`-NoESD`) | Output image format (Default: install.wim LZX — Fast & Crash-Free) |
 | `-KeepStore` / `-RemoveStore` (`-NoStore`) | Keeps or removes Microsoft Store (`Microsoft.WindowsStore`, `Microsoft.StorePurchaseApp`). winget / App Installer and Store frameworks are always kept (Default: Keep) |

@@ -2882,6 +2882,30 @@ goto MENU
 			}
 		}
 	};
+	{
+		# WinRE Online Dismantle if winre-cleanup.flag is present
+		$flag = "C:\Windows\Setup\Scripts\winre-cleanup.flag";
+		if (Test-Path $flag) {
+			try {
+				&amp; reagentc.exe /disable 2&gt;$null;
+				$winrePath = "C:\Windows\System32\Recovery\Winre.wim";
+				if (Test-Path $winrePath) {
+					takeown.exe /f $winrePath /a 2&gt;$null;
+					icacls.exe $winrePath /grant "*S-1-5-32-544:F" 2&gt;$null;
+					Remove-Item -LiteralPath $winrePath -Force -ErrorAction SilentlyContinue;
+				}
+				Remove-Item -LiteralPath $flag -Force -ErrorAction SilentlyContinue;
+			} catch {}
+		}
+	};
+	{
+		# Signal FirstLogon completion for post-deployment verification
+		try {
+			$markerDir = "C:\ProgramData\nano11";
+			if (-not (Test-Path $markerDir)) { New-Item -ItemType Directory -Force -Path $markerDir | Out-Null; }
+			Set-Content -LiteralPath "$markerDir\firstlogon.done" -Value (Get-Date -Format "yyyy-MM-dd HH:mm:ss") -Encoding ascii;
+		} catch {}
+	};
 );
 
 &amp; {

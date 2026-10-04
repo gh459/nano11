@@ -1,3 +1,4 @@
+#Requires -Version 5.1
 <#
 .SYNOPSIS
     nano11 Builder - Universal, Language-Independent Windows 11 Image Reducer
@@ -18,7 +19,7 @@
     License: MIT
 #>
 
-[CmdletBinding()]
+[CmdletBinding(SupportsShouldProcess=$true)]
 param(
     [alias("Unattended", "Silent", "Batch")]
     [switch]$NonInteractive,
@@ -34,6 +35,13 @@ param(
     [string]$SourceDrive,
     [string]$WorkDir,
     [string]$Index,
+    
+    # Execution & Diagnostic Flags
+    [switch]$DryRun,
+    [switch]$Resume,
+    [switch]$Validate,
+    [switch]$SkipEiCfg,
+    [switch]$NoPostInstallAssets,
     
     # 1. Windows Defender
     [switch]$KeepDefender,
@@ -128,6 +136,14 @@ param(
     [switch]$AllIndices
 )
 
+# PowerShell 7+ Compatibility Notice
+if ($PSVersionTable.PSVersion.Major -ge 7) {
+    Write-Warning "PowerShell 7+ is not officially supported due to native Windows DISM and elevation differences. Running in Windows PowerShell 5.1 is strongly recommended."
+}
+
+# Unified nano11 Version
+$script:Nano11Version = "2.1"
+
 # ==============================================================================
 # Critical Warning: MediaCreationTool.exe ISO is NOT supported
 # ==============================================================================
@@ -158,9 +174,10 @@ if ((Get-ExecutionPolicy) -eq 'Restricted') {
 }
 
 # 2. Check for Admin rights and restart with full arguments preserved
+$isDryRunMode = $DryRun -or ($PSBoundParameters.ContainsKey('WhatIf') -and $PSBoundParameters['WhatIf'])
 $myWindowsID = [System.Security.Principal.WindowsIdentity]::GetCurrent()
 $myWindowsPrincipal = New-Object System.Security.Principal.WindowsPrincipal($myWindowsID)
-if ((-not $myWindowsPrincipal.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)) -and ($env:NANO11_TEST_MODE -ne "1") -and (-not $TestSelf)) {
+if ((-not $myWindowsPrincipal.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)) -and ($env:NANO11_TEST_MODE -ne "1") -and (-not $TestSelf) -and (-not $isDryRunMode)) {
     Write-Host "Restarting script with Administrator privileges in a new window..." -ForegroundColor Yellow
     
     # Reconstruct bound parameters for elevated process
@@ -186,6 +203,105 @@ if ((-not $myWindowsPrincipal.IsInRole([System.Security.Principal.WindowsBuiltIn
     } catch {
         Write-Host "Failed to elevate privileges: $_" -ForegroundColor Red
         exit 1
+    }
+}
+
+# 2b. Concurrency Guard: Global Mutex to prevent simultaneous builds
+$script:BuildMutex = $null
+$script:HasMutex = $false
+if ((-not $TestSelf) -and ($env:NANO11_TEST_MODE -ne "1") -and (-not $isDryRunMode)) {
+    try {
+        $script:BuildMutex = New-Object System.Threading.Mutex($false, "Global\nano11Builder")
+        $script:HasMutex = $script:BuildMutex.WaitOne(0)
+        if (-not $script:HasMutex) {
+            Write-Host "Error: Another instance of nano11 builder is currently running (Global\nano11Builder)." -ForegroundColor Red
+            exit 1
+        }
+    } catch {
+        Write-Warning "Could not acquire global mutex: $_"
+    }
+}
+
+# 2c. Validate conflicting / contradictory switch parameters
+$conflicts = @(
+    @('KeepDefender', 'RemoveDefender'),
+    @('KeepIME', 'RemoveIME'),
+    @('KeepFonts', 'RemoveFonts'),
+    @('KeepDrivers', 'RemoveDrivers'),
+    @('KeepWindowsUpdate', 'DisableWindowsUpdate'),
+    @('KeepBluetooth', 'DisableBluetooth'),
+    @('EnableWSL', 'DisableWSL'),
+    @('KeepRecovery', 'RemoveRecovery'),
+    @('SafeDebloat', 'AggressiveWinSxS'),
+    @('UltraSlim', 'NoUltraSlim'),
+    @('JapaneseKeyboard', 'NoJapaneseKeyboard'),
+    @('AtlasReviOS', 'NoAtlasReviOS'),
+    @('BundleOptimizationToolkit', 'NoBundleOptimizationToolkit'),
+    @('ExportESD', 'ExportWIM'),
+    @('SplitWIM', 'NoSplitWIM'),
+    @('KeepStore', 'RemoveStore')
+)
+foreach ($pair in $conflicts) {
+    $paramA = $pair[0]; $paramB = $pair[1]
+    $isA = if ($PSBoundParameters.ContainsKey($paramA)) { [bool]$PSBoundParameters[$paramA] } else { $false }
+    $isB = if ($PSBoundParameters.ContainsKey($paramB)) { [bool]$PSBoundParameters[$paramB] } else { $false }
+    if ($isA -and $isB) {
+        throw "Conflicting parameters specified: -$paramA and -$paramB cannot be used together."
+    }
+}
+
+# Helper function: Standardized DISM wrapper with retries and exit code diagnostics
+function Invoke-Dism {
+    param(
+        [Parameter(Mandatory=$true)]
+        [string[]]$DismArgs,
+        [int]$Retries = 1,
+        [string]$ActivityDescription = ""
+    )
+    if ($ActivityDescription) {
+        Write-Host "  -> DISM: $ActivityDescription..." -ForegroundColor Cyan
+    }
+    for ($i = 1; $i -le $Retries; $i++) {
+        & dism.exe /English @DismArgs
+        if ($LASTEXITCODE -eq 0) {
+            return $true
+        }
+        if ($i -lt $Retries) {
+            Write-Host "DISM command failed (Exit code: $LASTEXITCODE). Retrying ($i/$Retries)..." -ForegroundColor Yellow
+            Start-Sleep -Seconds 2
+        }
+    }
+    return $false
+}
+
+# Helper function: Offline Registry Writer with deduplication tracking and error accounting
+$script:RegApplied = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+$script:RegSuccessCount = 0
+$script:RegFailureCount = 0
+
+function Set-OfflineReg {
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$Key,
+        [Parameter(Mandatory=$true)]
+        [string]$Name,
+        [Parameter(Mandatory=$true)]
+        [string]$Type,
+        [Parameter(Mandatory=$true)]
+        [string]$Data
+    )
+    $id = "$Key|$Name"
+    if ($script:RegApplied.Contains($id)) {
+        return
+    }
+    [void]$script:RegApplied.Add($id)
+
+    & reg.exe add $Key /v $Name /t $Type /d $Data /f > $null 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $script:RegSuccessCount++
+    } else {
+        $script:RegFailureCount++
+        Write-Host "Warning: Failed to set registry value: $Key\$Name" -ForegroundColor Yellow
     }
 }
 
@@ -343,6 +459,10 @@ function Remove-ProtectedDirectory {
         [Parameter(Mandatory=$true)]
         [string]$ScratchPath
     )
+    $full = try { [System.IO.Path]::GetFullPath($Path).TrimEnd('\') } catch { $Path }
+    if ($full -match '^[a-zA-Z]:\\?$' -or $full.Length -le 3 -or ($full -notmatch 'nano11|scratch|workspace|build|WindowsApps')) {
+        throw "Safety guard: Refusing to delete dangerous or system directory: $full"
+    }
     if (-not (Test-Path -LiteralPath $Path)) {
         return
     }
@@ -381,6 +501,10 @@ function Reset-DirectoryWithRobocopy {
         [Parameter(Mandatory=$true)]
         [string]$Path
     )
+    $full = try { [System.IO.Path]::GetFullPath($Path).TrimEnd('\') } catch { $Path }
+    if ($full -match '^[a-zA-Z]:\\?$' -or $full.Length -le 3 -or ($full -notmatch 'nano11|scratch|workspace|build')) {
+        throw "Safety guard: Refusing to reset dangerous or system directory: $full"
+    }
     if (Test-Path -LiteralPath $Path) {
         $emptyTemp = Join-Path -Path ([System.IO.Path]::GetTempPath()) -ChildPath "nano11_empty_$([System.IO.Path]::GetRandomFileName())"
         try {
@@ -409,7 +533,7 @@ function Export-Nano11Profile {
     }
     $profileData = [ordered]@{
         ProfileName = if ($Config.ProfileName) { $Config.ProfileName } else { "nano11 Configuration Profile" }
-        Version     = "2.0"
+        Version     = $script:Nano11Version
         Timestamp   = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
         Settings    = [ordered]@{
             RemoveDefender             = [bool]$Config.RemoveDefender
@@ -426,7 +550,13 @@ function Export-Nano11Profile {
             AtlasReviOSMode            = [bool]$Config.AtlasReviOSMode
             BundleOptimizationToolkit  = [bool]$Config.BundleOptimizationToolkit
             RemoveStore                = [bool]$Config.RemoveStore
+            UseVHDX                    = [bool]$Config.UseVHDX
+            SkipEiCfg                  = [bool]$Config.SkipEiCfg
+            NoPostInstallAssets        = [bool]$Config.NoPostInstallAssets
             PayloadFormat              = if ($Config.PayloadFormat) { $Config.PayloadFormat } else { "WIM" }
+            SourceDrive                = if ($Config.SourceDrive) { $Config.SourceDrive } else { "" }
+            WorkDir                    = if ($Config.WorkDir) { $Config.WorkDir } else { "" }
+            Index                      = if ($Config.Index) { $Config.Index } else { "" }
         }
     }
     $json = $profileData | ConvertTo-Json -Depth 5
@@ -441,17 +571,28 @@ function Import-Nano11Profile {
         [string]$FilePath
     )
     if (-not (Test-Path -LiteralPath $FilePath)) {
-        Write-Host "Error: Profile file not found: $FilePath" -ForegroundColor Red
-        return $null
+        if ($NonInteractive) {
+            throw "Error: Profile file not found: $FilePath"
+        } else {
+            Write-Host "Error: Profile file not found: $FilePath" -ForegroundColor Red
+            return $null
+        }
     }
     try {
         $rawJson = [System.IO.File]::ReadAllText($FilePath, [System.Text.Encoding]::UTF8)
         $data = $rawJson | ConvertFrom-Json
+        if ($data.Version -and $data.Version -ne "2.0" -and $data.Version -ne $script:Nano11Version) {
+            Write-Warning "Profile version ($($data.Version)) differs from current ($script:Nano11Version)."
+        }
         $settings = if ($data.Settings) { $data.Settings } else { $data }
         return $settings
     } catch {
-        Write-Host "Failed to parse JSON profile: $_" -ForegroundColor Red
-        return $null
+        if ($NonInteractive) {
+            throw "Failed to parse JSON profile '$FilePath': $_"
+        } else {
+            Write-Host "Failed to parse JSON profile: $_" -ForegroundColor Red
+            return $null
+        }
     }
 }
 
@@ -1322,10 +1463,33 @@ if ($TestSelf) {
     if ($testResult) { exit 0 } else { exit 1 }
 }
 
-# Start Transcript
+# Start Transcript with log rotation (Keep latest 10 logs, fallback to TEMP)
 $scriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
-$transcriptPath = Join-Path -Path $scriptDir -ChildPath "nano11.log"
-Start-Transcript -Path $transcriptPath -Force
+$logDir = Join-Path -Path $scriptDir -ChildPath "logs"
+$timestampStr = (Get-Date -Format "yyyyMMdd_HHmmss")
+$transcriptPath = $null
+
+try {
+    if (-not (Test-Path -LiteralPath $logDir)) {
+        New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+    }
+    $transcriptPath = Join-Path -Path $logDir -ChildPath "nano11_$timestampStr.log"
+    Start-Transcript -Path $transcriptPath -Force
+    # Prune logs beyond latest 10
+    Get-ChildItem -Path $logDir -Filter "nano11_*.log" -File -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -Skip 10 |
+        Remove-Item -Force -ErrorAction SilentlyContinue
+} catch {
+    $fallbackLogDir = $env:TEMP
+    $transcriptPath = Join-Path -Path $fallbackLogDir -ChildPath "nano11_$timestampStr.log"
+    try {
+        Start-Transcript -Path $transcriptPath -Force
+    } catch {
+        Write-Warning "Could not initialize transcript logging: $_"
+    }
+}
+$buildStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 
 Write-Host "=========================================================" -ForegroundColor Cyan
 Write-Host "               Welcome to nano11 builder!                " -ForegroundColor Cyan
@@ -1335,7 +1499,7 @@ Write-Host "Suitable for testing, low-spec VMs, and rapid prototyping."
 Write-Host ""
 
 # Confirmation
-if (-not $NonInteractive -and -not $GUI) {
+if (-not $NonInteractive -and -not $GUI -and -not $isDryRunMode) {
     Write-Host "Do you want to continue? [Y/n] (Default: Y)" -ForegroundColor Yellow
     $confirm = Read-Host
     if ($confirm -and ($confirm.Trim().ToLower() -in @('no', 'n'))) {
@@ -1746,7 +1910,7 @@ if (& $isAnyBound @('UseVHDX', 'FastVHDX', 'VHDX')) {
 }
 
 # 3. Interactive Prompting Logic
-$isAutomated = $NonInteractive -or ($cliBound.Count -ge 15 -and (-not $Interactive)) -or ($cliBound.Contains('Profile') -and (-not $Interactive))
+$isAutomated = $NonInteractive -or $isDryRunMode -or ($cliBound.Count -ge 15 -and (-not $Interactive)) -or ($cliBound.Contains('Profile') -and (-not $Interactive))
 
 if ($isAutomated) {
     Write-Host "Running in automated/CLI mode (no interactive prompts)." -ForegroundColor Gray
@@ -2247,54 +2411,104 @@ Write-Host "  - Optimization Toolkit:    $bundleOptimizationToolkit"
 Write-Host "  - Remove Microsoft Store:  $removeStore"
 Write-Host "  - Payload Format:          $(if ($exportESDMode) { 'install.esd (LZMS)' } elseif ($splitWIMMode) { 'install.swm (Split-WIM / FAT32)' } else { 'install.wim (LZX - Recommended)' })"
 Write-Host ""
-if ($env:NANO11_TEST_MODE -eq "1") {
-    Stop-Transcript
+
+# Early verification of -SourceDrive
+if ($SourceDrive) {
+    if ($SourceDrive.EndsWith(".iso", [System.StringComparison]::OrdinalIgnoreCase)) {
+        if (-not (Test-Path -LiteralPath $SourceDrive)) {
+            throw "Specified Windows 11 ISO does not exist: $SourceDrive"
+        }
+    } else {
+        $candDrive = "$($SourceDrive.Trim().TrimEnd(':')):"
+        if (-not (Test-Path -LiteralPath "$candDrive\sources\install.wim")) {
+            throw "Specified SourceDrive is invalid: $SourceDrive (sources\install.wim not found)"
+        }
+    }
+}
+
+# Early check for NANO11_TEST_MODE or -DryRun / -WhatIf
+if (($env:NANO11_TEST_MODE -eq "1") -or $isDryRunMode) {
+    Write-Host ""
+    Write-Host "[INFO] DryRun / TestMode active: Configuration resolved successfully." -ForegroundColor Yellow
+    Write-Host "  - Profile: $(if ($selectedProfile) { $selectedProfile } else { 'Default' })" -ForegroundColor Yellow
+    Write-Host "  - Payload Format: $(if ($exportESDMode) { 'ESD' } elseif ($splitWIMMode) { 'SWM' } else { 'WIM' })" -ForegroundColor Yellow
+    Write-Host "  - Exiting without modifying images or workspace." -ForegroundColor Yellow
+    if ($transcriptPath) { Stop-Transcript }
     exit 0
 }
 
-# Determine Working Directory (Resolves Issue #27, #23 - Low disk space on C:, and non-NTFS volumes like exFAT)
-if ($WorkDir) {
-    if (-not (Test-Path -LiteralPath $WorkDir)) {
-        New-Item -ItemType Directory -Force -Path $WorkDir | Out-Null
-    }
-    $baseWorkDir = (Resolve-Path -LiteralPath $WorkDir).Path
-    if (-not (Test-IsNtfsVolume -Path $baseWorkDir)) {
-        Write-Host "Warning: Specified WorkDir '$baseWorkDir' is not on an NTFS volume. DISM requires NTFS for junction and reparse points." -ForegroundColor Yellow
-        $altDrive = Get-PSDrive -PSProvider FileSystem | Where-Object { $_.Free -gt 30GB -and (Test-IsNtfsVolume $_.Root) } | Sort-Object Free -Descending | Select-Object -First 1
-        if ($altDrive) {
-            $baseWorkDir = Join-Path -Path $altDrive.Root.TrimEnd('\') -ChildPath "nano11_workspace"
-            Write-Host "Redirecting workspace to NTFS drive: $baseWorkDir" -ForegroundColor Green
-            New-Item -ItemType Directory -Force -Path $baseWorkDir | Out-Null
+# ==============================================================================
+# Main Build Lifecycle (Guaranteed Resource Cleanup via try / finally)
+# ==============================================================================
+$script:MountOpened = $false
+$script:HivesLoaded = $false
+$script:MountedIso = $null
+$script:DefenderExclusionAdded = $false
+$script:IsVhdxMounted = $false
+
+try {
+    # Determine Working Directory (Resolves Issue #27, #23 - Low disk space on C:, and non-NTFS volumes like exFAT)
+    if ($WorkDir) {
+        if (-not (Test-Path -LiteralPath $WorkDir)) {
+            New-Item -ItemType Directory -Force -Path $WorkDir | Out-Null
         }
-    }
-} else {
-    $sysDrive = (Get-Item -LiteralPath $env:SystemDrive).PSDrive
-    if ($sysDrive -and ($sysDrive.Free -lt 30GB -or -not (Test-IsNtfsVolume $env:SystemDrive))) {
-        $altDrive = Get-PSDrive -PSProvider FileSystem | Where-Object { $_.Free -gt 30GB -and (Test-IsNtfsVolume $_.Root) } | Sort-Object Free -Descending | Select-Object -First 1
-        if ($altDrive) {
-            Write-Host "Using fast NTFS drive for working directory ($([math]::Round($altDrive.Free / 1GB, 1)) GB free): $($altDrive.Root)" -ForegroundColor Green
-            $baseWorkDir = Join-Path -Path $altDrive.Root.TrimEnd('\') -ChildPath "nano11_workspace"
+        $baseWorkDir = (Resolve-Path -LiteralPath $WorkDir).Path
+        if (-not (Test-IsNtfsVolume -Path $baseWorkDir)) {
+            Write-Host "Warning: Specified WorkDir '$baseWorkDir' is not on an NTFS volume. DISM requires NTFS for junction and reparse points." -ForegroundColor Yellow
+            $altDrive = Get-PSDrive -PSProvider FileSystem | Where-Object { $_.Free -gt 30GB -and (Test-IsNtfsVolume $_.Root) } | Sort-Object Free -Descending | Select-Object -First 1
+            if ($altDrive) {
+                $baseWorkDir = Join-Path -Path $altDrive.Root.TrimEnd('\') -ChildPath "nano11_workspace"
+                Write-Host "Redirecting workspace to NTFS drive: $baseWorkDir" -ForegroundColor Green
+                New-Item -ItemType Directory -Force -Path $baseWorkDir | Out-Null
+            }
+        }
+    } else {
+        $sysDrive = (Get-Item -LiteralPath $env:SystemDrive).PSDrive
+        if ($sysDrive -and ($sysDrive.Free -lt 30GB -or -not (Test-IsNtfsVolume $env:SystemDrive))) {
+            $altDrive = Get-PSDrive -PSProvider FileSystem | Where-Object { $_.Free -gt 30GB -and (Test-IsNtfsVolume $_.Root) } | Sort-Object Free -Descending | Select-Object -First 1
+            if ($altDrive) {
+                Write-Host "Using fast NTFS drive for working directory ($([math]::Round($altDrive.Free / 1GB, 1)) GB free): $($altDrive.Root)" -ForegroundColor Green
+                $baseWorkDir = Join-Path -Path $altDrive.Root.TrimEnd('\') -ChildPath "nano11_workspace"
+            } else {
+                $baseWorkDir = Join-Path -Path $env:SystemDrive -ChildPath "nano11_workspace"
+            }
         } else {
             $baseWorkDir = Join-Path -Path $env:SystemDrive -ChildPath "nano11_workspace"
         }
-    } else {
-        $baseWorkDir = Join-Path -Path $env:SystemDrive -ChildPath "nano11_workspace"
+        if (-not (Test-Path -LiteralPath $baseWorkDir)) {
+            New-Item -ItemType Directory -Force -Path $baseWorkDir | Out-Null
+        }
     }
-    if (-not (Test-Path -LiteralPath $baseWorkDir)) {
-        New-Item -ItemType Directory -Force -Path $baseWorkDir | Out-Null
+
+    # Verify available disk space on workspace volume (Minimum 25 GB required)
+    $workDriveLetter = [System.IO.Path]::GetPathRoot($baseWorkDir).TrimEnd('\')
+    if ($workDriveLetter -match '^[a-zA-Z]:') {
+        $psDriveObj = Get-PSDrive -Name $workDriveLetter.Substring(0, 1) -ErrorAction SilentlyContinue
+        if ($psDriveObj) {
+            $freeGB = [math]::Round($psDriveObj.Free / 1GB, 1)
+            if ($freeGB -lt 25.0) {
+                Write-Host "Warning: Low disk space on workspace drive $workDriveLetter ($freeGB GB free, 25 GB recommended)." -ForegroundColor Yellow
+                $altNtfs = Get-PSDrive -PSProvider FileSystem | Where-Object { $_.Free -gt 30GB -and (Test-IsNtfsVolume $_.Root) } | Sort-Object Free -Descending | Select-Object -First 1
+                if ($altNtfs) {
+                    $baseWorkDir = Join-Path -Path $altNtfs.Root.TrimEnd('\') -ChildPath "nano11_workspace"
+                    Write-Host "Redirected workspace to volume with sufficient space ($([math]::Round($altNtfs.Free / 1GB, 1)) GB free): $baseWorkDir" -ForegroundColor Green
+                    New-Item -ItemType Directory -Force -Path $baseWorkDir | Out-Null
+                }
+            }
+        }
     }
-}
 
-$nano11Dir = Join-Path -Path $baseWorkDir -ChildPath "build"
-$scratchDir = Join-Path -Path $baseWorkDir -ChildPath "scratchdir"
-$vhdxPath = Join-Path -Path $baseWorkDir -ChildPath "nano11_scratch.vhdx"
-$isVhdxMounted = $false
-Write-Host "Working Directory: $baseWorkDir" -ForegroundColor Cyan
+    $nano11Dir = Join-Path -Path $baseWorkDir -ChildPath "build"
+    $scratchDir = Join-Path -Path $baseWorkDir -ChildPath "scratchdir"
+    $vhdxPath = Join-Path -Path $baseWorkDir -ChildPath "nano11_scratch.vhdx"
+    $isVhdxMounted = $false
+    Write-Host "Working Directory: $baseWorkDir" -ForegroundColor Cyan
 
-# Temporarily exclude workspace from Windows Defender real-time scanning to accelerate DISM operations
-try {
-    Add-MpPreference -ExclusionPath $baseWorkDir -ErrorAction SilentlyContinue
-} catch {}
+    # Temporarily exclude workspace from Windows Defender real-time scanning to accelerate DISM operations
+    try {
+        Add-MpPreference -ExclusionPath $baseWorkDir -ErrorAction SilentlyContinue
+        $script:DefenderExclusionAdded = $true
+    } catch {}
 
 # Detach any leftover VHDX from previous runs
 if (Test-Path -LiteralPath $vhdxPath) {
@@ -2341,6 +2555,7 @@ assign mount="$scratchDir"
         Remove-Item -LiteralPath $dpAttachFile -Force -ErrorAction SilentlyContinue
         if (Test-Path -LiteralPath $vhdxPath) {
             $isVhdxMounted = $true
+            $script:IsVhdxMounted = $true
             Write-Host "VHDX scratch volume mounted to $scratchDir" -ForegroundColor Green
         } else {
             Write-Warning "VHDX initialization did not create $vhdxPath. Using standard physical directory."
@@ -2358,6 +2573,7 @@ if ($SourceDrive) {
         try {
             $diskImg = Mount-DiskImage -ImagePath $SourceDrive -PassThru -ErrorAction SilentlyContinue
             if ($diskImg) {
+                $script:MountedIso = $diskImg
                 $vol = $diskImg | Get-Volume -ErrorAction SilentlyContinue
                 if ($vol -and $vol.DriveLetter) {
                     $DriveLetter = "$($vol.DriveLetter):"
@@ -2396,6 +2612,7 @@ function Find-AndMountHealthyWindowsIso {
                 $diskImg = Mount-DiskImage -ImagePath $iso.FullName -PassThru -ErrorAction SilentlyContinue
             }
             if ($diskImg) {
+                $script:MountedIso = $diskImg
                 $vol = $diskImg | Get-Volume -ErrorAction SilentlyContinue
                 if ($vol -and $vol.DriveLetter) {
                     $dl = "$($vol.DriveLetter):"
@@ -2587,10 +2804,12 @@ foreach ($cbf in $criticalBootFiles) {
 }
 
 # Configure sources\ei.cfg for universal edition selection without forcing product key prompt
-$eiCfgPath = Join-Path -Path "$nano11Dir\sources" -ChildPath "ei.cfg"
-if (-not (Test-Path -LiteralPath $eiCfgPath)) {
-    "[Channel]`r`n_Default`r`n[VL]`r`n0`r`n" | Set-Content -LiteralPath $eiCfgPath -Encoding ascii -Force
-    Write-Host "Created sources\ei.cfg for universal edition selection." -ForegroundColor Green
+if (-not $SkipEiCfg) {
+    $eiCfgPath = Join-Path -Path "$nano11Dir\sources" -ChildPath "ei.cfg"
+    if (-not (Test-Path -LiteralPath $eiCfgPath)) {
+        "[Channel]`r`n_Default`r`n[VL]`r`n0`r`n" | Set-Content -LiteralPath $eiCfgPath -Encoding ascii -Force
+        Write-Host "Created sources\ei.cfg for universal edition selection." -ForegroundColor Green
+    }
 }
 
 # Note: On Windows 11 24H2/25H2 (Build 26100+), zeroing appraiserres.dll causes SetupPlatform
@@ -2608,14 +2827,26 @@ Write-Host "Getting Windows image information:" -ForegroundColor Cyan
 $wimInfoOutput = & dism.exe /English /Get-WimInfo "/WimFile:$destWim"
 $wimInfoOutput | ForEach-Object { Write-Host $_ }
 
-# Parse available indices from DISM output
-$availableIndices = @(($wimInfoOutput | Select-String -Pattern '^\s*Index\s*:\s*(\d+)' | ForEach-Object { $_.Matches[0].Groups[1].Value }))
-$defaultIndex = if ($availableIndices.Count -gt 0) { $availableIndices[0] } else { "1" }
+# Parse available indices and detect Pro edition
+$indexEntries = @()
+$currentIndex = $null
+foreach ($line in ($wimInfoOutput -split '\r?\n')) {
+    if ($line -match '^\s*Index\s*:\s*(\d+)') {
+        $currentIndex = [PSCustomObject]@{ Index = $matches[1]; Name = "" }
+        $indexEntries += $currentIndex
+    } elseif ($currentIndex -and ($line -match '^\s*Name\s*:\s*(.+)')) {
+        $currentIndex.Name = $matches[1].Trim()
+    }
+}
+$availableIndices = @($indexEntries | ForEach-Object { $_.Index })
+$proEntry = $indexEntries | Where-Object { $_.Name -match 'Pro' -and $_.Name -notmatch 'Workstation' } | Select-Object -First 1
+$defaultIndex = if ($proEntry) { $proEntry.Index } elseif ($availableIndices.Count -gt 0) { $availableIndices[0] } else { "1" }
 
 if ([string]::IsNullOrWhiteSpace($index) -or ($index -notin $availableIndices)) {
     if (-not $NonInteractive) {
         $promptRange = if ($availableIndices.Count -gt 1) { " ($($availableIndices -join ', '))" } else { "" }
-        $userInput = Read-Host "Please enter the image index to modify$promptRange [Default: $defaultIndex]"
+        $defaultLabel = if ($proEntry) { "$defaultIndex ($($proEntry.Name))" } else { $defaultIndex }
+        $userInput = Read-Host "Please enter the image index to modify$promptRange [Default: $defaultLabel]"
         if (-not [string]::IsNullOrWhiteSpace($userInput) -and ($userInput.Trim() -in $availableIndices)) {
             $index = $userInput.Trim()
         } else {
@@ -2641,6 +2872,7 @@ for ($attempt = 1; $attempt -le 2; $attempt++) {
     & dism.exe /English /Mount-Image "/ImageFile:$destWim" "/Index:$index" "/MountDir:$scratchDir"
     if ($LASTEXITCODE -eq 0) {
         $mountSuccess = $true
+        $script:MountOpened = $true
         break
     }
 
@@ -2752,12 +2984,11 @@ if ($removeStore) {
 # are protected system components in newer Windows 11 builds that trigger COMException (0x80073cfa) if removed via DISM.
 # Defender and other features are cleanly managed via services and registry instead.
 
+$appxRegexPatterns = $appxPatterns | Sort-Object -Unique | ForEach-Object { [regex]::Escape($_) -replace '\\\*', '.*' }
+$appxRegex = [regex]::new(('^(' + ($appxRegexPatterns -join '|') + ')$'), [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+
 $packagesToRemove = Get-AppxProvisionedPackage -Path $scratchDir -ErrorAction SilentlyContinue | Where-Object {
-    $pkg = $_
-    foreach ($pat in $appxPatterns) {
-        if ($pkg.PackageName -like $pat) { return $true }
-    }
-    return $false
+    ($_.PackageName -and $appxRegex.IsMatch($_.PackageName)) -or ($_.DisplayName -and $appxRegex.IsMatch($_.DisplayName))
 }
 foreach ($package in $packagesToRemove) {
     Write-Host "  - Removing: $($package.DisplayName)"
@@ -3087,6 +3318,11 @@ if ($keepRecoveryEnv) {
     # Windows Setup (setup.exe) mandatory Pre-Finalize phase stages SafeOS from winre.wim.
     # If winre.wim is removed offline or is 0 bytes, Setup aborts with "Windows 11 installation has failed" (0x80070002 / 0x8007000B).
     # Instead, we keep winre.wim for Setup to succeed, and FirstLogon.ps1 unregisters (reagentc /disable) and deletes it online post-install.
+    $winreFlagDir = Join-Path -Path $scratchDir -ChildPath "Windows\Setup\Scripts"
+    if (-not (Test-Path -LiteralPath $winreFlagDir)) {
+        New-Item -ItemType Directory -Force -Path $winreFlagDir -ErrorAction SilentlyContinue | Out-Null
+    }
+    Set-Content -LiteralPath (Join-Path -Path $winreFlagDir -ChildPath "winre-cleanup.flag") -Value "remove" -Encoding ascii -Force
     if (Test-Path -LiteralPath $keepMarkerFile) {
         Remove-Item -LiteralPath $keepMarkerFile -Force -ErrorAction SilentlyContinue
     }
@@ -3102,6 +3338,8 @@ if ($keepRecoveryEnv) {
             Remove-Item -LiteralPath $targetWinre -Force -ErrorAction SilentlyContinue
             Rename-Item -LiteralPath $tempCompactWinre -NewName "winre.wim" -Force
             Write-Host "  - WinRE successfully compressed and optimized." -ForegroundColor Green
+        } else {
+            Remove-Item -LiteralPath $tempCompactWinre -Force -ErrorAction SilentlyContinue
         }
     }
 }
@@ -3236,6 +3474,7 @@ reg.exe load HKLM\zSOFTWARE "$softwareHive" | Out-Null
 reg.exe load HKLM\zDEFAULT "$defaultHive" | Out-Null
 reg.exe load HKLM\zCOMPONENTS "$componentsHive" | Out-Null
 reg.exe load HKLM\zNTUSER "$ntuserHive" | Out-Null
+$script:HivesLoaded = $true
 
 # Detect and display target Windows build info (e.g. Windows 11 26H2 Build 26300.9457)
 try {
@@ -4621,18 +4860,22 @@ start "" "%~dp0Install-Browser.cmd"
 goto MENU
 '@
 
-$browserPs1Content | Set-Content -LiteralPath (Join-Path -Path $pubDesktop -ChildPath "Install-Browser.ps1") -Encoding utf8
-$browserCmdContent | Set-Content -LiteralPath (Join-Path -Path $pubDesktop -ChildPath "Install-Browser.cmd") -Encoding ascii
-$controlCenterContent | Set-Content -LiteralPath (Join-Path -Path $pubDesktop -ChildPath "Nano11 Control Center.bat") -Encoding ascii
-Copy-Item -LiteralPath (Join-Path -Path $pubDesktop -ChildPath "Install-Browser.cmd") -Destination (Join-Path -Path $pubDesktop -ChildPath "🌐 Install Browser.cmd") -Force -ErrorAction SilentlyContinue
-Copy-Item -LiteralPath (Join-Path -Path $pubDesktop -ChildPath "Nano11 Control Center.bat") -Destination (Join-Path -Path $pubDesktop -ChildPath "⚡ nano11 Control Center.cmd") -Force -ErrorAction SilentlyContinue
+if (-not $NoPostInstallAssets) {
+    $browserPs1Content | Set-Content -LiteralPath (Join-Path -Path $pubDesktop -ChildPath "Install-Browser.ps1") -Encoding utf8
+    $browserCmdContent | Set-Content -LiteralPath (Join-Path -Path $pubDesktop -ChildPath "Install-Browser.cmd") -Encoding ascii
+    $controlCenterContent | Set-Content -LiteralPath (Join-Path -Path $pubDesktop -ChildPath "Nano11 Control Center.bat") -Encoding ascii
+    Copy-Item -LiteralPath (Join-Path -Path $pubDesktop -ChildPath "Install-Browser.cmd") -Destination (Join-Path -Path $pubDesktop -ChildPath "🌐 Install Browser.cmd") -Force -ErrorAction SilentlyContinue
+    Copy-Item -LiteralPath (Join-Path -Path $pubDesktop -ChildPath "Nano11 Control Center.bat") -Destination (Join-Path -Path $pubDesktop -ChildPath "⚡ nano11 Control Center.cmd") -Force -ErrorAction SilentlyContinue
 
-$browserPs1Content | Set-Content -LiteralPath (Join-Path -Path $setupTools -ChildPath "Install-Browser.ps1") -Encoding utf8
-$browserCmdContent | Set-Content -LiteralPath (Join-Path -Path $setupTools -ChildPath "Install-Browser.cmd") -Encoding ascii
-$controlCenterContent | Set-Content -LiteralPath (Join-Path -Path $setupTools -ChildPath "Nano11 Control Center.bat") -Encoding ascii
-Copy-Item -LiteralPath (Join-Path -Path $setupTools -ChildPath "Install-Browser.cmd") -Destination (Join-Path -Path $setupTools -ChildPath "🌐 Install Browser.cmd") -Force -ErrorAction SilentlyContinue
-Copy-Item -LiteralPath (Join-Path -Path $setupTools -ChildPath "Nano11 Control Center.bat") -Destination (Join-Path -Path $setupTools -ChildPath "⚡ nano11 Control Center.cmd") -Force -ErrorAction SilentlyContinue
-Write-Host "  - Deployed Browser Grabber and Nano11 Control Center to Desktop & Setup Tools" -ForegroundColor Green
+    $browserPs1Content | Set-Content -LiteralPath (Join-Path -Path $setupTools -ChildPath "Install-Browser.ps1") -Encoding utf8
+    $browserCmdContent | Set-Content -LiteralPath (Join-Path -Path $setupTools -ChildPath "Install-Browser.cmd") -Encoding ascii
+    $controlCenterContent | Set-Content -LiteralPath (Join-Path -Path $setupTools -ChildPath "Nano11 Control Center.bat") -Encoding ascii
+    Copy-Item -LiteralPath (Join-Path -Path $setupTools -ChildPath "Install-Browser.cmd") -Destination (Join-Path -Path $setupTools -ChildPath "🌐 Install Browser.cmd") -Force -ErrorAction SilentlyContinue
+    Copy-Item -LiteralPath (Join-Path -Path $setupTools -ChildPath "Nano11 Control Center.bat") -Destination (Join-Path -Path $setupTools -ChildPath "⚡ nano11 Control Center.cmd") -Force -ErrorAction SilentlyContinue
+    Write-Host "  - Deployed Browser Grabber and Nano11 Control Center to Desktop & Setup Tools" -ForegroundColor Green
+} else {
+    Write-Host "  - Skipping deployment of post-install assets (-NoPostInstallAssets specified)." -ForegroundColor Yellow
+}
 
 # Ensure CurrentControlSet does NOT exist in offline SYSTEM hive
 # Creating CurrentControlSet as a real key in an offline hive causes Bug Check 0x67 (CONFIG_INITIALIZATION_FAILED)
@@ -4647,6 +4890,7 @@ Write-Host "Unmounting offline registry hives..." -ForegroundColor Cyan
 @('zCOMPONENTS', 'zDEFAULT', 'zNTUSER', 'zSOFTWARE', 'zSYSTEM') | ForEach-Object {
     [void](Unmount-RegistryHiveWithRetry -Name $_)
 }
+$script:HivesLoaded = $false
 
 # 12. Unmount and export install image
 Write-Host "Unmounting install image and committing changes..." -ForegroundColor Green
@@ -4661,6 +4905,7 @@ for ($retry = 1; $retry -le 4; $retry++) {
     & dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /commit
     if ($LASTEXITCODE -eq 0) {
         $unmountSuccess = $true
+        $script:MountOpened = $false
         break
     }
 
@@ -4676,8 +4921,12 @@ if (-not $unmountSuccess) {
     & dism.exe /English /Remount-Image "/MountDir:$scratchDir" > $null 2>&1
     & dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /commit
     if ($LASTEXITCODE -ne 0) {
-        Write-Host "Critical: Unable to commit changes. Falling back to discard unmount to prevent corrupted image..." -ForegroundColor Red
-        & dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /discard
+        Write-Host "Critical: Unable to commit changes. Discarding mount to prevent corrupted image..." -ForegroundColor Red
+        & dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /discard > $null 2>&1
+        $script:MountOpened = $false
+        throw "Failed to commit modifications to install image. Build aborted to prevent producing a corrupted ISO."
+    } else {
+        $script:MountOpened = $false
     }
 }
 
@@ -5092,41 +5341,138 @@ if ($oscdimgExe -and (Test-Path -LiteralPath $oscdimgExe)) {
     Write-Host "oscdimg.exe not found. You can manually package the ISO from: $nano11Dir" -ForegroundColor Yellow
 }
 
-# 19. Cleanup scratch and temporary files
-if (-not $NonInteractive) {
-    Read-Host "Press Enter to clean up working directories and exit."
+if ($Validate) {
+    $validateWim = Join-Path -Path "$nano11Dir\sources" -ChildPath "install.wim"
+    if (Test-Path -LiteralPath $validateWim) {
+        Write-Host "Running post-export image validation (-Validate)..." -ForegroundColor Cyan
+        $verifyMount = Join-Path -Path $baseWorkDir -ChildPath "verify_mount"
+        New-Item -ItemType Directory -Force -Path $verifyMount | Out-Null
+        try {
+            & dism.exe /English /Get-WimInfo "/WimFile:$validateWim" | Out-File (Join-Path -Path $baseWorkDir -ChildPath "verify-wiminfo.txt") -Encoding utf8
+            & dism.exe /English /Mount-Image "/ImageFile:$validateWim" /Index:1 "/MountDir:$verifyMount" /ReadOnly
+            $keyFiles = @(
+                'Windows\System32\osk.exe',
+                'Windows\System32\ctfmon.exe',
+                'Windows\System32\Sysprep\sysprep.exe',
+                'Windows\System32\cmd.exe'
+            )
+            $valLog = @()
+            foreach ($kf in $keyFiles) {
+                $exists = Test-Path -LiteralPath (Join-Path -Path $verifyMount -ChildPath $kf)
+                $status = "{0} : {1}" -f $kf, $exists
+                $valLog += $status
+                Write-Host "  - Verification: $status" -ForegroundColor (if ($exists) { 'Green' } else { 'Yellow' })
+            }
+            $valLog | Out-File (Join-Path -Path $baseWorkDir -ChildPath "verify-paths.txt") -Encoding utf8
+        } finally {
+            & dism.exe /English /Unmount-Image "/MountDir:$verifyMount" /discard > $null 2>&1
+            Reset-DirectoryWithRobocopy -Path $verifyMount
+            Remove-Item -LiteralPath $verifyMount -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
 }
-& dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /discard > $null 2>&1
-if ($isoCreatedSuccessfully) {
-    Reset-DirectoryWithRobocopy -Path $nano11Dir
-    Remove-Item -LiteralPath $nano11Dir -Recurse -Force -ErrorAction SilentlyContinue
-} else {
-    Write-Host "Preserving $nano11Dir because ISO creation was not completed." -ForegroundColor Yellow
-}
-Reset-DirectoryWithRobocopy -Path $scratchDir
-Remove-Item -LiteralPath $scratchDir -Recurse -Force -ErrorAction SilentlyContinue
+} catch {
+    Write-Host ""
+    Write-Host "Build failed with unhandled exception: $_" -ForegroundColor Red
+    throw
+} finally {
+    Write-Host ""
+    Write-Host "Running cleanup and finalizing build lifecycle..." -ForegroundColor Cyan
 
-# Detach and remove VHDX scratch disk if initialized
-if ($isVhdxMounted -and (Test-Path -LiteralPath $vhdxPath)) {
-    try {
-        Write-Host "Detaching VHDX scratch disk..." -ForegroundColor Cyan
-        $dpDetachScript = "select vdisk file=`"$vhdxPath`"`r`ndetach vdisk`r`n"
-        $dpDetachFile = Join-Path -Path $env:TEMP -ChildPath "nano11_dp_detach_$([System.IO.Path]::GetRandomFileName()).txt"
-        $dpDetachScript | Set-Content -LiteralPath $dpDetachFile -Encoding ascii
-        & diskpart.exe /s $dpDetachFile > $null 2>&1
-        Remove-Item -LiteralPath $dpDetachFile -Force -ErrorAction SilentlyContinue
-        Remove-Item -LiteralPath $vhdxPath -Force -ErrorAction SilentlyContinue
-    } catch {}
-}
+    # 1. Unload lingering offline registry hives
+    if ($script:HivesLoaded) {
+        Write-Host "Cleaning up lingering registry hives..." -ForegroundColor Yellow
+        @('zCOMPONENTS', 'zDEFAULT', 'zNTUSER', 'zSOFTWARE', 'zSYSTEM') | ForEach-Object {
+            try { [void](Unmount-RegistryHiveWithRetry -Name $_) } catch {}
+        }
+        $script:HivesLoaded = $false
+    }
 
-# Remove Windows Defender temporary workspace exclusion
-try {
-    Remove-MpPreference -ExclusionPath $baseWorkDir -ErrorAction SilentlyContinue
-} catch {}
+    # 2. Discard lingering DISM mount
+    if ($script:MountOpened -and $scratchDir -and (Test-Path -LiteralPath $scratchDir)) {
+        Write-Host "Discarding lingering DISM mount on $scratchDir..." -ForegroundColor Yellow
+        & dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /discard > $null 2>&1
+        $script:MountOpened = $false
+    }
 
-Stop-Transcript
-if ($isoCreatedSuccessfully) {
-    Write-Host "Done! nano11.iso is ready." -ForegroundColor Green
-} else {
-    Write-Host "Process ended with errors. Please check the logs in $transcriptPath" -ForegroundColor Red
+    # 3. Clean working directories
+    if (-not $NonInteractive -and -not $isoCreatedSuccessfully -and -not $DryRun) {
+        try { Read-Host "Press Enter to finalize cleanup." } catch {}
+    }
+
+    if ($isoCreatedSuccessfully) {
+        if ($nano11Dir -and (Test-Path -LiteralPath $nano11Dir)) {
+            Reset-DirectoryWithRobocopy -Path $nano11Dir
+            Remove-Item -LiteralPath $nano11Dir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    } else {
+        if ($nano11Dir -and (Test-Path -LiteralPath $nano11Dir)) {
+            Write-Host "Preserving $nano11Dir for inspection." -ForegroundColor Yellow
+        }
+    }
+
+    if ($scratchDir -and (Test-Path -LiteralPath $scratchDir)) {
+        Reset-DirectoryWithRobocopy -Path $scratchDir
+        Remove-Item -LiteralPath $scratchDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    # 4. Detach and remove VHDX scratch disk if initialized
+    if ($script:IsVhdxMounted -or ($vhdxPath -and (Test-Path -LiteralPath $vhdxPath))) {
+        try {
+            Write-Host "Detaching VHDX scratch disk..." -ForegroundColor Cyan
+            $dpDetachScript = "select vdisk file=`"$vhdxPath`"`r`ndetach vdisk`r`n"
+            $dpDetachFile = Join-Path -Path $env:TEMP -ChildPath "nano11_dp_detach_$([System.IO.Path]::GetRandomFileName()).txt"
+            $dpDetachScript | Set-Content -LiteralPath $dpDetachFile -Encoding ascii
+            & diskpart.exe /s $dpDetachFile > $null 2>&1
+            Remove-Item -LiteralPath $dpDetachFile -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $vhdxPath -Force -ErrorAction SilentlyContinue
+            $script:IsVhdxMounted = $false
+        } catch {}
+    }
+
+    # 5. Dismount source ISO if mounted by nano11
+    if ($script:MountedIso) {
+        Write-Host "Dismounting source Windows 11 ISO..." -ForegroundColor Cyan
+        try {
+            Dismount-DiskImage -ImagePath $script:MountedIso.ImagePath -ErrorAction SilentlyContinue > $null
+            $script:MountedIso = $null
+        } catch {}
+    }
+
+    # 6. Remove Windows Defender temporary workspace exclusion
+    if ($script:DefenderExclusionAdded -and $baseWorkDir) {
+        try {
+            Remove-MpPreference -ExclusionPath $baseWorkDir -ErrorAction SilentlyContinue
+            $script:DefenderExclusionAdded = $false
+        } catch {}
+    }
+
+    # 7. Build elapsed time and policy stats
+    if ($script:buildStopwatch) {
+        $script:buildStopwatch.Stop()
+        $elapsedSec = [math]::Round($script:buildStopwatch.Elapsed.TotalSeconds, 1)
+        Write-Host "Build lifecycle completed in $elapsedSec seconds." -ForegroundColor Cyan
+    }
+    if ($script:AppliedPolicies) {
+        Write-Host "Offline registry policies applied: $($script:AppliedPolicies.Count)" -ForegroundColor Cyan
+    }
+
+    if ($transcriptPath) {
+        Stop-Transcript
+    }
+
+    # 8. Release global mutex guard
+    if ($script:BuildMutex) {
+        try {
+            $script:BuildMutex.ReleaseMutex()
+            $script:BuildMutex.Dispose()
+            $script:BuildMutex = $null
+        } catch {}
+    }
+
+    if ($isoCreatedSuccessfully) {
+        Write-Host "Done! nano11.iso is ready." -ForegroundColor Green
+    } else {
+        Write-Host "Process ended $(if ($LASTEXITCODE -ne 0) { 'with errors' } else { 'cleanly' }). Please check the logs in $transcriptPath" -ForegroundColor $(if ($LASTEXITCODE -ne 0) { 'Red' } else { 'Yellow' })
+    }
 }
