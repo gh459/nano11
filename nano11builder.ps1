@@ -23,6 +23,14 @@ param(
     [alias("Unattended", "Silent", "Batch")]
     [switch]$NonInteractive,
     [switch]$Interactive,
+    [alias("UI")]
+    [switch]$GUI,
+    [alias("Preset")]
+    [string]$Profile,
+    [alias("ExportConfig")]
+    [string]$SaveProfile,
+    [alias("ImportConfig", "Config")]
+    [string]$LoadProfile,
     [string]$SourceDrive,
     [string]$WorkDir,
     [string]$Index,
@@ -98,6 +106,9 @@ param(
     [switch]$ExportESD,
     [alias("NoESD")]
     [switch]$ExportWIM,
+    [alias("FAT32Compatible", "FAT32")]
+    [switch]$SplitWIM,
+    [switch]$NoSplitWIM,
     
     # 15. Microsoft Store
     [switch]$KeepStore,
@@ -373,6 +384,589 @@ function Reset-DirectoryWithRobocopy {
     New-Item -ItemType Directory -Force -Path $Path | Out-Null
 }
 
+# Helper function: Export configuration settings to a JSON profile
+function Export-Nano11Profile {
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$FilePath,
+        [hashtable]$Config
+    )
+    $parentDir = Split-Path -Parent $FilePath
+    if ($parentDir -and (-not (Test-Path -LiteralPath $parentDir))) {
+        New-Item -ItemType Directory -Force -Path $parentDir | Out-Null
+    }
+    $profileData = [ordered]@{
+        ProfileName = if ($Config.ProfileName) { $Config.ProfileName } else { "nano11 Configuration Profile" }
+        Version     = "2.0"
+        Timestamp   = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+        Settings    = [ordered]@{
+            RemoveDefender             = [bool]$Config.RemoveDefender
+            KeepAsianIME               = [bool]$Config.KeepAsianIME
+            KeepExtraFonts             = [bool]$Config.KeepExtraFonts
+            RemoveDrivers              = [bool]$Config.RemoveDrivers
+            DisableWindowsUpdate       = [bool]$Config.DisableWindowsUpdate
+            KeepBluetooth              = [bool]$Config.KeepBluetooth
+            WSLSupport                 = [bool]$Config.WSLSupport
+            KeepRecoveryEnv            = [bool]$Config.KeepRecoveryEnv
+            SafeDebloatMode            = [bool]$Config.SafeDebloatMode
+            UltraSlimMode              = [bool]$Config.UltraSlimMode
+            SetJapaneseKeyboard        = [bool]$Config.SetJapaneseKeyboard
+            AtlasReviOSMode            = [bool]$Config.AtlasReviOSMode
+            BundleOptimizationToolkit  = [bool]$Config.BundleOptimizationToolkit
+            RemoveStore                = [bool]$Config.RemoveStore
+            PayloadFormat              = if ($Config.PayloadFormat) { $Config.PayloadFormat } else { "WIM" }
+        }
+    }
+    $json = $profileData | ConvertTo-Json -Depth 5
+    [System.IO.File]::WriteAllText($FilePath, $json, [System.Text.Encoding]::UTF8)
+    Write-Host "Profile saved to: $FilePath" -ForegroundColor Green
+}
+
+# Helper function: Import configuration settings from a JSON profile
+function Import-Nano11Profile {
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$FilePath
+    )
+    if (-not (Test-Path -LiteralPath $FilePath)) {
+        Write-Host "Error: Profile file not found: $FilePath" -ForegroundColor Red
+        return $null
+    }
+    try {
+        $rawJson = [System.IO.File]::ReadAllText($FilePath, [System.Text.Encoding]::UTF8)
+        $data = $rawJson | ConvertFrom-Json
+        $settings = if ($data.Settings) { $data.Settings } else { $data }
+        return $settings
+    } catch {
+        Write-Host "Failed to parse JSON profile: $_" -ForegroundColor Red
+        return $null
+    }
+}
+
+# Helper function: Display Graphical User Interface (GUI) for nano11 builder
+function Show-Nano11GUI {
+    param(
+        [hashtable]$InitialSettings = @{}
+    )
+
+    Add-Type -AssemblyName System.Windows.Forms
+    Add-Type -AssemblyName System.Drawing
+    [System.Windows.Forms.Application]::EnableVisualStyles()
+
+    $form = New-Object System.Windows.Forms.Form
+    $form.Text = "nano11 Builder - Next-Gen Windows 11 Customizer & Debloater"
+    $form.Size = New-Object System.Drawing.Size(720, 830)
+    $form.MinimumSize = New-Object System.Drawing.Size(720, 830)
+    $form.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterScreen
+    $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
+    $form.MaximizeBox = $false
+    $form.BackColor = [System.Drawing.Color]::FromArgb(26, 28, 34)
+    $form.ForeColor = [System.Drawing.Color]::FromArgb(235, 238, 245)
+    $form.Font = New-Object System.Drawing.Font("Segoe UI", 9)
+
+    # Header Panel
+    $headerPanel = New-Object System.Windows.Forms.Panel
+    $headerPanel.Dock = [System.Windows.Forms.DockStyle]::Top
+    $headerPanel.Height = 65
+    $headerPanel.BackColor = [System.Drawing.Color]::FromArgb(18, 20, 24)
+    $form.Controls.Add($headerPanel)
+
+    $titleLabel = New-Object System.Windows.Forms.Label
+    $titleLabel.Text = "⚡ nano11 Builder v2.0"
+    $titleLabel.Font = New-Object System.Drawing.Font("Segoe UI", 14, [System.Drawing.FontStyle]::Bold)
+    $titleLabel.ForeColor = [System.Drawing.Color]::FromArgb(0, 190, 255)
+    $titleLabel.Location = New-Object System.Drawing.Point(16, 10)
+    $titleLabel.AutoSize = $true
+    $headerPanel.Controls.Add($titleLabel)
+
+    $subTitleLabel = New-Object System.Windows.Forms.Label
+    $subTitleLabel.Text = "Automated, Ultra-Slim, Gaming & Multi-Language Windows 11 Image Creator"
+    $subTitleLabel.Font = New-Object System.Drawing.Font("Segoe UI", 8.5)
+    $subTitleLabel.ForeColor = [System.Drawing.Color]::FromArgb(160, 165, 175)
+    $subTitleLabel.Location = New-Object System.Drawing.Point(18, 38)
+    $subTitleLabel.AutoSize = $true
+    $headerPanel.Controls.Add($subTitleLabel)
+
+    # Main Scrollable Panel
+    $mainPanel = New-Object System.Windows.Forms.Panel
+    $mainPanel.Dock = [System.Windows.Forms.DockStyle]::Fill
+    $mainPanel.AutoScroll = $true
+    $mainPanel.Padding = New-Object System.Windows.Forms.Padding(15)
+    $form.Controls.Add($mainPanel)
+
+    # 1. Media & Path Settings GroupBox
+    $grpMedia = New-Object System.Windows.Forms.GroupBox
+    $grpMedia.Text = " 1. Windows 11 Media & Workspace "
+    $grpMedia.Location = New-Object System.Drawing.Point(15, 10)
+    $grpMedia.Size = New-Object System.Drawing.Size(670, 115)
+    $grpMedia.ForeColor = [System.Drawing.Color]::FromArgb(0, 190, 255)
+    $mainPanel.Controls.Add($grpMedia)
+
+    $lblSource = New-Object System.Windows.Forms.Label
+    $lblSource.Text = "Source Drive / ISO:"
+    $lblSource.Location = New-Object System.Drawing.Point(15, 28)
+    $lblSource.Size = New-Object System.Drawing.Size(120, 20)
+    $lblSource.ForeColor = [System.Drawing.Color]::FromArgb(235, 238, 245)
+    $grpMedia.Controls.Add($lblSource)
+
+    $cmbSource = New-Object System.Windows.Forms.ComboBox
+    $cmbSource.Location = New-Object System.Drawing.Point(140, 25)
+    $cmbSource.Size = New-Object System.Drawing.Size(390, 24)
+    $cmbSource.BackColor = [System.Drawing.Color]::FromArgb(35, 38, 46)
+    $cmbSource.ForeColor = [System.Drawing.Color]::White
+    $cmbSource.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDown
+    $grpMedia.Controls.Add($cmbSource)
+
+    # Populate cmbSource with detected drives
+    $drivesWithWim = @()
+    foreach ($psd in (Get-PSDrive -PSProvider FileSystem -ErrorAction SilentlyContinue)) {
+        if (-not $psd.Root) { continue }
+        $r = $psd.Root.TrimEnd('\')
+        $wim = Join-Path -Path "$r\sources" -ChildPath "install.wim"
+        if ((Test-Path -LiteralPath $wim) -and ((Get-Item -LiteralPath $wim).Length -gt 1GB)) {
+            $drivesWithWim += "$r (Windows Installation Media)"
+        }
+    }
+    if ($drivesWithWim.Count -gt 0) {
+        $cmbSource.Items.AddRange($drivesWithWim)
+        $cmbSource.SelectedIndex = 0
+    }
+    # Auto-detect ISOs
+    $candIsos = @()
+    foreach ($p in @("E:\", "D:\", (Split-Path -Parent $PSScriptRoot), $env:USERPROFILE)) {
+        if (Test-Path -LiteralPath $p) {
+            $candIsos += Get-ChildItem -Path $p -Filter "*.iso" -File -ErrorAction SilentlyContinue |
+                Where-Object { $_.Length -gt 4GB -and ($_.Name -like "*Win11*" -or $_.Name -like "*Windows11*" -or $_.Name -like "*26300*") -and $_.Name -notlike "*nano11*" }
+        }
+    }
+    foreach ($iso in $candIsos) {
+        $cmbSource.Items.Add($iso.FullName)
+    }
+    if ($InitialSettings.SourceDrive) {
+        $cmbSource.Text = $InitialSettings.SourceDrive
+    } elseif ($cmbSource.Items.Count -eq 0) {
+        $cmbSource.Text = "E:\"
+    }
+
+    $btnBrowseIso = New-Object System.Windows.Forms.Button
+    $btnBrowseIso.Text = "Browse ISO..."
+    $btnBrowseIso.Location = New-Object System.Drawing.Point(540, 24)
+    $btnBrowseIso.Size = New-Object System.Drawing.Size(115, 26)
+    $btnBrowseIso.BackColor = [System.Drawing.Color]::FromArgb(45, 50, 60)
+    $btnBrowseIso.ForeColor = [System.Drawing.Color]::White
+    $btnBrowseIso.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $btnBrowseIso.Add_Click({
+        $ofd = New-Object System.Windows.Forms.OpenFileDialog
+        $ofd.Filter = "Windows 11 ISO (*.iso)|*.iso|All Files (*.*)|*.*"
+        $ofd.Title = "Select Official Windows 11 ISO Image"
+        if ($ofd.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+            $cmbSource.Text = $ofd.FileName
+        }
+    })
+    $grpMedia.Controls.Add($btnBrowseIso)
+
+    $lblWork = New-Object System.Windows.Forms.Label
+    $lblWork.Text = "Working Directory:"
+    $lblWork.Location = New-Object System.Drawing.Point(15, 68)
+    $lblWork.Size = New-Object System.Drawing.Size(120, 20)
+    $lblWork.ForeColor = [System.Drawing.Color]::FromArgb(235, 238, 245)
+    $grpMedia.Controls.Add($lblWork)
+
+    $txtWork = New-Object System.Windows.Forms.TextBox
+    $txtWork.Location = New-Object System.Drawing.Point(140, 65)
+    $txtWork.Size = New-Object System.Drawing.Size(390, 24)
+    $txtWork.BackColor = [System.Drawing.Color]::FromArgb(35, 38, 46)
+    $txtWork.ForeColor = [System.Drawing.Color]::White
+    if ($InitialSettings.WorkDir) {
+        $txtWork.Text = $InitialSettings.WorkDir
+    } else {
+        $altDrive = Get-PSDrive -PSProvider FileSystem | Where-Object { $_.Free -gt 30GB -and (Test-IsNtfsVolume $_.Root) } | Sort-Object Free -Descending | Select-Object -First 1
+        $txtWork.Text = if ($altDrive) { Join-Path $altDrive.Root.TrimEnd('\') "nano11_workspace" } else { "$env:SystemDrive\nano11_workspace" }
+    }
+    $grpMedia.Controls.Add($txtWork)
+
+    $btnBrowseWork = New-Object System.Windows.Forms.Button
+    $btnBrowseWork.Text = "Browse Dir..."
+    $btnBrowseWork.Location = New-Object System.Drawing.Point(540, 64)
+    $btnBrowseWork.Size = New-Object System.Drawing.Size(115, 26)
+    $btnBrowseWork.BackColor = [System.Drawing.Color]::FromArgb(45, 50, 60)
+    $btnBrowseWork.ForeColor = [System.Drawing.Color]::White
+    $btnBrowseWork.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $btnBrowseWork.Add_Click({
+        $fbd = New-Object System.Windows.Forms.FolderBrowserDialog
+        $fbd.Description = "Select NTFS Working Directory with at least 25GB free space"
+        if ($fbd.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+            $txtWork.Text = $fbd.SelectedPath
+        }
+    })
+    $grpMedia.Controls.Add($btnBrowseWork)
+
+    # 2. Configuration Profiles GroupBox
+    $grpProfile = New-Object System.Windows.Forms.GroupBox
+    $grpProfile.Text = " 2. Configuration Profile & Presets "
+    $grpProfile.Location = New-Object System.Drawing.Point(15, 135)
+    $grpProfile.Size = New-Object System.Drawing.Size(670, 75)
+    $grpProfile.ForeColor = [System.Drawing.Color]::FromArgb(0, 190, 255)
+    $mainPanel.Controls.Add($grpProfile)
+
+    $lblPreset = New-Object System.Windows.Forms.Label
+    $lblPreset.Text = "Preset:"
+    $lblPreset.Location = New-Object System.Drawing.Point(15, 28)
+    $lblPreset.Size = New-Object System.Drawing.Size(60, 20)
+    $lblPreset.ForeColor = [System.Drawing.Color]::FromArgb(235, 238, 245)
+    $grpProfile.Controls.Add($lblPreset)
+
+    $cmbPreset = New-Object System.Windows.Forms.ComboBox
+    $cmbPreset.Location = New-Object System.Drawing.Point(80, 25)
+    $cmbPreset.Size = New-Object System.Drawing.Size(310, 24)
+    $cmbPreset.BackColor = [System.Drawing.Color]::FromArgb(35, 38, 46)
+    $cmbPreset.ForeColor = [System.Drawing.Color]::White
+    $cmbPreset.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
+    $cmbPreset.Items.AddRange(@(
+        "⚡ Extreme Slim & Gaming (Max Debloat, Latency Tuning)",
+        "🛡️ Balanced Pro (Safe: Windows Update & Defender Kept)",
+        "💾 FAT32 USB Split-WIM (3.8GB SWM Chunks for UEFI)",
+        "🔧 Custom Configuration"
+    ))
+    $cmbPreset.SelectedIndex = 0
+    $grpProfile.Controls.Add($cmbPreset)
+
+    $btnLoadProfile = New-Object System.Windows.Forms.Button
+    $btnLoadProfile.Text = "📂 Load JSON..."
+    $btnLoadProfile.Location = New-Object System.Drawing.Point(405, 24)
+    $btnLoadProfile.Size = New-Object System.Drawing.Size(120, 26)
+    $btnLoadProfile.BackColor = [System.Drawing.Color]::FromArgb(45, 50, 60)
+    $btnLoadProfile.ForeColor = [System.Drawing.Color]::White
+    $btnLoadProfile.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $grpProfile.Controls.Add($btnLoadProfile)
+
+    $btnSaveProfile = New-Object System.Windows.Forms.Button
+    $btnSaveProfile.Text = "💾 Save JSON..."
+    $btnSaveProfile.Location = New-Object System.Drawing.Point(535, 24)
+    $btnSaveProfile.Size = New-Object System.Drawing.Size(120, 26)
+    $btnSaveProfile.BackColor = [System.Drawing.Color]::FromArgb(45, 50, 60)
+    $btnSaveProfile.ForeColor = [System.Drawing.Color]::White
+    $btnSaveProfile.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $grpProfile.Controls.Add($btnSaveProfile)
+
+    # 3. Customization & Debloat Options GroupBox
+    $grpOpts = New-Object System.Windows.Forms.GroupBox
+    $grpOpts.Text = " 3. Debloat & Customization Options "
+    $grpOpts.Location = New-Object System.Drawing.Point(15, 220)
+    $grpOpts.Size = New-Object System.Drawing.Size(670, 275)
+    $grpOpts.ForeColor = [System.Drawing.Color]::FromArgb(0, 190, 255)
+    $mainPanel.Controls.Add($grpOpts)
+
+    $createChk = {
+        param($text, $x, $y, $checked)
+        $chk = New-Object System.Windows.Forms.CheckBox
+        $chk.Text = $text
+        $chk.Location = New-Object System.Drawing.Point($x, $y)
+        $chk.Size = New-Object System.Drawing.Size(315, 28)
+        $chk.ForeColor = [System.Drawing.Color]::FromArgb(235, 238, 245)
+        $chk.Checked = [bool]$checked
+        $grpOpts.Controls.Add($chk)
+        return $chk
+    }
+
+    $getInitVal = {
+        param([string]$key, [bool]$defaultVal)
+        if ($InitialSettings.ContainsKey($key)) { return [bool]$InitialSettings[$key] }
+        return [bool]$defaultVal
+    }
+
+    # Left Column (X = 15)
+    $chkDefender    = & $createChk "Remove Windows Defender & SecHealthUI" 15 25 (& $getInitVal 'RemoveDefender' $true)
+    $chkIME         = & $createChk "Keep Asian IMEs (Japanese, Chinese, Korean)" 15 55 (& $getInitVal 'KeepAsianIME' $true)
+    $chkFonts       = & $createChk "Keep Extra International & Asian Fonts" 15 85 (& $getInitVal 'KeepExtraFonts' $false)
+    $chkDrivers     = & $createChk "Remove Legacy Storage & Network Drivers" 15 115 (& $getInitVal 'RemoveDrivers' $false)
+    $chkWU          = & $createChk "Disable Automatic Windows Update" 15 145 (& $getInitVal 'DisableWindowsUpdate' $true)
+    $chkBT          = & $createChk "Keep Bluetooth Services & Peripherals" 15 175 (& $getInitVal 'KeepBluetooth' $true)
+    $chkWSL         = & $createChk "Enable WSL2 & Virtual Machine Platform" 15 205 (& $getInitVal 'WSLSupport' $false)
+    $chkRecovery    = & $createChk "Keep Recovery Environment (WinRE)" 15 235 (& $getInitVal 'KeepRecoveryEnv' $false)
+
+    # Right Column (X = 345)
+    $chkSafeDebloat = & $createChk "Safe WinSxS Component Store Debloat" 345 25 (& $getInitVal 'SafeDebloatMode' $true)
+    $chkUltraSlim   = & $createChk "UltraSlim Mode (~3GB Final ISO Target)" 345 55 (& $getInitVal 'UltraSlimMode' $true)
+    $chkJPKey       = & $createChk "Configure Japanese 106/109 Keyboard" 345 85 (& $getInitVal 'SetJapaneseKeyboard' $true)
+    $chkAtlas       = & $createChk "AtlasOS & ReviOS Low-Latency Tweaks" 345 115 (& $getInitVal 'AtlasReviOSMode' $true)
+    $chkToolkit     = & $createChk "Bundle Optimization Toolkit to Desktop" 345 145 (& $getInitVal 'BundleOptimizationToolkit' $true)
+    $chkStore       = & $createChk "Remove Microsoft Store & PurchaseApp" 345 175 (& $getInitVal 'RemoveStore' $false)
+
+    # 4. Output Payload Format GroupBox
+    $grpPayload = New-Object System.Windows.Forms.GroupBox
+    $grpPayload.Text = " 4. Payload Export Format "
+    $grpPayload.Location = New-Object System.Drawing.Point(15, 505)
+    $grpPayload.Size = New-Object System.Drawing.Size(670, 75)
+    $grpPayload.ForeColor = [System.Drawing.Color]::FromArgb(0, 190, 255)
+    $mainPanel.Controls.Add($grpPayload)
+
+    $radWIM = New-Object System.Windows.Forms.RadioButton
+    $radWIM.Text = "install.wim (LZX - Standard Fast)"
+    $radWIM.Location = New-Object System.Drawing.Point(15, 28)
+    $radWIM.Size = New-Object System.Drawing.Size(200, 25)
+    $radWIM.ForeColor = [System.Drawing.Color]::FromArgb(235, 238, 245)
+    $radWIM.Checked = $true
+    $grpPayload.Controls.Add($radWIM)
+
+    $radESD = New-Object System.Windows.Forms.RadioButton
+    $radESD.Text = "install.esd (LZMS - Ultra Compact)"
+    $radESD.Location = New-Object System.Drawing.Point(225, 28)
+    $radESD.Size = New-Object System.Drawing.Size(205, 25)
+    $radESD.ForeColor = [System.Drawing.Color]::FromArgb(235, 238, 245)
+    $grpPayload.Controls.Add($radESD)
+
+    $radSWM = New-Object System.Windows.Forms.RadioButton
+    $radSWM.Text = "install.swm (Split-WIM - FAT32 USB)"
+    $radSWM.Location = New-Object System.Drawing.Point(440, 28)
+    $radSWM.Size = New-Object System.Drawing.Size(215, 25)
+    $radSWM.ForeColor = [System.Drawing.Color]::FromArgb(235, 238, 245)
+    $grpPayload.Controls.Add($radSWM)
+
+    if ($InitialSettings.ExportESDMode) {
+        $radESD.Checked = $true
+    } elseif ($InitialSettings.SplitWIMMode) {
+        $radSWM.Checked = $true
+    }
+
+    # Preset selection sync
+    $updatingPreset = $false
+    $applyPreset = {
+        param($presetIndex)
+        $script:updatingPreset = $true
+        switch ($presetIndex) {
+            0 { # Extreme Slim & Gaming
+                $chkDefender.Checked = $true
+                $chkIME.Checked = $true
+                $chkFonts.Checked = $false
+                $chkDrivers.Checked = $false
+                $chkWU.Checked = $true
+                $chkBT.Checked = $true
+                $chkWSL.Checked = $false
+                $chkRecovery.Checked = $false
+                $chkSafeDebloat.Checked = $true
+                $chkUltraSlim.Checked = $true
+                $chkJPKey.Checked = $true
+                $chkAtlas.Checked = $true
+                $chkToolkit.Checked = $true
+                $chkStore.Checked = $false
+                $radWIM.Checked = $true
+            }
+            1 { # Balanced Pro
+                $chkDefender.Checked = $false
+                $chkIME.Checked = $true
+                $chkFonts.Checked = $true
+                $chkDrivers.Checked = $false
+                $chkWU.Checked = $false
+                $chkBT.Checked = $true
+                $chkWSL.Checked = $false
+                $chkRecovery.Checked = $true
+                $chkSafeDebloat.Checked = $true
+                $chkUltraSlim.Checked = $false
+                $chkJPKey.Checked = $true
+                $chkAtlas.Checked = $true
+                $chkToolkit.Checked = $true
+                $chkStore.Checked = $false
+                $radWIM.Checked = $true
+            }
+            2 { # FAT32 Split-WIM
+                $chkDefender.Checked = $true
+                $chkIME.Checked = $true
+                $chkFonts.Checked = $false
+                $chkDrivers.Checked = $false
+                $chkWU.Checked = $true
+                $chkBT.Checked = $true
+                $chkWSL.Checked = $false
+                $chkRecovery.Checked = $false
+                $chkSafeDebloat.Checked = $true
+                $chkUltraSlim.Checked = $true
+                $chkJPKey.Checked = $true
+                $chkAtlas.Checked = $true
+                $chkToolkit.Checked = $true
+                $chkStore.Checked = $false
+                $radSWM.Checked = $true
+            }
+        }
+        $script:updatingPreset = $false
+    }
+
+    $cmbPreset.Add_SelectedIndexChanged({
+        if (-not $script:updatingPreset -and $cmbPreset.SelectedIndex -ne 3) {
+            & $applyPreset $cmbPreset.SelectedIndex
+        }
+    })
+
+    # Hook change events to switch preset to Custom
+    $allCheckboxes = @($chkDefender, $chkIME, $chkFonts, $chkDrivers, $chkWU, $chkBT, $chkWSL, $chkRecovery, $chkSafeDebloat, $chkUltraSlim, $chkJPKey, $chkAtlas, $chkToolkit, $chkStore)
+    foreach ($c in $allCheckboxes) {
+        $c.Add_CheckedChanged({
+            if (-not $script:updatingPreset) {
+                $script:updatingPreset = $true
+                $cmbPreset.SelectedIndex = 3 # Custom
+                $script:updatingPreset = $false
+            }
+        })
+    }
+
+    # Load / Save Profile Handlers
+    $btnLoadProfile.Add_Click({
+        $ofd = New-Object System.Windows.Forms.OpenFileDialog
+        $ofd.Filter = "nano11 Profile (*.json)|*.json|All files (*.*)|*.*"
+        $profDir = Join-Path -Path $PSScriptRoot -ChildPath "profiles"
+        if (Test-Path -LiteralPath $profDir) { $ofd.InitialDirectory = $profDir }
+        if ($ofd.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+            $loaded = Import-Nano11Profile -FilePath $ofd.FileName
+            if ($loaded) {
+                $script:updatingPreset = $true
+                if ($loaded.PSObject.Properties['RemoveDefender'])       { $chkDefender.Checked = [bool]$loaded.RemoveDefender }
+                if ($loaded.PSObject.Properties['KeepAsianIME'])         { $chkIME.Checked = [bool]$loaded.KeepAsianIME }
+                if ($loaded.PSObject.Properties['KeepExtraFonts'])       { $chkFonts.Checked = [bool]$loaded.KeepExtraFonts }
+                if ($loaded.PSObject.Properties['RemoveDrivers'])        { $chkDrivers.Checked = [bool]$loaded.RemoveDrivers }
+                if ($loaded.PSObject.Properties['DisableWindowsUpdate']) { $chkWU.Checked = [bool]$loaded.DisableWindowsUpdate }
+                if ($loaded.PSObject.Properties['KeepBluetooth'])        { $chkBT.Checked = [bool]$loaded.KeepBluetooth }
+                if ($loaded.PSObject.Properties['WSLSupport'])           { $chkWSL.Checked = [bool]$loaded.WSLSupport }
+                if ($loaded.PSObject.Properties['KeepRecoveryEnv'])      { $chkRecovery.Checked = [bool]$loaded.KeepRecoveryEnv }
+                if ($loaded.PSObject.Properties['SafeDebloatMode'])      { $chkSafeDebloat.Checked = [bool]$loaded.SafeDebloatMode }
+                if ($loaded.PSObject.Properties['UltraSlimMode'])        { $chkUltraSlim.Checked = [bool]$loaded.UltraSlimMode }
+                if ($loaded.PSObject.Properties['SetJapaneseKeyboard'])  { $chkJPKey.Checked = [bool]$loaded.SetJapaneseKeyboard }
+                if ($loaded.PSObject.Properties['AtlasReviOSMode'])      { $chkAtlas.Checked = [bool]$loaded.AtlasReviOSMode }
+                if ($loaded.PSObject.Properties['BundleOptimizationToolkit']) { $chkToolkit.Checked = [bool]$loaded.BundleOptimizationToolkit }
+                if ($loaded.PSObject.Properties['RemoveStore'])          { $chkStore.Checked = [bool]$loaded.RemoveStore }
+                if ($loaded.PSObject.Properties['PayloadFormat']) {
+                    $fmt = $loaded.PayloadFormat.ToString().ToUpper()
+                    if ($fmt -eq 'ESD') { $radESD.Checked = $true }
+                    elseif ($fmt -eq 'SWM') { $radSWM.Checked = $true }
+                    else { $radWIM.Checked = $true }
+                }
+                $cmbPreset.SelectedIndex = 3
+                $script:updatingPreset = $false
+                [System.Windows.Forms.MessageBox]::Show("Profile loaded successfully from:`n$($ofd.FileName)", "Profile Loaded", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+            }
+        }
+    })
+
+    $btnSaveProfile.Add_Click({
+        $sfd = New-Object System.Windows.Forms.SaveFileDialog
+        $sfd.Filter = "nano11 Profile (*.json)|*.json|All files (*.*)|*.*"
+        $profDir = Join-Path -Path $PSScriptRoot -ChildPath "profiles"
+        if (Test-Path -LiteralPath $profDir) { $sfd.InitialDirectory = $profDir }
+        $sfd.FileName = "my-custom-profile.json"
+        if ($sfd.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+            $saveCfg = @{
+                ProfileName               = "Custom Profile"
+                RemoveDefender            = $chkDefender.Checked
+                KeepAsianIME              = $chkIME.Checked
+                KeepExtraFonts            = $chkFonts.Checked
+                RemoveDrivers             = $chkDrivers.Checked
+                DisableWindowsUpdate      = $chkWU.Checked
+                KeepBluetooth             = $chkBT.Checked
+                WSLSupport                = $chkWSL.Checked
+                KeepRecoveryEnv           = $chkRecovery.Checked
+                SafeDebloatMode           = $chkSafeDebloat.Checked
+                UltraSlimMode             = $chkUltraSlim.Checked
+                SetJapaneseKeyboard       = $chkJPKey.Checked
+                AtlasReviOSMode           = $chkAtlas.Checked
+                BundleOptimizationToolkit = $chkToolkit.Checked
+                RemoveStore               = $chkStore.Checked
+                PayloadFormat             = if ($radESD.Checked) { "ESD" } elseif ($radSWM.Checked) { "SWM" } else { "WIM" }
+            }
+            Export-Nano11Profile -FilePath $sfd.FileName -Config $saveCfg
+            [System.Windows.Forms.MessageBox]::Show("Profile saved successfully to:`n$($sfd.FileName)", "Profile Saved", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+        }
+    })
+
+    # Bottom Button Panel
+    $bottomPanel = New-Object System.Windows.Forms.Panel
+    $bottomPanel.Dock = [System.Windows.Forms.DockStyle]::Bottom
+    $bottomPanel.Height = 65
+    $bottomPanel.BackColor = [System.Drawing.Color]::FromArgb(18, 20, 24)
+    $form.Controls.Add($bottomPanel)
+
+    $btnBuild = New-Object System.Windows.Forms.Button
+    $btnBuild.Text = "🚀 Start nano11 Build"
+    $btnBuild.Location = New-Object System.Drawing.Point(340, 14)
+    $btnBuild.Size = New-Object System.Drawing.Size(200, 38)
+    $btnBuild.BackColor = [System.Drawing.Color]::FromArgb(0, 120, 215)
+    $btnBuild.ForeColor = [System.Drawing.Color]::White
+    $btnBuild.Font = New-Object System.Drawing.Font("Segoe UI", 10.5, [System.Drawing.FontStyle]::Bold)
+    $btnBuild.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $bottomPanel.Controls.Add($btnBuild)
+
+    $btnCancel = New-Object System.Windows.Forms.Button
+    $btnCancel.Text = "Cancel"
+    $btnCancel.Location = New-Object System.Drawing.Point(555, 14)
+    $btnCancel.Size = New-Object System.Drawing.Size(130, 38)
+    $btnCancel.BackColor = [System.Drawing.Color]::FromArgb(45, 50, 60)
+    $btnCancel.ForeColor = [System.Drawing.Color]::White
+    $btnCancel.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $btnCancel.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+    $bottomPanel.Controls.Add($btnCancel)
+
+    $formResult = @{ Success = $false }
+
+    $btnBuild.Add_Click({
+        # Validate Source Drive / ISO
+        $srcText = $cmbSource.Text.Trim()
+        if (-not $srcText) {
+            [System.Windows.Forms.MessageBox]::Show("Please select or browse for a Windows 11 installation drive or ISO.", "Source Required", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+            return
+        }
+
+        # If full text contains label, extract drive letter
+        if ($srcText -match '^([A-Za-z]:)') {
+            $candLetter = $matches[1]
+            $wimCheck = Join-Path -Path "$candLetter\sources" -ChildPath "install.wim"
+            if (Test-Path -LiteralPath $wimCheck) {
+                $resolvedSource = $candLetter
+            } elseif ($srcText.EndsWith(".iso", [System.StringComparison]::OrdinalIgnoreCase) -and (Test-Path -LiteralPath $srcText)) {
+                $resolvedSource = $srcText
+            } else {
+                $resolvedSource = $candLetter
+            }
+        } elseif ($srcText.EndsWith(".iso", [System.StringComparison]::OrdinalIgnoreCase) -and (Test-Path -LiteralPath $srcText)) {
+            $resolvedSource = $srcText
+        } else {
+            $resolvedSource = $srcText
+        }
+
+        # Validate WorkDir
+        $wDir = $txtWork.Text.Trim()
+        if (-not $wDir) {
+            $wDir = "$env:SystemDrive\nano11_workspace"
+        }
+
+        $formResult.Success                   = $true
+        $formResult.SourceDrive               = $resolvedSource
+        $formResult.WorkDir                   = $wDir
+        $formResult.RemoveDefender            = $chkDefender.Checked
+        $formResult.KeepAsianIME              = $chkIME.Checked
+        $formResult.KeepExtraFonts            = $chkFonts.Checked
+        $formResult.RemoveDrivers             = $chkDrivers.Checked
+        $formResult.DisableWindowsUpdate      = $chkWU.Checked
+        $formResult.KeepBluetooth             = $chkBT.Checked
+        $formResult.WSLSupport                = $chkWSL.Checked
+        $formResult.KeepRecoveryEnv           = $chkRecovery.Checked
+        $formResult.SafeDebloatMode           = $chkSafeDebloat.Checked
+        $formResult.UltraSlimMode             = $chkUltraSlim.Checked
+        $formResult.SetJapaneseKeyboard       = $chkJPKey.Checked
+        $formResult.AtlasReviOSMode           = $chkAtlas.Checked
+        $formResult.BundleOptimizationToolkit = $chkToolkit.Checked
+        $formResult.RemoveStore               = $chkStore.Checked
+        $formResult.ExportESDMode             = $radESD.Checked
+        $formResult.SplitWIMMode              = $radSWM.Checked
+
+        $form.DialogResult = [System.Windows.Forms.DialogResult]::OK
+        $form.Close()
+    })
+
+    # Show Dialog
+    $diagResult = $form.ShowDialog()
+    if ($diagResult -eq [System.Windows.Forms.DialogResult]::OK) {
+        return $formResult
+    }
+    return @{ Success = $false }
+}
+
 # Start Transcript
 $scriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
 $transcriptPath = Join-Path -Path $scriptDir -ChildPath "nano11.log"
@@ -386,7 +980,7 @@ Write-Host "Suitable for testing, low-spec VMs, and rapid prototyping."
 Write-Host ""
 
 # Confirmation
-if (-not $NonInteractive) {
+if (-not $NonInteractive -and -not $GUI) {
     Write-Host "Do you want to continue? [Y/n] (Default: Y)" -ForegroundColor Yellow
     $confirm = Read-Host
     if ($confirm -and ($confirm.Trim().ToLower() -in @('no', 'n'))) {
@@ -416,11 +1010,146 @@ $atlasReviOSMode = $true
 $bundleOptimizationToolkit = $true
 $bundleRevTool = $bundleOptimizationToolkit
 $exportESDMode = $false
+$splitWIMMode = $false
 $removeStore = $false
+$selectedProfile = $null
 
 # 2. Track explicitly supplied CLI parameters from bound parameters snapshot
 $bound = $PSBoundParameters
 $cliBound = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+
+# 0a. Profile / Preset Parameter
+if ($bound.ContainsKey('Profile') -or $bound.ContainsKey('Preset')) {
+    $profVal = if ($bound.ContainsKey('Profile')) { $bound['Profile'] } else { $bound['Preset'] }
+    $selectedProfile = $profVal.ToString().Trim().ToLower()
+    [void]$cliBound.Add('Profile')
+    if ($selectedProfile -in @('extreme', 'gaming', 'slim')) {
+        $removeDefender = $true
+        $keepAsianIME = $true
+        $keepExtraFonts = $false
+        $removeDrivers = $false
+        $disableWU = $true
+        $keepBT = $true
+        $wslSupport = $false
+        $keepRecoveryEnv = $false
+        $safeDebloatMode = $true
+        $ultraSlimMode = $true
+        $setJapaneseKeyboard = $true
+        $atlasReviOSMode = $true
+        $bundleOptimizationToolkit = $true
+        $bundleRevTool = $bundleOptimizationToolkit
+        $removeStore = $false
+    } elseif ($selectedProfile -in @('balanced', 'safe')) {
+        $removeDefender = $false
+        $keepAsianIME = $true
+        $keepExtraFonts = $true
+        $removeDrivers = $false
+        $disableWU = $false
+        $keepBT = $true
+        $wslSupport = $false
+        $keepRecoveryEnv = $true
+        $safeDebloatMode = $true
+        $ultraSlimMode = $false
+        $setJapaneseKeyboard = $true
+        $atlasReviOSMode = $true
+        $bundleOptimizationToolkit = $true
+        $bundleRevTool = $bundleOptimizationToolkit
+        $removeStore = $false
+    }
+}
+
+# 0b. LoadProfile Parameter (JSON Profile Import)
+if ($bound.ContainsKey('LoadProfile') -and $bound['LoadProfile']) {
+    $loadProfPath = $bound['LoadProfile']
+    if (-not (Test-Path -LiteralPath $loadProfPath)) {
+        $altProf = Join-Path -Path $PSScriptRoot -ChildPath (Join-Path "profiles" $loadProfPath)
+        if (Test-Path -LiteralPath $altProf) { $loadProfPath = $altProf }
+        elseif (Test-Path -LiteralPath "$altProf.json") { $loadProfPath = "$altProf.json" }
+    }
+    $loaded = Import-Nano11Profile -FilePath $loadProfPath
+    if ($loaded) {
+        $selectedProfile = "json ($([System.IO.Path]::GetFileNameWithoutExtension($loadProfPath)))"
+        [void]$cliBound.Add('Profile')
+        if ($loaded.PSObject.Properties['RemoveDefender'])       { $removeDefender = [bool]$loaded.RemoveDefender }
+        if ($loaded.PSObject.Properties['KeepAsianIME'])         { $keepAsianIME = [bool]$loaded.KeepAsianIME }
+        if ($loaded.PSObject.Properties['KeepExtraFonts'])       { $keepExtraFonts = [bool]$loaded.KeepExtraFonts }
+        if ($loaded.PSObject.Properties['RemoveDrivers'])        { $removeDrivers = [bool]$loaded.RemoveDrivers }
+        if ($loaded.PSObject.Properties['DisableWindowsUpdate']) { $disableWU = [bool]$loaded.DisableWindowsUpdate }
+        if ($loaded.PSObject.Properties['KeepBluetooth'])        { $keepBT = [bool]$loaded.KeepBluetooth }
+        if ($loaded.PSObject.Properties['WSLSupport'])           { $wslSupport = [bool]$loaded.WSLSupport }
+        if ($loaded.PSObject.Properties['KeepRecoveryEnv'])      { $keepRecoveryEnv = [bool]$loaded.KeepRecoveryEnv }
+        if ($loaded.PSObject.Properties['SafeDebloatMode'])      { $safeDebloatMode = [bool]$loaded.SafeDebloatMode }
+        if ($loaded.PSObject.Properties['UltraSlimMode'])        { $ultraSlimMode = [bool]$loaded.UltraSlimMode }
+        if ($loaded.PSObject.Properties['SetJapaneseKeyboard'])  { $setJapaneseKeyboard = [bool]$loaded.SetJapaneseKeyboard }
+        if ($loaded.PSObject.Properties['AtlasReviOSMode'])      { $atlasReviOSMode = [bool]$loaded.AtlasReviOSMode }
+        if ($loaded.PSObject.Properties['BundleOptimizationToolkit']) {
+            $bundleOptimizationToolkit = [bool]$loaded.BundleOptimizationToolkit
+            $bundleRevTool = $bundleOptimizationToolkit
+        }
+        if ($loaded.PSObject.Properties['RemoveStore'])          { $removeStore = [bool]$loaded.RemoveStore }
+        if ($loaded.PSObject.Properties['PayloadFormat']) {
+            $fmt = $loaded.PayloadFormat.ToString().ToUpper()
+            if ($fmt -eq 'ESD') { $exportESDMode = $true; $splitWIMMode = $false }
+            elseif ($fmt -eq 'SWM') { $splitWIMMode = $true; $exportESDMode = $false }
+            else { $exportESDMode = $false; $splitWIMMode = $false }
+        }
+        Write-Host "Loaded profile configuration from: $loadProfPath" -ForegroundColor Green
+    }
+}
+
+# 0c. Graphical User Interface (GUI) Trigger
+if ($GUI) {
+    Write-Host "Opening nano11 Graphical User Interface (GUI)..." -ForegroundColor Cyan
+    $initialSettings = @{
+        SourceDrive               = $SourceDrive
+        WorkDir                   = $WorkDir
+        RemoveDefender            = $removeDefender
+        KeepAsianIME              = $keepAsianIME
+        KeepExtraFonts            = $keepExtraFonts
+        RemoveDrivers             = $removeDrivers
+        DisableWindowsUpdate      = $disableWU
+        KeepBluetooth             = $keepBT
+        WSLSupport                = $wslSupport
+        KeepRecoveryEnv           = $keepRecoveryEnv
+        SafeDebloatMode           = $safeDebloatMode
+        UltraSlimMode             = $ultraSlimMode
+        SetJapaneseKeyboard       = $setJapaneseKeyboard
+        AtlasReviOSMode           = $atlasReviOSMode
+        BundleOptimizationToolkit = $bundleOptimizationToolkit
+        RemoveStore               = $removeStore
+        ExportESDMode             = $exportESDMode
+        SplitWIMMode              = $splitWIMMode
+    }
+    $guiResult = Show-Nano11GUI -InitialSettings $initialSettings
+    if ($guiResult -and $guiResult.Success) {
+        if ($guiResult.SourceDrive) { $SourceDrive = $guiResult.SourceDrive }
+        if ($guiResult.WorkDir) { $WorkDir = $guiResult.WorkDir }
+        $removeDefender            = $guiResult.RemoveDefender
+        $keepAsianIME              = $guiResult.KeepAsianIME
+        $keepExtraFonts            = $guiResult.KeepExtraFonts
+        $removeDrivers             = $guiResult.RemoveDrivers
+        $disableWU                 = $guiResult.DisableWindowsUpdate
+        $keepBT                    = $guiResult.KeepBluetooth
+        $wslSupport                = $guiResult.WSLSupport
+        $keepRecoveryEnv           = $guiResult.KeepRecoveryEnv
+        $safeDebloatMode           = $guiResult.SafeDebloatMode
+        $ultraSlimMode             = $guiResult.UltraSlimMode
+        $setJapaneseKeyboard       = $guiResult.SetJapaneseKeyboard
+        $atlasReviOSMode           = $guiResult.AtlasReviOSMode
+        $bundleOptimizationToolkit = $guiResult.BundleOptimizationToolkit
+        $bundleRevTool             = $bundleOptimizationToolkit
+        $removeStore               = $guiResult.RemoveStore
+        $exportESDMode             = $guiResult.ExportESDMode
+        $splitWIMMode              = $guiResult.SplitWIMMode
+        $NonInteractive            = $true
+        $selectedProfile           = "GUI Selection"
+        Write-Host "Applied GUI Configuration successfully." -ForegroundColor Green
+    } else {
+        Write-Host "nano11 GUI cancelled by user. Exiting..." -ForegroundColor Gray
+        Stop-Transcript
+        exit 0
+    }
+}
 
 $isAnyBound = {
     param([string[]]$Names)
@@ -579,11 +1308,21 @@ if (& $isAnyBound @('NoBundleOptimizationToolkit', 'NoBundleRevisionTool')) {
 # 14. Export Format
 if (& $isAnyBound @('ExportESD')) {
     $exportESDMode = & $getBoundVal 'ExportESD'
+    $splitWIMMode = $false
     [void]$cliBound.Add('Export')
 } elseif (& $isAnyBound @('ExportWIM', 'NoESD')) {
     $expWim = if ($bound.ContainsKey('ExportWIM')) { & $getBoundVal 'ExportWIM' } else { & $getBoundVal 'NoESD' }
     $exportESDMode = -not $expWim
     [void]$cliBound.Add('Export')
+}
+
+if (& $isAnyBound @('SplitWIM', 'FAT32Compatible', 'FAT32')) {
+    $splitWIMMode = & $getBoundVal 'SplitWIM'
+    $exportESDMode = $false
+    [void]$cliBound.Add('SplitWIM')
+} elseif (& $isAnyBound @('NoSplitWIM')) {
+    $splitWIMMode = -not (& $getBoundVal 'NoSplitWIM')
+    [void]$cliBound.Add('SplitWIM')
 }
 
 # 15. Microsoft Store (Default: Keep)
@@ -596,12 +1335,136 @@ if (& $isAnyBound @('RemoveStore', 'NoStore', 'RemoveMicrosoftStore')) {
 }
 
 # 3. Interactive Prompting Logic
-$isAutomated = $NonInteractive -or ($cliBound.Count -ge 15 -and (-not $Interactive))
+$isAutomated = $NonInteractive -or ($cliBound.Count -ge 15 -and (-not $Interactive)) -or ($cliBound.Contains('Profile') -and ($selectedProfile -in @('extreme', 'gaming', 'slim', 'balanced', 'safe')) -and (-not $Interactive))
 
 if ($isAutomated) {
     Write-Host "Running in automated/CLI mode (no interactive prompts)." -ForegroundColor Gray
 } else {
-    Write-Host "Configure debloat options (Press Enter to accept current defaults or CLI selections):" -ForegroundColor Gray
+    # Configuration Profile Selector
+    Write-Host ""
+    Write-Host "=========================================================" -ForegroundColor Cyan
+    Write-Host "         nano11 Configuration Profile Selector" -ForegroundColor Cyan
+    Write-Host "=========================================================" -ForegroundColor Cyan
+    Write-Host "Choose a profile or proceed to customization:" -ForegroundColor Gray
+    Write-Host "  [1] ⚡ Extreme Slim & Gaming (Default: Max debloat, Atlas/ReviOS, Store kept)" -ForegroundColor Green
+    Write-Host "  [2] 🛡️ Balanced Pro (Safe: Windows Update & Defender kept, high stability)" -ForegroundColor Yellow
+    Write-Host "  [3] 📂 Load Profile from JSON file" -ForegroundColor Cyan
+    Write-Host "  [4] 🖥️ Launch GUI (Graphical User Interface)" -ForegroundColor Blue
+    Write-Host "  [5] 🔧 Custom (Step-by-step 15 configuration prompts)" -ForegroundColor Magenta
+    $pChoice = Read-Host "Select Profile [1-5] (Default: 1 - Extreme Slim & Gaming)"
+    if ($pChoice) { $pChoice = $pChoice.Trim().ToLower() } else { $pChoice = "1" }
+
+    $skipIndividualPrompts = $false
+    if ($pChoice -in @('1', 'extreme', 'gaming', 'slim')) {
+        $skipIndividualPrompts = $true
+        $selectedProfile = "extreme"
+        Write-Host "Applied Profile: ⚡ Extreme Slim & Gaming" -ForegroundColor Green
+    } elseif ($pChoice -in @('2', 'balanced', 'safe')) {
+        $skipIndividualPrompts = $true
+        $selectedProfile = "balanced"
+        if (-not $cliBound.Contains('Defender'))  { $removeDefender = $false }
+        if (-not $cliBound.Contains('WU'))        { $disableWU = $false }
+        if (-not $cliBound.Contains('Recovery'))  { $keepRecoveryEnv = $true }
+        if (-not $cliBound.Contains('UltraSlim')) { $ultraSlimMode = $false }
+        if (-not $cliBound.Contains('Fonts'))     { $keepExtraFonts = $true }
+        Write-Host "Applied Profile: 🛡️ Balanced Pro (Windows Update & Defender kept)" -ForegroundColor Yellow
+    } elseif ($pChoice -in @('3', 'load', 'json')) {
+        $skipIndividualPrompts = $true
+        $pPath = Read-Host "Enter JSON profile path [Default: .\profiles\extreme-gaming.json]"
+        if (-not $pPath) { $pPath = Join-Path -Path $PSScriptRoot -ChildPath "profiles\extreme-gaming.json" }
+        if (-not (Test-Path -LiteralPath $pPath)) {
+            $altProf = Join-Path -Path $PSScriptRoot -ChildPath (Join-Path "profiles" $pPath)
+            if (Test-Path -LiteralPath $altProf) { $pPath = $altProf }
+            elseif (Test-Path -LiteralPath "$altProf.json") { $pPath = "$altProf.json" }
+        }
+        $loaded = Import-Nano11Profile -FilePath $pPath
+        if ($loaded) {
+            $selectedProfile = "json ($([System.IO.Path]::GetFileNameWithoutExtension($pPath)))"
+            if ($loaded.PSObject.Properties['RemoveDefender'])       { $removeDefender = [bool]$loaded.RemoveDefender }
+            if ($loaded.PSObject.Properties['KeepAsianIME'])         { $keepAsianIME = [bool]$loaded.KeepAsianIME }
+            if ($loaded.PSObject.Properties['KeepExtraFonts'])       { $keepExtraFonts = [bool]$loaded.KeepExtraFonts }
+            if ($loaded.PSObject.Properties['RemoveDrivers'])        { $removeDrivers = [bool]$loaded.RemoveDrivers }
+            if ($loaded.PSObject.Properties['DisableWindowsUpdate']) { $disableWU = [bool]$loaded.DisableWindowsUpdate }
+            if ($loaded.PSObject.Properties['KeepBluetooth'])        { $keepBT = [bool]$loaded.KeepBluetooth }
+            if ($loaded.PSObject.Properties['WSLSupport'])           { $wslSupport = [bool]$loaded.WSLSupport }
+            if ($loaded.PSObject.Properties['KeepRecoveryEnv'])      { $keepRecoveryEnv = [bool]$loaded.KeepRecoveryEnv }
+            if ($loaded.PSObject.Properties['SafeDebloatMode'])      { $safeDebloatMode = [bool]$loaded.SafeDebloatMode }
+            if ($loaded.PSObject.Properties['UltraSlimMode'])        { $ultraSlimMode = [bool]$loaded.UltraSlimMode }
+            if ($loaded.PSObject.Properties['SetJapaneseKeyboard'])  { $setJapaneseKeyboard = [bool]$loaded.SetJapaneseKeyboard }
+            if ($loaded.PSObject.Properties['AtlasReviOSMode'])      { $atlasReviOSMode = [bool]$loaded.AtlasReviOSMode }
+            if ($loaded.PSObject.Properties['BundleOptimizationToolkit']) {
+                $bundleOptimizationToolkit = [bool]$loaded.BundleOptimizationToolkit
+                $bundleRevTool = $bundleOptimizationToolkit
+            }
+            if ($loaded.PSObject.Properties['RemoveStore'])          { $removeStore = [bool]$loaded.RemoveStore }
+            if ($loaded.PSObject.Properties['PayloadFormat']) {
+                $fmt = $loaded.PayloadFormat.ToString().ToUpper()
+                if ($fmt -eq 'ESD') { $exportESDMode = $true; $splitWIMMode = $false }
+                elseif ($fmt -eq 'SWM') { $splitWIMMode = $true; $exportESDMode = $false }
+                else { $exportESDMode = $false; $splitWIMMode = $false }
+            }
+            Write-Host "Applied Profile from JSON: $pPath" -ForegroundColor Green
+        } else {
+            Write-Host "Failed to load JSON profile. Reverting to Extreme profile defaults." -ForegroundColor Yellow
+            $selectedProfile = "extreme"
+        }
+    } elseif ($pChoice -in @('4', 'gui', 'ui')) {
+        $skipIndividualPrompts = $true
+        $initialSettings = @{
+            SourceDrive               = $SourceDrive
+            WorkDir                   = $WorkDir
+            RemoveDefender            = $removeDefender
+            KeepAsianIME              = $keepAsianIME
+            KeepExtraFonts            = $keepExtraFonts
+            RemoveDrivers             = $removeDrivers
+            DisableWindowsUpdate      = $disableWU
+            KeepBluetooth             = $keepBT
+            WSLSupport                = $wslSupport
+            KeepRecoveryEnv           = $keepRecoveryEnv
+            SafeDebloatMode           = $safeDebloatMode
+            UltraSlimMode             = $ultraSlimMode
+            SetJapaneseKeyboard       = $setJapaneseKeyboard
+            AtlasReviOSMode           = $atlasReviOSMode
+            BundleOptimizationToolkit = $bundleOptimizationToolkit
+            RemoveStore               = $removeStore
+            ExportESDMode             = $exportESDMode
+            SplitWIMMode              = $splitWIMMode
+        }
+        $guiResult = Show-Nano11GUI -InitialSettings $initialSettings
+        if ($guiResult -and $guiResult.Success) {
+            if ($guiResult.SourceDrive) { $SourceDrive = $guiResult.SourceDrive }
+            if ($guiResult.WorkDir) { $WorkDir = $guiResult.WorkDir }
+            $removeDefender            = $guiResult.RemoveDefender
+            $keepAsianIME              = $guiResult.KeepAsianIME
+            $keepExtraFonts            = $guiResult.KeepExtraFonts
+            $removeDrivers             = $guiResult.RemoveDrivers
+            $disableWU                 = $guiResult.DisableWindowsUpdate
+            $keepBT                    = $guiResult.KeepBluetooth
+            $wslSupport                = $guiResult.WSLSupport
+            $keepRecoveryEnv           = $guiResult.KeepRecoveryEnv
+            $safeDebloatMode           = $guiResult.SafeDebloatMode
+            $ultraSlimMode             = $guiResult.UltraSlimMode
+            $setJapaneseKeyboard       = $guiResult.SetJapaneseKeyboard
+            $atlasReviOSMode           = $guiResult.AtlasReviOSMode
+            $bundleOptimizationToolkit = $guiResult.BundleOptimizationToolkit
+            $bundleRevTool             = $bundleOptimizationToolkit
+            $removeStore               = $guiResult.RemoveStore
+            $exportESDMode             = $guiResult.ExportESDMode
+            $splitWIMMode              = $guiResult.SplitWIMMode
+            $selectedProfile           = "GUI Selection"
+            Write-Host "Applied GUI Configuration successfully." -ForegroundColor Green
+        } else {
+            Write-Host "GUI cancelled by user. Exiting..." -ForegroundColor Gray
+            Stop-Transcript
+            exit 0
+        }
+    } else {
+        $selectedProfile = "custom"
+        Write-Host "Entering 🔧 Custom step-by-step configuration..." -ForegroundColor Magenta
+    }
+
+    if (-not $skipIndividualPrompts) {
+        Write-Host "Configure debloat options (Press Enter to accept current defaults or CLI selections):" -ForegroundColor Gray
     
     # 1. Windows Defender
     if ($cliBound.Contains('Defender') -and (-not $Interactive)) {
@@ -781,14 +1644,15 @@ if ($isAutomated) {
     }
 
     # 14. Image compression format
-    if ($cliBound.Contains('Export') -and (-not $Interactive)) {
-        Write-Host "14. Image compression format: $(if ($exportESDMode) { '2 (install.esd Recovery LZMS)' } else { '1 (install.wim LZX)' }) [CLI: Specified]" -ForegroundColor DarkCyan
+    if (($cliBound.Contains('Export') -or $cliBound.Contains('SplitWIM')) -and (-not $Interactive)) {
+        Write-Host "14. Image compression format: $(if ($exportESDMode) { '2 (install.esd Recovery LZMS)' } elseif ($splitWIMMode) { '3 (install.swm Split-WIM for FAT32)' } else { '1 (install.wim LZX)' }) [CLI: Specified]" -ForegroundColor DarkCyan
     } else {
-        $defMode = if ($exportESDMode) { "2" } else { "1" }
-        $opt = Read-Host "14. Image compression format [1=install.wim LZX (Recommended: Fast & Crash-Free), 2=install.esd Recovery (LZMS, experimental)] (Default: $defMode)"
+        $defMode = if ($exportESDMode) { "2" } elseif ($splitWIMMode) { "3" } else { "1" }
+        $opt = Read-Host "14. Image compression format [1=install.wim LZX (Default), 2=install.esd Recovery (LZMS), 3=install.swm (Split-WIM for FAT32 USB)] (Default: $defMode)"
         if ($opt) {
-            if ($opt.Trim() -eq '2') { $exportESDMode = $true }
-            elseif ($opt.Trim() -eq '1') { $exportESDMode = $false }
+            if ($opt.Trim() -eq '2') { $exportESDMode = $true; $splitWIMMode = $false }
+            elseif ($opt.Trim() -eq '3') { $splitWIMMode = $true; $exportESDMode = $false }
+            elseif ($opt.Trim() -eq '1') { $exportESDMode = $false; $splitWIMMode = $false }
         }
     }
 
@@ -804,10 +1668,62 @@ if ($isAutomated) {
             elseif ($opt.Trim().ToLower() -in @('no', 'n')) { $removeStore = $false }
         }
     }
+
+    # Offer saving custom configuration as a JSON profile
+    Write-Host ""
+    $saveChoice = Read-Host "Would you like to save this custom configuration as a JSON profile? [y/N] (Default: N)"
+    if ($saveChoice -and ($saveChoice.Trim().ToLower() -in @('y', 'yes'))) {
+        $savePath = Read-Host "Enter JSON file path to save [Default: .\profiles\my-custom-profile.json]"
+        if (-not $savePath) { $savePath = Join-Path -Path $PSScriptRoot -ChildPath "profiles\my-custom-profile.json" }
+        $currentCfg = @{
+            ProfileName               = "Custom Profile"
+            RemoveDefender            = $removeDefender
+            KeepAsianIME              = $keepAsianIME
+            KeepExtraFonts            = $keepExtraFonts
+            RemoveDrivers             = $removeDrivers
+            DisableWindowsUpdate      = $disableWU
+            KeepBluetooth             = $keepBT
+            WSLSupport                = $wslSupport
+            KeepRecoveryEnv           = $keepRecoveryEnv
+            SafeDebloatMode           = $safeDebloatMode
+            UltraSlimMode             = $ultraSlimMode
+            SetJapaneseKeyboard       = $setJapaneseKeyboard
+            AtlasReviOSMode           = $atlasReviOSMode
+            BundleOptimizationToolkit = $bundleOptimizationToolkit
+            RemoveStore               = $removeStore
+            PayloadFormat             = if ($exportESDMode) { "ESD" } elseif ($splitWIMMode) { "SWM" } else { "WIM" }
+        }
+        Export-Nano11Profile -FilePath $savePath -Config $currentCfg
+    }
+    }
+}
+
+# Export profile if requested via -SaveProfile parameter
+if ($SaveProfile) {
+    $currentCfg = @{
+        ProfileName               = if ($selectedProfile) { $selectedProfile } else { "Exported Profile" }
+        RemoveDefender            = $removeDefender
+        KeepAsianIME              = $keepAsianIME
+        KeepExtraFonts            = $keepExtraFonts
+        RemoveDrivers             = $removeDrivers
+        DisableWindowsUpdate      = $disableWU
+        KeepBluetooth             = $keepBT
+        WSLSupport                = $wslSupport
+        KeepRecoveryEnv           = $keepRecoveryEnv
+        SafeDebloatMode           = $safeDebloatMode
+        UltraSlimMode             = $ultraSlimMode
+        SetJapaneseKeyboard       = $setJapaneseKeyboard
+        AtlasReviOSMode           = $atlasReviOSMode
+        BundleOptimizationToolkit = $bundleOptimizationToolkit
+        RemoveStore               = $removeStore
+        PayloadFormat             = if ($exportESDMode) { "ESD" } elseif ($splitWIMMode) { "SWM" } else { "WIM" }
+    }
+    Export-Nano11Profile -FilePath $SaveProfile -Config $currentCfg
 }
 
 Write-Host ""
 Write-Host "Active configuration:" -ForegroundColor Cyan
+Write-Host "  - Profile:                 $(if ($selectedProfile) { $selectedProfile } else { 'Extreme (Default)' })"
 Write-Host "  - Remove Windows Defender: $removeDefender"
 Write-Host "  - Keep Asian IMEs:         $keepAsianIME"
 Write-Host "  - Keep Extra Fonts:        $keepExtraFonts"
@@ -822,7 +1738,7 @@ Write-Host "  - Japanese 106 Keyboard:   $setJapaneseKeyboard"
 Write-Host "  - AtlasOS & ReviOS Tuning: $atlasReviOSMode"
 Write-Host "  - Optimization Toolkit:    $bundleOptimizationToolkit"
 Write-Host "  - Remove Microsoft Store:  $removeStore"
-Write-Host "  - Payload Format:          $(if ($exportESDMode) { 'install.esd (LZMS)' } else { 'install.wim (LZX - Recommended)' })"
+Write-Host "  - Payload Format:          $(if ($exportESDMode) { 'install.esd (LZMS)' } elseif ($splitWIMMode) { 'install.swm (Split-WIM / FAT32)' } else { 'install.wim (LZX - Recommended)' })"
 Write-Host ""
 if ($env:NANO11_TEST_MODE -eq "1") {
     Stop-Transcript
@@ -886,12 +1802,27 @@ New-Item -ItemType Directory -Force -Path (Join-Path -Path $nano11Dir -ChildPath
 # Determine source drive letter (with auto-detection)
 $DriveLetter = ""
 if ($SourceDrive) {
-    $candDrive = $SourceDrive.Trim().TrimEnd(':') + ":"
-    if (Test-Path -LiteralPath $candDrive) {
-        $DriveLetter = $candDrive
-        Write-Host "Using specified SourceDrive: $DriveLetter" -ForegroundColor Green
-    } else {
-        Write-Host "Specified SourceDrive '$SourceDrive' does not exist." -ForegroundColor Red
+    if ($SourceDrive.EndsWith(".iso", [System.StringComparison]::OrdinalIgnoreCase) -and (Test-Path -LiteralPath $SourceDrive)) {
+        Write-Host "Mounting specified Windows 11 ISO: $SourceDrive..." -ForegroundColor Cyan
+        try {
+            $diskImg = Mount-DiskImage -ImagePath $SourceDrive -PassThru -ErrorAction SilentlyContinue
+            if ($diskImg) {
+                $vol = $diskImg | Get-Volume -ErrorAction SilentlyContinue
+                if ($vol -and $vol.DriveLetter) {
+                    $DriveLetter = "$($vol.DriveLetter):"
+                    Write-Host "ISO mounted successfully on drive: $DriveLetter" -ForegroundColor Green
+                }
+            }
+        } catch {}
+    }
+    if (-not $DriveLetter) {
+        $candDrive = $SourceDrive.Trim().TrimEnd(':') + ":"
+        if (Test-Path -LiteralPath $candDrive) {
+            $DriveLetter = $candDrive
+            Write-Host "Using specified SourceDrive: $DriveLetter" -ForegroundColor Green
+        } else {
+            Write-Host "Specified SourceDrive '$SourceDrive' does not exist." -ForegroundColor Red
+        }
     }
 }
 
@@ -1238,7 +2169,19 @@ $appxPatterns = @(
     '*WindowsCalculator*', '*Calculator*', '*Xbox*',
     '*Microsoft.Windows.Ai.Copilot*', '*Recall*', '*MicrosoftCorporationII.QuickAssist*',
     '*MicrosoftCorporationII.MicrosoftFamily*', '*Edge.DevToolsClient*', '*549981C3F5F10*',
-    '*Client.WebExperience*', '*Windows.Ai*', '*WindowsAI*'
+    '*Client.WebExperience*', '*Windows.Ai*', '*WindowsAI*',
+    # Modern AI & Copilot bloatware (Windows 11 24H2 / 26H2 Canary)
+    '*CopilotStudio*', '*ClickToDo*', '*WindowsAIClient*', '*Microsoft.Windows.StudioFX*',
+    '*NewsAndInterests*', '*RecallAgent*', '*AIComponents*', '*Microsoft.Windows.AiPca*',
+    # Third-party preloaded sponsor apps & OEM bloat
+    '*Spotify*', '*Disney*', '*LinkedIn*', '*Twitter*', '*TikTok*', '*Facebook*',
+    '*Instagram*', '*Netflix*', '*Amazon*', '*PrimeVideo*', '*CandyCrush*',
+    # Xbox / Gaming overlays & speech services
+    '*Microsoft.GamingApp*', '*XboxGameOverlay*', '*XboxSpeechToTextOverlay*',
+    '*XboxGamingOverlay*', '*XboxIdentityProvider*', '*Microsoft.MixedReality.Portal*',
+    '*MixedReality*',
+    # Diagnostics & Feedback & Legacy 3D / Wallet
+    '*Microsoft.WindowsFeedbackHub*', '*Microsoft.3DBuilder*', '*Print3D*', '*Wallet*', '*Pay*'
 )
 # Optional: Microsoft Store removal (-RemoveStore / prompt 15).
 # Only the Store app and its purchase UI are removed. Microsoft.DesktopAppInstaller (winget)
@@ -1280,6 +2223,7 @@ foreach ($package in $packagesToRemove) {
 # 5b. Disabling Windows 11 24H2/26H2 Recall Optional Feature if present
 Write-Host "Disabling Recall and modern AI optional features..." -ForegroundColor Cyan
 & dism.exe /English "/image:$scratchDir" /Disable-Feature /FeatureName:Recall /Remove > $null 2>&1
+& dism.exe /English "/image:$scratchDir" /Disable-Feature /FeatureName:Windows-Recall-Optional-Package /Remove > $null 2>&1
 
 # 6. Removing system packages (FoD / Optional features)
 Write-Host "Removing unnecessary system packages..." -ForegroundColor Cyan
@@ -1335,6 +2279,13 @@ $packagePatterns = @(
     "Telnet-Client-Package~",
     "SimpleTCP-Client-Package~",
     "Microsoft-Windows-RDC-Package~",
+    "Microsoft-Windows-Fax-Client-Package~",
+    "Microsoft-Windows-Recall-FoD-Package~",
+    "Microsoft-Windows-User-Experience-Virtualization-Package~",
+    "Microsoft-Windows-Device-Management-Enterprise-Package~",
+    "Microsoft-Windows-Notepad-FoD-Package~",
+    "Microsoft-Windows-Paint-FoD-Package~",
+    "Microsoft-Windows-MathRecognizer-Package~",
 
     # Decoupled Asian/Foreign Language Cleanup:
     # Always remove foreign Asian IMEs and heavy foreign Speech, Text-to-Speech, OCR, and Handwriting packages.
@@ -2791,6 +3742,245 @@ if ($bundleOptimizationToolkit) {
     }
 }
 
+# Deploy Zero-Footprint Browser Grabber and Nano11 Control Center to Public Desktop & Setup Tools
+$pubDesktop = Join-Path -Path $scratchDir -ChildPath "Users\Public\Desktop"
+$setupTools = Join-Path -Path $scratchDir -ChildPath "Windows\Setup\Tools"
+New-Item -Path $pubDesktop -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null
+New-Item -Path $setupTools -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null
+
+$browserPs1Content = @'
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13
+$ErrorActionPreference = 'Stop'
+
+Clear-Host
+Write-Host "=========================================================" -ForegroundColor Cyan
+Write-Host "               nano11 Browser Installer" -ForegroundColor Cyan
+Write-Host "=========================================================" -ForegroundColor Cyan
+Write-Host "Edge was removed for minimal footprint. Select a browser" -ForegroundColor Gray
+Write-Host "to download and install directly from its official CDN:" -ForegroundColor Gray
+Write-Host ""
+Write-Host "  [1] Google Chrome         (Official Silent Installer)" -ForegroundColor Green
+Write-Host "  [2] Mozilla Firefox        (Official Silent Installer - Japanese)" -ForegroundColor Yellow
+Write-Host "  [3] Brave Browser          (Official Standalone Installer)" -ForegroundColor Magenta
+Write-Host "  [4] Floorp Browser         (Japanese High-Privacy Gecko)" -ForegroundColor Cyan
+Write-Host "  [5] Microsoft Edge         (Official Standalone Installer)" -ForegroundColor Blue
+Write-Host "  [0] Exit" -ForegroundColor DarkGray
+Write-Host "=========================================================" -ForegroundColor Cyan
+
+$choice = Read-Host "Select option [1-5, 0]"
+if (-not $choice -or $choice.Trim() -eq '0') { exit }
+
+$tempDir = Join-Path -Path $env:TEMP -ChildPath "nano11_browser_$([System.IO.Path]::GetRandomFileName())"
+New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
+
+try {
+    switch ($choice.Trim()) {
+        '1' {
+            Write-Host "`nDownloading Google Chrome..." -ForegroundColor Green
+            $installer = Join-Path -Path $tempDir -ChildPath "ChromeSetup.exe"
+            Invoke-WebRequest -Uri "https://dl.google.com/chrome/install/latest/chrome_installer.exe" -OutFile $installer -UseBasicParsing
+            Write-Host "Installing Google Chrome silently..." -ForegroundColor Green
+            Start-Process -FilePath $installer -ArgumentList "/silent /install" -Wait
+            Write-Host "Google Chrome installation completed!" -ForegroundColor Green
+        }
+        '2' {
+            Write-Host "`nDownloading Mozilla Firefox..." -ForegroundColor Yellow
+            $installer = Join-Path -Path $tempDir -ChildPath "FirefoxSetup.exe"
+            Invoke-WebRequest -Uri "https://download.mozilla.org/?product=firefox-latest-ssl&os=win64&lang=ja" -OutFile $installer -UseBasicParsing
+            Write-Host "Installing Mozilla Firefox silently..." -ForegroundColor Yellow
+            Start-Process -FilePath $installer -ArgumentList "/S" -Wait
+            Write-Host "Mozilla Firefox installation completed!" -ForegroundColor Green
+        }
+        '3' {
+            Write-Host "`nDownloading Brave Browser..." -ForegroundColor Magenta
+            $installer = Join-Path -Path $tempDir -ChildPath "BraveSetup.exe"
+            Invoke-WebRequest -Uri "https://laptop-updates.brave.com/latest/winx64" -OutFile $installer -UseBasicParsing
+            Write-Host "Installing Brave Browser silently..." -ForegroundColor Magenta
+            Start-Process -FilePath $installer -ArgumentList "/silent /install" -Wait
+            Write-Host "Brave Browser installation completed!" -ForegroundColor Green
+        }
+        '4' {
+            Write-Host "`nDownloading Floorp Browser..." -ForegroundColor Cyan
+            $installer = Join-Path -Path $tempDir -ChildPath "FloorpSetup.exe"
+            Invoke-WebRequest -Uri "https://github.com/Floorp-Projects/Floorp/releases/latest/download/floorp-windows-x86_64-setup.exe" -OutFile $installer -UseBasicParsing
+            Write-Host "Installing Floorp Browser silently..." -ForegroundColor Cyan
+            Start-Process -FilePath $installer -ArgumentList "/S" -Wait
+            Write-Host "Floorp Browser installation completed!" -ForegroundColor Green
+        }
+        '5' {
+            Write-Host "`nDownloading Microsoft Edge..." -ForegroundColor Blue
+            $installer = Join-Path -Path $tempDir -ChildPath "MicrosoftEdgeSetup.exe"
+            Invoke-WebRequest -Uri "https://msedge.sf.dl.delivery.mp.microsoft.com/filestreamingservice/files/latest/MicrosoftEdgeSetup.exe" -OutFile $installer -UseBasicParsing
+            Write-Host "Installing Microsoft Edge silently..." -ForegroundColor Blue
+            Start-Process -FilePath $installer -ArgumentList "/silent /install" -Wait
+            Write-Host "Microsoft Edge installation completed!" -ForegroundColor Green
+        }
+    }
+} catch {
+    Write-Host "Download/installation error: $($_.Exception.Message)" -ForegroundColor Red
+} finally {
+    if (Test-Path -LiteralPath $tempDir) {
+        Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+Start-Sleep -Seconds 2
+'@
+
+$browserCmdContent = @'
+@echo off
+setlocal
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0Install-Browser.ps1"
+'@
+
+$controlCenterContent = @'
+@echo off
+setlocal enabledelayedexpansion
+title nano11 Control Center
+:MENU
+cls
+echo ========================================================
+echo                 nano11 Control Center
+echo ========================================================
+echo   [1] Toggle Windows Defender (Enable / Disable)
+echo   [2] Toggle Windows Update   (Enable / Disable)
+echo   [3] Toggle Hibernation      (Save RAM-sized GBs on SSD)
+echo   [4] Toggle Bluetooth        (Enable / Disable Services)
+echo   [5] Toggle Print Spooler    (Enable / Disable Service)
+echo   [6] Free Memory ^& Clear Temp (Trim Working Sets ^& Temp)
+echo   [7] Install Web Browser     (Chrome, Firefox, Brave...)
+echo   [0] Exit
+echo ========================================================
+set /p choice="Select option [1-7, 0]: "
+if "%choice%"=="1" goto DEFENDER
+if "%choice%"=="2" goto WU
+if "%choice%"=="3" goto HIBERNATE
+if "%choice%"=="4" goto BLUETOOTH
+if "%choice%"=="5" goto SPOOLER
+if "%choice%"=="6" goto FREEMEM
+if "%choice%"=="7" goto BROWSER
+if "%choice%"=="0" exit /b
+goto MENU
+
+:DEFENDER
+echo.
+sc query WinDefend | find "RUNNING" >nul
+if %errorlevel% equ 0 (
+    echo Disabling Windows Defender...
+    sc config WinDefend start= disabled >nul 2>&1
+    sc stop WinDefend >nul 2>&1
+    sc config WdNisSvc start= disabled >nul 2>&1
+    sc stop WdNisSvc >nul 2>&1
+    sc config Sense start= disabled >nul 2>&1
+    sc stop Sense >nul 2>&1
+    echo Windows Defender is now DISABLED.
+) else (
+    echo Enabling Windows Defender...
+    sc config WinDefend start= auto >nul 2>&1
+    sc start WinDefend >nul 2>&1
+    sc config WdNisSvc start= demand >nul 2>&1
+    sc start WdNisSvc >nul 2>&1
+    echo Windows Defender is now ENABLED.
+)
+pause
+goto MENU
+
+:WU
+echo.
+sc query wuauserv | find "RUNNING" >nul
+if %errorlevel% equ 0 (
+    echo Disabling Windows Update...
+    sc config wuauserv start= disabled >nul 2>&1
+    sc stop wuauserv >nul 2>&1
+    sc config UsoSvc start= disabled >nul 2>&1
+    sc stop UsoSvc >nul 2>&1
+    echo Windows Update is now DISABLED.
+) else (
+    echo Enabling Windows Update...
+    sc config wuauserv start= auto >nul 2>&1
+    sc start wuauserv >nul 2>&1
+    sc config UsoSvc start= demand >nul 2>&1
+    sc start UsoSvc >nul 2>&1
+    echo Windows Update is now ENABLED.
+)
+pause
+goto MENU
+
+:HIBERNATE
+echo.
+if exist "%SystemDrive%\hiberfil.sys" (
+    echo Disabling Hibernation and deleting hiberfil.sys...
+    powercfg.exe /hibernate off
+    echo Hibernation is now DISABLED.
+) else (
+    echo Enabling Hibernation...
+    powercfg.exe /hibernate on
+    echo Hibernation is now ENABLED.
+)
+pause
+goto MENU
+
+:BLUETOOTH
+echo.
+sc query bthserv | find "RUNNING" >nul
+if %errorlevel% equ 0 (
+    echo Disabling Bluetooth...
+    sc config bthserv start= disabled >nul 2>&1
+    sc stop bthserv >nul 2>&1
+    sc config BthAvctpSvc start= disabled >nul 2>&1
+    sc stop BthAvctpSvc >nul 2>&1
+    echo Bluetooth is now DISABLED.
+) else (
+    echo Enabling Bluetooth...
+    sc config bthserv start= auto >nul 2>&1
+    sc start bthserv >nul 2>&1
+    sc config BthAvctpSvc start= auto >nul 2>&1
+    sc start BthAvctpSvc >nul 2>&1
+    echo Bluetooth is now ENABLED.
+)
+pause
+goto MENU
+
+:SPOOLER
+echo.
+sc query Spooler | find "RUNNING" >nul
+if %errorlevel% equ 0 (
+    echo Disabling Print Spooler...
+    sc config Spooler start= disabled >nul 2>&1
+    sc stop Spooler >nul 2>&1
+    echo Print Spooler is now DISABLED.
+) else (
+    echo Enabling Print Spooler...
+    sc config Spooler start= auto >nul 2>&1
+    sc start Spooler >nul 2>&1
+    echo Print Spooler is now ENABLED.
+)
+pause
+goto MENU
+
+:FREEMEM
+echo.
+echo Cleaning temporary files...
+del /s /f /q "%TEMP%\*.*" >nul 2>&1
+del /s /f /q "%SystemRoot%\Temp\*.*" >nul 2>&1
+powershell.exe -NoProfile -Command "try { $sig = '[DllImport(\"psapi.dll\")] public static extern int EmptyWorkingSet(IntPtr h);'; Add-Type -MemberDefinition $sig -Name 'Mem' -Namespace 'Win32' -ErrorAction SilentlyContinue; Get-Process | ForEach-Object { try { [Win32.Mem]::EmptyWorkingSet($_.Handle) | Out-Null } catch {} }; [GC]::Collect(); Write-Host 'RAM working sets trimmed.' -ForegroundColor Green } catch {}"
+echo Done.
+pause
+goto MENU
+
+:BROWSER
+start "" "%~dp0Install-Browser.cmd"
+goto MENU
+'@
+
+$browserPs1Content | Set-Content -LiteralPath (Join-Path -Path $pubDesktop -ChildPath "Install-Browser.ps1") -Encoding utf8
+$browserCmdContent | Set-Content -LiteralPath (Join-Path -Path $pubDesktop -ChildPath "Install-Browser.cmd") -Encoding ascii
+$controlCenterContent | Set-Content -LiteralPath (Join-Path -Path $pubDesktop -ChildPath "Nano11 Control Center.bat") -Encoding ascii
+
+$browserPs1Content | Set-Content -LiteralPath (Join-Path -Path $setupTools -ChildPath "Install-Browser.ps1") -Encoding utf8
+$browserCmdContent | Set-Content -LiteralPath (Join-Path -Path $setupTools -ChildPath "Install-Browser.cmd") -Encoding ascii
+$controlCenterContent | Set-Content -LiteralPath (Join-Path -Path $setupTools -ChildPath "Nano11 Control Center.bat") -Encoding ascii
+Write-Host "  - Deployed Browser Grabber and Nano11 Control Center to Desktop & Setup Tools" -ForegroundColor Green
+
 # Ensure CurrentControlSet does NOT exist in offline SYSTEM hive
 # Creating CurrentControlSet as a real key in an offline hive causes Bug Check 0x67 (CONFIG_INITIALIZATION_FAILED)
 # because the NT kernel fails to create the CurrentControlSet symbolic link at boot time.
@@ -2869,7 +4059,22 @@ if (-not $esdSuccess) {
     if ($LASTEXITCODE -eq 0 -and (Test-Path -LiteralPath $tempWim) -and ((Get-Item -LiteralPath $tempWim).Length -gt 1GB)) {
         Remove-Item -LiteralPath $destWim -Force -ErrorAction SilentlyContinue
         Rename-Item -LiteralPath $tempWim -NewName "install.wim" -Force
-        Write-Host "install.wim successfully exported ($([math]::Round((Get-Item -LiteralPath $finalWim).Length / 1GB, 2)) GB)." -ForegroundColor Green
+        $exportedWimSize = (Get-Item -LiteralPath $finalWim).Length
+        Write-Host "install.wim successfully exported ($([math]::Round($exportedWimSize / 1GB, 2)) GB)." -ForegroundColor Green
+
+        # Split-WIM (install.swm) for 100% FAT32 USB compatibility
+        if ($splitWIMMode) {
+            Write-Host "Splitting install.wim into <= 3800MB chunks for 100% FAT32 USB compatibility (install.swm)..." -ForegroundColor Cyan
+            $swmTarget = Join-Path -Path "$nano11Dir\sources" -ChildPath "install.swm"
+            & dism.exe /English /Split-Image "/ImageFile:$finalWim" "/SWMFile:$swmTarget" /FileSize:3800
+            if ($LASTEXITCODE -eq 0 -and (Test-Path -LiteralPath $swmTarget)) {
+                $swmParts = Get-ChildItem -Path "$nano11Dir\sources" -Filter "install*.swm"
+                Write-Host "install.swm successfully generated ($($swmParts.Count) parts). Removing single install.wim..." -ForegroundColor Green
+                Remove-Item -LiteralPath $finalWim -Force -ErrorAction SilentlyContinue
+            } else {
+                Write-Host "Warning: Split-Image failed. Retaining single install.wim." -ForegroundColor Yellow
+            }
+        }
     } else {
         Write-Host "Warning: Export to install_export.wim failed or produced undersized file. Keeping original committed install.wim." -ForegroundColor Yellow
         Remove-Item -LiteralPath $tempWim -Force -ErrorAction SilentlyContinue
@@ -2942,17 +4147,19 @@ if (Test-Path -LiteralPath $bootWimPath) {
 # 15. Verify final installation payload
 $esdCheck = Join-Path -Path "$nano11Dir\sources" -ChildPath "install.esd"
 $wimCheck = Join-Path -Path "$nano11Dir\sources" -ChildPath "install.wim"
+$swmCheck = Join-Path -Path "$nano11Dir\sources" -ChildPath "install.swm"
 
 $validEsd = (Test-Path -LiteralPath $esdCheck) -and ((Get-Item -LiteralPath $esdCheck).Length -gt 1GB)
 $validWim = (Test-Path -LiteralPath $wimCheck) -and ((Get-Item -LiteralPath $wimCheck).Length -gt 1GB)
+$validSwm = (Test-Path -LiteralPath $swmCheck) -and ((Get-Item -LiteralPath $swmCheck).Length -gt 500MB)
 
-# Remove any corrupt stub files or invalid partial files (< 1GB)
+# Remove any corrupt stub files or invalid partial files (< 1GB / < 500MB)
 if (-not $validEsd -and (Test-Path -LiteralPath $esdCheck)) {
     Write-Host "Warning: Corrupt or incomplete install.esd detected ($((Get-Item -LiteralPath $esdCheck).Length) bytes). Removing..." -ForegroundColor Yellow
     Remove-Item -LiteralPath $esdCheck -Force -ErrorAction SilentlyContinue
     $validEsd = $false
 }
-if (-not $validWim -and (Test-Path -LiteralPath $wimCheck)) {
+if (-not $validWim -and (Test-Path -LiteralPath $wimCheck) -and (-not $validSwm)) {
     Write-Host "Warning: Corrupt or incomplete install.wim detected ($((Get-Item -LiteralPath $wimCheck).Length) bytes). Removing..." -ForegroundColor Yellow
     Remove-Item -LiteralPath $wimCheck -Force -ErrorAction SilentlyContinue
     $validWim = $false
@@ -2963,13 +4170,22 @@ if ($validWim) {
     if (Test-Path -LiteralPath $esdCheck) {
         Remove-Item -LiteralPath $esdCheck -Force -ErrorAction SilentlyContinue
     }
+} elseif ($validSwm) {
+    $swmParts = Get-ChildItem -Path "$nano11Dir\sources" -Filter "install*.swm"
+    Write-Host "Final installation image confirmed: install.swm (Split-WIM: $($swmParts.Count) parts for 100% FAT32 USB boot)" -ForegroundColor Green
+    if (Test-Path -LiteralPath $wimCheck) {
+        Remove-Item -LiteralPath $wimCheck -Force -ErrorAction SilentlyContinue
+    }
+    if (Test-Path -LiteralPath $esdCheck) {
+        Remove-Item -LiteralPath $esdCheck -Force -ErrorAction SilentlyContinue
+    }
 } elseif ($validEsd) {
     Write-Host "Final installation image confirmed: install.esd ($([math]::Round((Get-Item -LiteralPath $esdCheck).Length / 1GB, 2)) GB)" -ForegroundColor Green
     if (Test-Path -LiteralPath $wimCheck) {
         Remove-Item -LiteralPath $wimCheck -Force -ErrorAction SilentlyContinue
     }
 } else {
-    Write-Host "CRITICAL ERROR: No valid installation payload (install.wim or install.esd > 1GB) found in $nano11Dir\sources!" -ForegroundColor Red
+    Write-Host "CRITICAL ERROR: No valid installation payload (install.wim, install.esd, or install.swm) found in $nano11Dir\sources!" -ForegroundColor Red
     Write-Host "Aborting ISO creation to prevent producing an unbootable or corrupt image." -ForegroundColor Red
     Stop-Transcript
     exit 1
@@ -3171,11 +4387,20 @@ if ($oscdimgExe -and (Test-Path -LiteralPath $oscdimgExe)) {
         Write-Host "   SHA256: $sha256                                        " -ForegroundColor Green
         Write-Host "=========================================================" -ForegroundColor Green
         Write-Host ""
-        Write-Host "[IMPORTANT NOTE FOR BOOTABLE USB CREATION]" -ForegroundColor Cyan
-        Write-Host "- install.wim is larger than 4GB. FAT32 cannot store files > 4GB." -ForegroundColor Yellow
-        Write-Host "- When creating a bootable USB with Rufus, select 'NTFS' filesystem." -ForegroundColor Yellow
-        Write-Host "- Or copy nano11.iso directly into a Ventoy USB drive (recommended)." -ForegroundColor Yellow
-        Write-Host ""
+        if ($validSwm) {
+            Write-Host "[100% FAT32 USB COMPATIBLE]" -ForegroundColor Green
+            Write-Host "- The image was split into install.swm parts (each <= 3800MB)." -ForegroundColor Green
+            Write-Host "- You can copy the contents of nano11.iso directly into any FAT32 USB drive!" -ForegroundColor Green
+            Write-Host "- Standard UEFI systems will boot seamlessly without needing NTFS or Rufus." -ForegroundColor Green
+            Write-Host ""
+        } elseif (Test-Path -LiteralPath (Join-Path -Path "$nano11Dir\sources" -ChildPath "install.wim") -and ((Get-Item (Join-Path -Path "$nano11Dir\sources" -ChildPath "install.wim")).Length -gt 4000000000)) {
+            Write-Host "[IMPORTANT NOTE FOR BOOTABLE USB CREATION]" -ForegroundColor Cyan
+            Write-Host "- install.wim is larger than 4GB. FAT32 cannot store files > 4GB." -ForegroundColor Yellow
+            Write-Host "- When creating a bootable USB with Rufus, select 'NTFS' filesystem." -ForegroundColor Yellow
+            Write-Host "- Or copy nano11.iso directly into a Ventoy USB drive (recommended)." -ForegroundColor Yellow
+            Write-Host "- Tip: Run with -SplitWIM to automatically split into FAT32-compatible parts." -ForegroundColor Cyan
+            Write-Host ""
+        }
     } else {
         Write-Host ""
         Write-Host "=========================================================" -ForegroundColor Red

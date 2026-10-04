@@ -1,0 +1,22 @@
+{
+  "ProfileName": "Balanced Pro",
+  "Description": "High stability, Windows Update & Windows Defender preserved, WinRE recovery kept, telemetry and bloatware removed",
+  "Version": "2.0",
+  "Settings": {
+    "RemoveDefender": false,
+    "KeepAsianIME": true,
+    "KeepExtraFonts": true,
+    "RemoveDrivers": false,
+    "DisableWindowsUpdate": false,
+    "KeepBluetooth": true,
+    "WSLSupport": false,
+    "KeepRecoveryEnv": true,
+    "SafeDebloatMode": true,
+    "UltraSlimMode": false,
+    "SetJapaneseKeyboard": true,
+    "AtlasReviOSMode": true,
+    "BundleOptimizationToolkit": true,
+    "RemoveStore": false,
+    "PayloadFormat": "WIM"
+  }
+}

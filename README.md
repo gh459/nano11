@@ -188,43 +188,63 @@ The resulting minimal OS is **not serviceable via cumulative updates** when WinS
 2. Right-click the downloaded ISO and select **Mount**. Note the assigned drive letter (e.g. `D:`).
 
 ### **2. Running the Builder**
+
+#### **Option A: Graphical User Interface (GUI - Recommended)**
+Simply double-click **`nano11-GUI.bat`** (or run `.\nano11builder.ps1 -GUI` as Administrator).  
+The modern dark-mode GUI allows you to:
+- Select an auto-detected installation media drive or browse directly to an official Windows 11 `.iso` file.
+- Pick a one-click profile preset (**Extreme Slim & Gaming**, **Balanced Pro**, or **FAT32 USB Split-WIM**).
+- Toggle any of the 15 debloat, localization, and performance options.
+- Choose your payload format (**install.wim**, **install.esd**, or **install.swm** for FAT32 USB).
+- Save or Load customized `.json` configuration profiles.
+- Click **Start nano11 Build** to launch the build process!
+
+#### **Option B: Interactive Console**
 1. Open PowerShell as **Administrator**.
 2. Navigate to the repository directory:
    ```powershell
-   cd C:\path\to\nano11
+   cd E:\windows\other\nano11-main
    ```
 3. Launch `nano11builder.ps1`:
    ```powershell
    .\nano11builder.ps1
    ```
-4. Follow the interactive prompts to choose your debloat preferences and input the drive letter.
-5. Once `nano11.iso` is generated, follow the [Installation & Setup Guide](#️-installation--setup-guide-推奨デフォルトインストール手順) below to complete Windows setup smoothly using our default setup completion method.
+4. Choose a profile preset from the quick selector menu (`[1] Extreme`, `[2] Balanced`, `[3] Load JSON Profile`, `[4] Launch GUI`, `[5] Custom`), or customize settings step-by-step.
+5. Once `nano11.iso` is generated, follow the [Installation & Setup Guide](#️-installation--setup-guide-推奨デフォルトインストール手順) below.
 
 ### **3. Non-Interactive / CLI Automation**
-You can also run the builder non-interactively with customized flags:
+You can also run the builder non-interactively with customized flags or pre-built profile JSONs:
 ```powershell
+# 1-Click build with pre-packaged profile preset:
+.\nano11builder.ps1 -NonInteractive -Profile "extreme"
+
+# Load customized settings from a saved JSON profile:
+.\nano11builder.ps1 -NonInteractive -LoadProfile ".\profiles\balanced-pro.json"
+
+# Export your CLI configuration to a reusable JSON profile:
+.\nano11builder.ps1 -NonInteractive -KeepDefender -EnableWSL -SaveProfile ".\profiles\my-team-config.json"
+
+# Build for older UEFI motherboards requiring FAT32 USB media (Split-WIM <= 3.8GB):
+.\nano11builder.ps1 -NonInteractive -SplitWIM
+
 # Recommended balanced build: Keep Asian IMEs, Defender, international fonts, Bluetooth, and enable WSL2:
 .\nano11builder.ps1 -NonInteractive -KeepIME -KeepDefender -KeepFonts -KeepBluetooth -EnableWSL
 
 # Specify a custom working drive (e.g. when C: drive has low SSD space):
-.\nano11builder.ps1 -WorkDir "D:\nano11_temp"
-
-# Full aggressive debloat without prompts (AtlasOS & ReviOS tuning enabled by default):
-.\nano11builder.ps1 -NonInteractive
-
-# UltraSlim mode with ultra-small ISO footprint (~3.0 GB):
-.\nano11builder.ps1 -NonInteractive -UltraSlim
-
-# Maximum gaming & low-latency build retaining Japanese IME:
-.\nano11builder.ps1 -NonInteractive -AtlasReviOS -KeepIME
+.\nano11builder.ps1 -WorkDir "E:\nano11_workspace"
 ```
 
 ### **Available Parameters:**
 | Parameter | Description |
 | :--- | :--- |
+| `-GUI` (alias: `-UI`) | Launches the dark-themed Graphical User Interface frontend |
+| `-Profile <extreme\|balanced>` (alias: `-Preset`) | Applies a pre-packaged configuration profile preset |
+| `-SaveProfile <Path>` (alias: `-ExportConfig`) | Exports the active configuration settings to a JSON profile file |
+| `-LoadProfile <Path>` (alias: `-ImportConfig`, `-Config`) | Imports configuration settings from a JSON profile file |
+| `-SplitWIM` (aliases: `-FAT32Compatible`, `-FAT32`) / `-NoSplitWIM` | Splits output payload into `<= 3800 MB` chunks (`sources\install.swm`, `install2.swm`) for 100% FAT32 USB UEFI compatibility |
 | `-NonInteractive` (aliases: `-Silent`, `-Unattended`, `-Batch`) | Runs completely unattended without interactive prompts |
 | `-Interactive` | Forces interactive prompt review for all settings |
-| `-SourceDrive <Drive>` | Windows 11 installation media drive letter (e.g. `D:`). Auto-detected if omitted |
+| `-SourceDrive <Drive\|ISO>` | Windows 11 installation media drive letter or path to `.iso` file. Auto-detected and mounted if omitted |
 | `-WorkDir <Path>` | Custom directory for temporary file processing (ideal if C: has < 25 GB free) |
 | `-Index <Number>` | Image index inside `install.wim` to modify (e.g. `1` for Home, `3` for Pro) |
 | `-KeepDefender` / `-RemoveDefender` (`-NoDefender`) | Retains or removes Windows Defender (Default: Remove) |
