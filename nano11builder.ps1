@@ -336,6 +336,43 @@ function Remove-ProtectedDirectory {
     }
 }
 
+# Helper function: Check if a path resides on an NTFS volume (DISM requirement for reparse points)
+function Test-IsNtfsVolume {
+    param([string]$Path)
+    try {
+        $root = [System.IO.Path]::GetPathRoot($Path).TrimEnd('\')
+        if ($root -match '^[a-zA-Z]:') {
+            $letter = $root.Substring(0, 1)
+            $vol = Get-Volume -DriveLetter $letter -ErrorAction Stop
+            return ($vol.FileSystem -ieq 'NTFS')
+        }
+        return $true
+    } catch {
+        return $true
+    }
+}
+
+# Helper function: Fast and reliable directory reset using robocopy mirror trick
+function Reset-DirectoryWithRobocopy {
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$Path
+    )
+    if (Test-Path -LiteralPath $Path) {
+        $emptyTemp = Join-Path -Path ([System.IO.Path]::GetTempPath()) -ChildPath "nano11_empty_$([System.IO.Path]::GetRandomFileName())"
+        try {
+            New-Item -Path $emptyTemp -ItemType Directory -Force | Out-Null
+            & robocopy.exe $emptyTemp $Path /MIR /R:0 /W:0 /NP /NFL /NDL /NJH /NJS > $null 2>&1
+            Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction SilentlyContinue
+        } finally {
+            if (Test-Path -LiteralPath $emptyTemp) {
+                Remove-Item -LiteralPath $emptyTemp -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        }
+    }
+    New-Item -ItemType Directory -Force -Path $Path | Out-Null
+}
+
 # Start Transcript
 $scriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
 $transcriptPath = Join-Path -Path $scriptDir -ChildPath "nano11.log"
@@ -792,37 +829,56 @@ if ($env:NANO11_TEST_MODE -eq "1") {
     exit 0
 }
 
-# Determine Working Directory (Resolves Issue #27, #23 - Low disk space on C:)
+# Determine Working Directory (Resolves Issue #27, #23 - Low disk space on C:, and non-NTFS volumes like exFAT)
 if ($WorkDir) {
     if (-not (Test-Path -LiteralPath $WorkDir)) {
         New-Item -ItemType Directory -Force -Path $WorkDir | Out-Null
     }
     $baseWorkDir = (Resolve-Path -LiteralPath $WorkDir).Path
+    if (-not (Test-IsNtfsVolume -Path $baseWorkDir)) {
+        Write-Host "Warning: Specified WorkDir '$baseWorkDir' is not on an NTFS volume. DISM requires NTFS for junction and reparse points." -ForegroundColor Yellow
+        $altDrive = Get-PSDrive -PSProvider FileSystem | Where-Object { $_.Free -gt 30GB -and (Test-IsNtfsVolume $_.Root) } | Sort-Object Free -Descending | Select-Object -First 1
+        if ($altDrive) {
+            $baseWorkDir = Join-Path -Path $altDrive.Root.TrimEnd('\') -ChildPath "nano11_workspace"
+            Write-Host "Redirecting workspace to NTFS drive: $baseWorkDir" -ForegroundColor Green
+            New-Item -ItemType Directory -Force -Path $baseWorkDir | Out-Null
+        }
+    }
 } else {
     $sysDrive = (Get-Item -LiteralPath $env:SystemDrive).PSDrive
-    if ($sysDrive -and $sysDrive.Free -lt 25GB) {
-        $altDrive = Get-PSDrive -PSProvider FileSystem | Where-Object { $_.Free -gt 30GB -and $_.Root -ne $env:SystemDrive } | Sort-Object Free -Descending | Select-Object -First 1
+    if ($sysDrive -and ($sysDrive.Free -lt 30GB -or -not (Test-IsNtfsVolume $env:SystemDrive))) {
+        $altDrive = Get-PSDrive -PSProvider FileSystem | Where-Object { $_.Free -gt 30GB -and (Test-IsNtfsVolume $_.Root) } | Sort-Object Free -Descending | Select-Object -First 1
         if ($altDrive) {
-            Write-Host "System drive has low free space ($([math]::Round($sysDrive.Free / 1GB, 1)) GB). Using $($altDrive.Root) for working directory." -ForegroundColor Yellow
-            $baseWorkDir = $altDrive.Root.TrimEnd('\')
+            Write-Host "Using fast NTFS drive for working directory ($([math]::Round($altDrive.Free / 1GB, 1)) GB free): $($altDrive.Root)" -ForegroundColor Green
+            $baseWorkDir = Join-Path -Path $altDrive.Root.TrimEnd('\') -ChildPath "nano11_workspace"
         } else {
-            $baseWorkDir = $env:SystemDrive
+            $baseWorkDir = Join-Path -Path $env:SystemDrive -ChildPath "nano11_workspace"
         }
     } else {
-        $baseWorkDir = $env:SystemDrive
+        $baseWorkDir = Join-Path -Path $env:SystemDrive -ChildPath "nano11_workspace"
+    }
+    if (-not (Test-Path -LiteralPath $baseWorkDir)) {
+        New-Item -ItemType Directory -Force -Path $baseWorkDir | Out-Null
     }
 }
 
-$nano11Dir = Join-Path -Path $baseWorkDir -ChildPath "nano11"
+$nano11Dir = Join-Path -Path $baseWorkDir -ChildPath "build"
 $scratchDir = Join-Path -Path $baseWorkDir -ChildPath "scratchdir"
 Write-Host "Working Directory: $baseWorkDir" -ForegroundColor Cyan
 
+# Temporarily exclude workspace from Windows Defender real-time scanning to accelerate DISM operations
+try {
+    Add-MpPreference -ExclusionPath $baseWorkDir -ErrorAction SilentlyContinue
+} catch {}
+
 if (Test-Path -LiteralPath $nano11Dir) {
-    Write-Host "Cleaning up previous $nano11Dir to prevent leftover file conflicts..." -ForegroundColor Yellow
+    Write-Host "Cleaning up previous build directory to prevent leftover file conflicts..." -ForegroundColor Yellow
+    Reset-DirectoryWithRobocopy -Path $nano11Dir
     Remove-Item -LiteralPath $nano11Dir -Recurse -Force -ErrorAction SilentlyContinue
 }
 if (Test-Path -LiteralPath $scratchDir) {
     Clear-DismMountConflicts -TargetMountDir $scratchDir
+    Reset-DirectoryWithRobocopy -Path $scratchDir
     Remove-Item -LiteralPath $scratchDir -Recurse -Force -ErrorAction SilentlyContinue
 }
 New-Item -ItemType Directory -Force -Path (Join-Path -Path $nano11Dir -ChildPath "sources") | Out-Null
@@ -1089,17 +1145,14 @@ if ([string]::IsNullOrWhiteSpace($index) -or ($index -notin $availableIndices)) 
 }
 Write-Host "Selected image index: $index" -ForegroundColor Green
 
-Write-Host "Mounting Windows image (Index: $index)... This may take several minutes." -ForegroundColor Green
+Write-Host "Mounting Windows image (Index: $index)..." -ForegroundColor Green
+Write-Host "  -> DISM is unpacking system files. This typically takes 1-2 minutes on SSD..." -ForegroundColor Cyan
 Set-ItemOwnershipAndAccess -Path $destWim
 try { Set-ItemProperty -LiteralPath $destWim -Name IsReadOnly -Value $false -ErrorAction Stop } catch {}
 
 # Clear any conflicting or stale mounts on scratchDir or destWim (Resolves Error 0xc1420127)
 Clear-DismMountConflicts -TargetMountDir $scratchDir -TargetWimFile $destWim
-
-if (Test-Path -LiteralPath $scratchDir) {
-    Remove-Item -LiteralPath $scratchDir -Recurse -Force -ErrorAction SilentlyContinue
-}
-New-Item -ItemType Directory -Force -Path $scratchDir | Out-Null
+Reset-DirectoryWithRobocopy -Path $scratchDir
 
 $mountSuccess = $false
 for ($attempt = 1; $attempt -le 2; $attempt++) {
@@ -1117,10 +1170,7 @@ for ($attempt = 1; $attempt -le 2; $attempt++) {
     [GC]::Collect()
     [GC]::WaitForPendingFinalizers()
     Start-Sleep -Seconds 3
-    if (Test-Path -LiteralPath $scratchDir) {
-        Remove-Item -LiteralPath $scratchDir -Recurse -Force -ErrorAction SilentlyContinue
-        New-Item -ItemType Directory -Force -Path $scratchDir | Out-Null
-    }
+    Reset-DirectoryWithRobocopy -Path $scratchDir
 }
 
 if (-not $mountSuccess) {
@@ -1129,28 +1179,6 @@ if (-not $mountSuccess) {
     exit 1
 }
 
-# Proactively take ownership of target folders for smooth removal
-Write-Host "Configuring folder permissions in mounted image..." -ForegroundColor Cyan
-$foldersToOwn = @(
-    "$scratchDir\Windows\System32\DriverStore\FileRepository",
-    "$scratchDir\Windows\Fonts",
-    "$scratchDir\Windows\Web",
-    "$scratchDir\Windows\Help",
-    "$scratchDir\Program Files (x86)\Microsoft",
-    "$scratchDir\Program Files\WindowsApps",
-    "$scratchDir\Windows\System32\Recovery",
-    "$scratchDir\Windows\WinSxS",
-    "$scratchDir\Windows\assembly",
-    "$scratchDir\ProgramData\Microsoft\Windows Defender",
-    "$scratchDir\Windows\System32\InputMethod",
-    "$scratchDir\Windows\Speech",
-    "$scratchDir\Windows\Temp"
-)
-foreach ($folder in $foldersToOwn) {
-    if (Test-Path -LiteralPath $folder) {
-        Set-ItemOwnershipAndAccess -Path $folder -Recurse
-    }
-}
 $filesToOwn = @("$scratchDir\Windows\System32\OneDriveSetup.exe")
 foreach ($file in $filesToOwn) {
     if (Test-Path -LiteralPath $file) {
@@ -1573,10 +1601,11 @@ if ($keepRecoveryEnv) {
 # 9. Component Store (WinSxS) Optimization
 if ($safeDebloatMode) {
     Write-Host "Consolidating component store safely via DISM Component Cleanup..." -ForegroundColor Green
+    Write-Host "  -> DISM is optimizing component packages. Progress will display below..." -ForegroundColor Cyan
     # Note: We omit /ResetBase because offline /ResetBase on an image with package removals
     # corrupts delta manifests and causes Windows Setup file expansion to freeze at 77%.
     # Standard /StartComponentCleanup is 100% stable and fully preserves Setup integrity.
-    & dism.exe /English "/image:$scratchDir" /Cleanup-Image /StartComponentCleanup > $null 2>&1
+    & dism.exe /English "/image:$scratchDir" /Cleanup-Image /StartComponentCleanup
     Write-Host "  - Component store consolidated safely (WinSxS manifest integrity preserved for zero 77% stalls)." -ForegroundColor Green
 } else {
     Write-Host "Running Aggressive WinSxS Pruning (Experimental)..." -ForegroundColor Yellow
@@ -2777,7 +2806,8 @@ Write-Host "Unmounting offline registry hives..." -ForegroundColor Cyan
 }
 
 # 12. Unmount and export install image
-Write-Host "Unmounting install image..." -ForegroundColor Green
+Write-Host "Unmounting install image and committing changes..." -ForegroundColor Green
+Write-Host "  -> Saving WIM image changes. Progress will display below..." -ForegroundColor Cyan
 
 $unmountSuccess = $false
 for ($retry = 1; $retry -le 4; $retry++) {
@@ -3168,11 +3198,18 @@ if (-not $NonInteractive) {
 }
 & dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /discard > $null 2>&1
 if ($isoCreatedSuccessfully) {
+    Reset-DirectoryWithRobocopy -Path $nano11Dir
     Remove-Item -LiteralPath $nano11Dir -Recurse -Force -ErrorAction SilentlyContinue
 } else {
     Write-Host "Preserving $nano11Dir because ISO creation was not completed." -ForegroundColor Yellow
 }
+Reset-DirectoryWithRobocopy -Path $scratchDir
 Remove-Item -LiteralPath $scratchDir -Recurse -Force -ErrorAction SilentlyContinue
+
+# Remove Windows Defender temporary workspace exclusion
+try {
+    Remove-MpPreference -ExclusionPath $baseWorkDir -ErrorAction SilentlyContinue
+} catch {}
 
 Stop-Transcript
 if ($isoCreatedSuccessfully) {

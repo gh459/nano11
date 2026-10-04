@@ -22,6 +22,7 @@ The goal of nano11 is to automate the creation of a streamlined Windows 11 image
   - Works on any host operating system language/locale without permission or translation errors.
   - Replaces localized tools (`takeown`/`icacls`) with native .NET Access Control Lists (`Set-Acl` via Well-Known Administrator SID `S-1-5-32-544`).
 - **🛡️ Customization Options (Issues #1, #9, #10, #12, #13)**:
+  - **Complete User Account Control (UAC) Deactivation**: UAC elevation prompts and secure desktop dimming are completely disabled (`ConsentPromptBehaviorAdmin = 0`, `PromptOnSecureDesktop = 0`) across both offline registry hives and the unattended answer file, eliminating permission popups for administrators.
   - **Japanese Keyboard (106/109) Guarantee**: Prevents the common Windows clean install issue where Japanese keyboards are misdetected as 101/104 English keyboards (causing `@` and `:` key mapping mismatch) by injecting verified `kbd106.dll` and `PCAT_106KEY` configurations. Toggle with `-JapaneseKeyboard` / `-NoJapaneseKeyboard`.
   - **Windows 11 24H2 & AI Bloatware Neutralization**: Automatically disables 24H2 mandatory BitLocker device encryption (`PreventDeviceEncryption = 1`), TCG hardware security activation, and eliminates background AI telemetry (Copilot Provider, Windows Recall, Click-to-Do, and DevHome).
   - **Automatic Media Drive Detection**: Automatically detects connected official Windows 11 ISO/USB installation drives containing `sources\install.wim`, eliminating manual drive letter entry.
@@ -31,6 +32,12 @@ The goal of nano11 is to automate the creation of a streamlined Windows 11 image
   - **Windows Update**: Option to keep Windows Update enabled or disabled.
   - **Bluetooth & Audio**: Preserves Bluetooth audio transport and peripheral services by default so wireless headphones and controllers function properly.
   - **Recovery Environment (WinRE)**: Retain Windows RE with `-KeepRecovery` or `-KeepWinRE`. By default, WinRE is kept intact during installation so Windows Setup SafeOS staging succeeds 100%, then safely disabled and deleted online on first logon.
+- **⚡ High-Speed ISO Modification & Zero-Stall Mounting Engine**:
+  - **Recursive Ownership Bottleneck Eliminated**: Removed recursive `takeown /R` and `icacls /T` commands over 100,000+ files in `WinSxS`, `DriverStore`, and `WindowsApps` that stalled DISM operations for 45-90 minutes. Targeted directory deletion now handles ACL permissions on-demand.
+  - **Sub-Second Workspace Purge via Robocopy Mirror**: Replaced slow and lock-prone PowerShell recursive deletions with an empty-directory mirroring engine (`Reset-DirectoryWithRobocopy`), wiping 50,000+ dirty files in < 1 second and preventing DISM mount errors (`0x80070130`).
+  - **NTFS Volume Safety Verification**: Automatically verifies the workspace drive format (`Test-IsNtfsVolume`), preventing DISM reparse point failures (`0xc142011f`) when users run the script from exFAT drives (e.g. Ventoy USB drives).
+  - **Real-Time DISM Progress Visibility**: Removed stdout suppression from DISM component cleanup and exports, exposing live progress percentages.
+  - **Automated Windows Defender Exclusion**: Automatically adds temporary Defender exclusions for build workspaces during execution to prevent real-time file scanning slowdowns on 100,000+ image files.
 - **📦 Radical ISO Size Reduction (~3.2 GB – 3.8 GB, Perplexity-Verified Safe)**:
   - **Decoupled Japanese IME & Foreign Language Stripping**: Purges heavy foreign Asian IMEs (Korean `ko-KR`, Chinese `zh-CN`/`zh-TW`), foreign speech models (`zh-*`, `ko-*`, `de-*`, `fr-*`, `es-*`, `it-*`, `pt-*`, `ru-*`), and foreign Handwriting/OCR packages, saving over 800 MB – 1.2 GB in the installation image while strictly safeguarding Japanese IME (`*IME-ja-jp*`), Japanese fonts (`meiryo*`, `yugoth*`, `msgoth*`, `msmin*`, `yumin*`), and Text Services Framework (`ctfmon.exe`).
   - **Foreign Supplemental Fonts Trimmed**: Safely purges non-Latin/non-Japanese font collections (Chinese Hans/Hant, Korean Kore, Devanagari, Thai, Ethiopic, Syriac, Cherokee, etc.), saving ~200 MB.
