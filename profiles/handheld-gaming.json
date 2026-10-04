@@ -1,0 +1,22 @@
+{
+  "ProfileName": "Handheld Gaming (ROG Ally / Steam Deck / Legion Go)",
+  "Description": "Optimized for PC gaming handhelds with low DPC latency, Xbox and controller services preserved, background services minimized",
+  "Version": "2.0",
+  "Settings": {
+    "RemoveDefender": true,
+    "KeepAsianIME": true,
+    "KeepExtraFonts": false,
+    "RemoveDrivers": false,
+    "DisableWindowsUpdate": true,
+    "KeepBluetooth": true,
+    "WSLSupport": false,
+    "KeepRecoveryEnv": false,
+    "SafeDebloatMode": true,
+    "UltraSlimMode": true,
+    "SetJapaneseKeyboard": false,
+    "AtlasReviOSMode": true,
+    "BundleOptimizationToolkit": true,
+    "RemoveStore": false,
+    "PayloadFormat": "WIM"
+  }
+}

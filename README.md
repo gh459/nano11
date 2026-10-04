@@ -18,6 +18,25 @@ The goal of nano11 is to automate the creation of a streamlined Windows 11 image
 
 ## **✨ Features & Improvements in this Fork**
 
+- **⚡ Zero-Click Setup Automation (100% Shift+F10 Free)**:
+  - Completely eliminates the manual `Shift + F10` prompt and "Windows could not complete the installation" dialog by orchestrating `ChildCompletion\setup.exe = 3`, `SetupType = 0`, `SystemSetupInProgress = 0`, and `OOBEInProgress = 0` across `windowsPE`, `specialize`, `SetupComplete.cmd`, offline `zSYSTEM`, and `FirstLogon.ps1`. Setup transitions directly to the lightweight desktop with zero user clicks.
+- **🎮 Low-Latency & Next-Gen Gaming Engine (AtlasOS / ReviOS Aligned)**:
+  - **Hardware-Accelerated GPU Scheduling (HAGS)** enabled by default (`HwSchMode = 2`).
+  - **Message Signaled Interrupts (MSI)** automatically enabled across all PCI devices to eliminate interrupt sharing latency.
+  - **CPU Core Scheduling & Unparking**: Neutralizes micro-stutter on hybrid Intel P/E-core and AMD 3D V-Cache architectures by disabling core parking and tuning Energy Performance Preference (`EPP = 0`).
+  - **Windows Update Driver Protection**: Excludes generic GPU/chipset drivers from Windows Update (`ExcludeWUDriversInQualityUpdate = 1`), preventing vendor driver rollbacks.
+- **🚫 Modern AI, Recall & 24H2/26H2 Canary Bloatware Offline Block**:
+  - Offline policy blocks for DirectML, Windows AI, Windows Copilot, and Recall snapshotting (`TurnOffRecall = 1`, `DisableAIDataAnalysis = 1`).
+  - Edge Copilot sidebar and startup boost neutralized.
+  - Edge Update auto-reinstallation blocked while strictly safeguarding the embedded WebView2 runtime required for Discord, Steam, and desktop apps.
+  - Japanese IME cloud candidate telemetry opted-out.
+- **💽 High-Speed VHDX Scratch Disk Engine (`-UseVHDX` / `-FastVHDX`)**:
+  - Dynamically mounts an expandable 30 GB VHDX volume as the DISM scratch directory, eliminating host NTFS fragmentation and accelerating image unpacking and exporting.
+- **📊 Visual HTML Build Report & Test Suite**:
+  - Automatically exports a dark-themed visual report (`nano11_report.html`) summarizing baseline vs optimized WIM sizes, saved GB, compression percentage, and feature status.
+  - Includes built-in self-test diagnostics (`-TestSelf`) and a complete Pester test suite (`tests/nano11.Tests.ps1`).
+- **📁 Custom Post-Install Scripts Hook**:
+  - Place custom `.ps1`, `.bat`, or `.reg` files in `tools/custom-scripts/` to have them automatically extracted and executed sequentially during post-install first logon.
 - **🌐 Universal Language Independence (PR #6 by Tinnitus97)**:
   - Works on any host operating system language/locale without permission or translation errors.
   - Replaces localized tools (`takeown`/`icacls`) with native .NET Access Control Lists (`Set-Acl` via Well-Known Administrator SID `S-1-5-32-544`).
@@ -193,9 +212,10 @@ The resulting minimal OS is **not serviceable via cumulative updates** when WinS
 Simply double-click **`nano11-GUI.bat`** (or run `.\nano11builder.ps1 -GUI` as Administrator).  
 The modern dark-mode GUI allows you to:
 - Select an auto-detected installation media drive or browse directly to an official Windows 11 `.iso` file.
-- Pick a one-click profile preset (**Extreme Slim & Gaming**, **Balanced Pro**, or **FAT32 USB Split-WIM**).
+- Pick a one-click profile preset (**Extreme Slim & Gaming**, **Balanced Pro**, **Handheld Gaming**, **VM & Developer**, **Audio & DAW Production**, or **FAT32 USB Split-WIM**).
 - Toggle any of the 15 debloat, localization, and performance options.
 - Choose your payload format (**install.wim**, **install.esd**, or **install.swm** for FAT32 USB).
+- Toggle **High-Speed VHDX Scratch Disk** (`-UseVHDX`) to eliminate host fragmentation.
 - Save or Load customized `.json` configuration profiles.
 - Click **Start nano11 Build** to launch the build process!
 
@@ -209,14 +229,26 @@ The modern dark-mode GUI allows you to:
    ```powershell
    .\nano11builder.ps1
    ```
-4. Choose a profile preset from the quick selector menu (`[1] Extreme`, `[2] Balanced`, `[3] Load JSON Profile`, `[4] Launch GUI`, `[5] Custom`), or customize settings step-by-step.
-5. Once `nano11.iso` is generated, follow the [Installation & Setup Guide](#️-installation--setup-guide-推奨デフォルトインストール手順) below.
+4. Choose a profile preset from the quick selector menu (`[1] Extreme`, `[2] Balanced`, `[3] Handheld Gaming`, `[4] VM Developer`, `[5] Audio DAW`, `[6] FAT32 Split-WIM`, `[7] Load JSON Profile`, `[8] Launch GUI`, `[9] Custom`), or customize settings step-by-step.
+5. Once `nano11.iso` is generated, follow the [Installation & Setup Guide](#️-installation--setup-guide-ゼロクリック自動インストール) below.
 
 ### **3. Non-Interactive / CLI Automation**
 You can also run the builder non-interactively with customized flags or pre-built profile JSONs:
 ```powershell
 # 1-Click build with pre-packaged profile preset:
 .\nano11builder.ps1 -NonInteractive -Profile "extreme"
+
+# Build for Handheld Gaming (ROG Ally, Steam Deck, Legion Go):
+.\nano11builder.ps1 -NonInteractive -Profile "handheld"
+
+# Build for VM & Developer Workstations (WSL2, Hyper-V):
+.\nano11builder.ps1 -NonInteractive -Profile "vm"
+
+# Accelerate DISM image operations via dynamic VHDX scratch disk:
+.\nano11builder.ps1 -NonInteractive -Profile "extreme" -UseVHDX
+
+# Run built-in self-test diagnostics without needing an ISO:
+.\nano11builder.ps1 -TestSelf
 
 # Load customized settings from a saved JSON profile:
 .\nano11builder.ps1 -NonInteractive -LoadProfile ".\profiles\balanced-pro.json"
@@ -226,19 +258,17 @@ You can also run the builder non-interactively with customized flags or pre-buil
 
 # Build for older UEFI motherboards requiring FAT32 USB media (Split-WIM <= 3.8GB):
 .\nano11builder.ps1 -NonInteractive -SplitWIM
-
-# Recommended balanced build: Keep Asian IMEs, Defender, international fonts, Bluetooth, and enable WSL2:
-.\nano11builder.ps1 -NonInteractive -KeepIME -KeepDefender -KeepFonts -KeepBluetooth -EnableWSL
-
-# Specify a custom working drive (e.g. when C: drive has low SSD space):
-.\nano11builder.ps1 -WorkDir "E:\nano11_workspace"
 ```
 
 ### **Available Parameters:**
 | Parameter | Description |
 | :--- | :--- |
 | `-GUI` (alias: `-UI`) | Launches the dark-themed Graphical User Interface frontend |
-| `-Profile <extreme\|balanced>` (alias: `-Preset`) | Applies a pre-packaged configuration profile preset |
+| `-Profile <extreme\|balanced\|handheld\|vm\|audio\|fat32>` (alias: `-Preset`) | Applies a pre-packaged configuration profile preset |
+| `-UseVHDX` (alias: `-FastVHDX`) | Dynamically mounts an expandable 30 GB VHDX volume as the DISM scratch directory, eliminating host fragmentation and accelerating build times |
+| `-CheckHealth` | Executes DISM `/Cleanup-Image /CheckHealth` verification on the mounted image |
+| `-TestSelf` | Runs the built-in diagnostic and AST static analysis self-test suite |
+| `-AllIndices` | Flag to indicate multi-index processing for multi-edition installation media |
 | `-SaveProfile <Path>` (alias: `-ExportConfig`) | Exports the active configuration settings to a JSON profile file |
 | `-LoadProfile <Path>` (alias: `-ImportConfig`, `-Config`) | Imports configuration settings from a JSON profile file |
 | `-SplitWIM` (aliases: `-FAT32Compatible`, `-FAT32`) / `-NoSplitWIM` | Splits output payload into `<= 3800 MB` chunks (`sources\install.swm`, `install2.swm`) for 100% FAT32 USB UEFI compatibility |
@@ -262,6 +292,9 @@ You can also run the builder non-interactively with customized flags or pre-buil
 | `-BundleOptimizationToolkit` / `-NoBundleOptimizationToolkit` | Bundles or skips Windows Optimization Toolkit on Desktop (Default: Enabled) |
 | `-ExportESD` / `-ExportWIM` (`-NoESD`) | Output image format (Default: install.wim LZX — Fast & Crash-Free) |
 | `-KeepStore` / `-RemoveStore` (`-NoStore`) | Keeps or removes Microsoft Store (`Microsoft.WindowsStore`, `Microsoft.StorePurchaseApp`). winget / App Installer and Store frameworks are always kept (Default: Keep) |
+| `-BundleOptimizationToolkit` / `-NoBundleOptimizationToolkit` | Bundles or skips Windows Optimization Toolkit on Desktop (Default: Enabled) |
+| `-ExportESD` / `-ExportWIM` (`-NoESD`) | Output image format (Default: install.wim LZX — Fast & Crash-Free) |
+| `-KeepStore` / `-RemoveStore` (`-NoStore`) | Keeps or removes Microsoft Store (`Microsoft.WindowsStore`, `Microsoft.StorePurchaseApp`). winget / App Installer and Store frameworks are always kept (Default: Keep) |
 
 > [!TIP]
 > **CLI Option Priority Guarantee**: Specified CLI switches are strictly honored immediately. When running interactively, options already provided via CLI parameters are automatically applied and their prompts are skipped (preventing accidental overrides by pressing Enter). In unattended mode (`-NonInteractive`), all options execute deterministically without any prompt hangs.
@@ -270,20 +303,19 @@ When finished, your bootable ISO will be generated in the script directory as `n
 
 ---
 
-## 🛠️ Installation & Setup Guide (推奨・デフォルトインストール手順)
+## 🛠️ Installation & Setup Guide (ゼロクリック自動インストール)
 
 nano11 creates an ultra-minimal, high-performance Windows 11 installation by stripping redundant cloud bloatware, telemetry, and Microsoft Account requirements.
 
-Because cloud-dependent OOBE components are stripped to maintain the lightest possible footprint, Windows Setup may pause at a prompt or error dialog during the final configuration phase:
-> *"Windows could not complete the installation. To install Windows on this computer, restart the installation."*  
-> (または「Windows could not complete the installation. コンピュータを再起動してインストールを再開してください」)
+### ⚡ Zero-Click Fully Automated Installation (デフォルト: 完全自動・Shift+F10不要)
+本バージョンでは、`autounattend.xml` の specialize パス、offline レジストリ、および `SetupComplete.cmd` / `FirstLogon.ps1` においてセットアップ完了フラグ（`ChildCompletion\setup.exe = 3`, `SetupType = 0`, `SystemSetupInProgress = 0`, `OOBEInProgress = 0` 等）が事前自動注入されます。
 
-**nano11 では、この状態から再インストールを行わずにそのままデスクトップを起動させる以下の手順を【推奨・デフォルトのインストール完了方法】として案内しています。**  
-Windows のコアファイルは既に 100% 展開・インストール済みであるため、1分足らずの簡単なキー操作でセットアップ検証を通過し、デスクトップへ直行できます。
+これにより、**インストール途中で「Windows could not complete the installation」ダイアログが表示されることなく、キーボードの `Shift + F10` 操作も一切不要で、クリーンインストール開始からデスクトップ画面まで100%全自動（ゼロクリック）で到達します。**
 
 ---
 
-### 🚀 Default Setup Completion Procedure (セットアップ完了手順)
+### 🔧 トラブルシューティング（手動完了手順・緊急用）
+万が一、無人応答ファイルを使用しない手動インストール時や旧環境で「Windows could not complete the installation」が表示されて一時停止した場合は、以下の手順で1分以内にデスクトップを起動できます：
 
 #### **1. ISO からの通常起動とインストール**
 - 生成された `nano11.iso` を Rufus や Ventoy 等で USB メモリに書き込み（または仮想マシンにマウントして）PC を起動します。

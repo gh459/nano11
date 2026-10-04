@@ -1,0 +1,22 @@
+{
+  "ProfileName": "VM & Developer Workstation",
+  "Description": "Optimized for Virtual Machines and development environments with WSL2 pre-enabled, Windows Update and Store preserved, unnecessary hardware services stripped",
+  "Version": "2.0",
+  "Settings": {
+    "RemoveDefender": false,
+    "KeepAsianIME": true,
+    "KeepExtraFonts": true,
+    "RemoveDrivers": true,
+    "DisableWindowsUpdate": false,
+    "KeepBluetooth": false,
+    "WSLSupport": true,
+    "KeepRecoveryEnv": true,
+    "SafeDebloatMode": true,
+    "UltraSlimMode": false,
+    "SetJapaneseKeyboard": false,
+    "AtlasReviOSMode": false,
+    "BundleOptimizationToolkit": false,
+    "RemoveStore": false,
+    "PayloadFormat": "WIM"
+  }
+}

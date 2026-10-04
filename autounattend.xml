@@ -169,6 +169,10 @@
           <Order>6</Order>
           <Path>reg.exe add "HKLM\SYSTEM\CurrentControlSet\Control\BitLocker" /v PreventDeviceEncryption /t REG_DWORD /d 1 /f</Path>
         </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>7</Order>
+          <Path>powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -WindowStyle Hidden -Command "Set-ItemProperty -Path 'HKLM:\SYSTEM\Setup\Status\ChildCompletion' -Name 'setup.exe' -Value 3 -Type DWord -Force -ErrorAction SilentlyContinue; Set-ItemProperty -Path 'HKLM:\SYSTEM\Setup\Status\ChildCompletion' -Name 'audit.exe' -Value 3 -Type DWord -Force -ErrorAction SilentlyContinue; Set-ItemProperty -Path 'HKLM:\SYSTEM\Setup\Status\ChildCompletion' -Name 'oobe.exe' -Value 3 -Type DWord -Force -ErrorAction SilentlyContinue; Set-ItemProperty -Path 'HKLM:\SYSTEM\Setup' -Name 'SetupType' -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue; Set-ItemProperty -Path 'HKLM:\SYSTEM\Setup' -Name 'SystemSetupInProgress' -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue; Set-ItemProperty -Path 'HKLM:\SYSTEM\Setup' -Name 'OOBEInProgress' -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue; Set-ItemProperty -Path 'HKLM:\SYSTEM\Setup\Status\SysprepStatus' -Name 'CleanupState' -Value 2 -Type DWord -Force -ErrorAction SilentlyContinue; Set-ItemProperty -Path 'HKLM:\SYSTEM\Setup\Status\SysprepStatus' -Name 'GeneralizationState' -Value 7 -Type DWord -Force -ErrorAction SilentlyContinue;"</Path>
+        </RunSynchronousCommand>
       </RunSynchronous>
     </component>
     <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="x86" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
@@ -200,6 +204,10 @@
           <Order>6</Order>
           <Path>reg.exe add "HKLM\SYSTEM\CurrentControlSet\Control\BitLocker" /v PreventDeviceEncryption /t REG_DWORD /d 1 /f</Path>
         </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>7</Order>
+          <Path>powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -WindowStyle Hidden -Command "Set-ItemProperty -Path 'HKLM:\SYSTEM\Setup\Status\ChildCompletion' -Name 'setup.exe' -Value 3 -Type DWord -Force -ErrorAction SilentlyContinue; Set-ItemProperty -Path 'HKLM:\SYSTEM\Setup\Status\ChildCompletion' -Name 'audit.exe' -Value 3 -Type DWord -Force -ErrorAction SilentlyContinue; Set-ItemProperty -Path 'HKLM:\SYSTEM\Setup\Status\ChildCompletion' -Name 'oobe.exe' -Value 3 -Type DWord -Force -ErrorAction SilentlyContinue; Set-ItemProperty -Path 'HKLM:\SYSTEM\Setup' -Name 'SetupType' -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue; Set-ItemProperty -Path 'HKLM:\SYSTEM\Setup' -Name 'SystemSetupInProgress' -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue; Set-ItemProperty -Path 'HKLM:\SYSTEM\Setup' -Name 'OOBEInProgress' -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue; Set-ItemProperty -Path 'HKLM:\SYSTEM\Setup\Status\SysprepStatus' -Name 'CleanupState' -Value 2 -Type DWord -Force -ErrorAction SilentlyContinue; Set-ItemProperty -Path 'HKLM:\SYSTEM\Setup\Status\SysprepStatus' -Name 'GeneralizationState' -Value 7 -Type DWord -Force -ErrorAction SilentlyContinue;"</Path>
+        </RunSynchronousCommand>
       </RunSynchronous>
     </component>
     <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="arm64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
@@ -230,6 +238,10 @@
         <RunSynchronousCommand wcm:action="add">
           <Order>6</Order>
           <Path>reg.exe add "HKLM\SYSTEM\CurrentControlSet\Control\BitLocker" /v PreventDeviceEncryption /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>7</Order>
+          <Path>powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -WindowStyle Hidden -Command "Set-ItemProperty -Path 'HKLM:\SYSTEM\Setup\Status\ChildCompletion' -Name 'setup.exe' -Value 3 -Type DWord -Force -ErrorAction SilentlyContinue; Set-ItemProperty -Path 'HKLM:\SYSTEM\Setup\Status\ChildCompletion' -Name 'audit.exe' -Value 3 -Type DWord -Force -ErrorAction SilentlyContinue; Set-ItemProperty -Path 'HKLM:\SYSTEM\Setup\Status\ChildCompletion' -Name 'oobe.exe' -Value 3 -Type DWord -Force -ErrorAction SilentlyContinue; Set-ItemProperty -Path 'HKLM:\SYSTEM\Setup' -Name 'SetupType' -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue; Set-ItemProperty -Path 'HKLM:\SYSTEM\Setup' -Name 'SystemSetupInProgress' -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue; Set-ItemProperty -Path 'HKLM:\SYSTEM\Setup' -Name 'OOBEInProgress' -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue; Set-ItemProperty -Path 'HKLM:\SYSTEM\Setup\Status\SysprepStatus' -Name 'CleanupState' -Value 2 -Type DWord -Force -ErrorAction SilentlyContinue; Set-ItemProperty -Path 'HKLM:\SYSTEM\Setup\Status\SysprepStatus' -Name 'GeneralizationState' -Value 7 -Type DWord -Force -ErrorAction SilentlyContinue;"</Path>
         </RunSynchronousCommand>
       </RunSynchronous>
     </component>
@@ -2205,6 +2217,45 @@ Write-Log "=====================================================================
 		reg.exe add "$pwr\bae08b81-2d5e-4688-ad6a-13243356654b" /v "ACSettingIndex" /t REG_DWORD /d 2 /f;
 		reg.exe add "$pwr\be337238-0d82-4146-a960-4f3749d470c2" /v "ACSettingIndex" /t REG_DWORD /d 2 /f;
 	};
+	{
+		# Zero-Click Setup Completion (Prevents 'Windows could not complete installation' Shift+F10 prompt)
+		reg.exe add "HKLM\SYSTEM\Setup\Status\ChildCompletion" /v "setup.exe" /t REG_DWORD /d 3 /f;
+		reg.exe add "HKLM\SYSTEM\Setup\Status\ChildCompletion" /v "audit.exe" /t REG_DWORD /d 3 /f;
+		reg.exe add "HKLM\SYSTEM\Setup\Status\ChildCompletion" /v "oobe.exe" /t REG_DWORD /d 3 /f;
+		reg.exe add "HKLM\SYSTEM\Setup" /v "SetupType" /t REG_DWORD /d 0 /f;
+		reg.exe add "HKLM\SYSTEM\Setup" /v "SystemSetupInProgress" /t REG_DWORD /d 0 /f;
+		reg.exe add "HKLM\SYSTEM\Setup" /v "OOBEInProgress" /t REG_DWORD /d 0 /f;
+		reg.exe add "HKLM\SYSTEM\Setup\Status\SysprepStatus" /v "CleanupState" /t REG_DWORD /d 2 /f;
+		reg.exe add "HKLM\SYSTEM\Setup\Status\SysprepStatus" /v "GeneralizationState" /t REG_DWORD /d 7 /f;
+	};
+	{
+		# OEM Information &amp; Model Branding
+		reg.exe add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\OEMInformation" /v "Manufacturer" /t REG_SZ /d "nano11 Project" /f;
+		reg.exe add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\OEMInformation" /v "Model" /t REG_SZ /d "nano11 Ultra-Light Edition" /f;
+		reg.exe add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\OEMInformation" /v "SupportURL" /t REG_SZ /d "https://github.com/gh459/nano11" /f;
+	};
+	{
+		# Enable MSI (Message Signaled Interrupts) across all PCI devices (GPU, NVMe, NIC)
+		try {
+			Get-ChildItem -Path "HKLM:\SYSTEM\CurrentControlSet\Enum\PCI" -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.PSChildName -eq "Device Parameters" } | ForEach-Object {
+				$msiPath = Join-Path -Path $_.PSPath -ChildPath "Interrupt Management\MessageSignaledInterruptProperties";
+				New-Item -Path $msiPath -Force -ErrorAction SilentlyContinue | Out-Null;
+				Set-ItemProperty -Path $msiPath -Name "MSISupported" -Value 1 -Type DWord -Force -ErrorAction SilentlyContinue;
+			}
+		} catch {}
+	};
+	{
+		# HAGS (Hardware Accelerated GPU Scheduling) Default Enabled &amp; Driver Exclusion
+		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers" /v "HwSchMode" /t REG_DWORD /d 2 /f;
+		reg.exe add "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate" /v "ExcludeWUDriversInQualityUpdate" /t REG_DWORD /d 1 /f;
+	};
+	{
+		# Japanese IME &amp; Input Telemetry Cloud Opt-Out
+		reg.exe add "HKLM\SOFTWARE\Microsoft\Input\Settings" /v "EnableCloudCandidate" /t REG_DWORD /d 0 /f;
+		reg.exe add "HKLM\SOFTWARE\Policies\Microsoft\InputPersonalization" /v "AllowInputPersonalization" /t REG_DWORD /d 0 /f;
+		reg.exe add "HKLM\SOFTWARE\Policies\Microsoft\InputPersonalization" /v "RestrictImplicitInkCollection" /t REG_DWORD /d 1 /f;
+		reg.exe add "HKLM\SOFTWARE\Policies\Microsoft\InputPersonalization" /v "RestrictImplicitTextCollection" /t REG_DWORD /d 1 /f;
+	};
 );
 
 &amp; {
@@ -2249,6 +2300,9 @@ Write-Log "=====================================================================
 	{
 		# Radical RAM: DWM and visual effects per user
 		Set-ItemProperty -LiteralPath 'Registry::HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize' -Name 'EnableTransparency' -Type 'DWord' -Value 0 -Force;
+		Set-ItemProperty -LiteralPath 'Registry::HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize' -Name 'AppsUseLightTheme' -Type 'DWord' -Value 0 -Force;
+		Set-ItemProperty -LiteralPath 'Registry::HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize' -Name 'SystemUsesLightTheme' -Type 'DWord' -Value 0 -Force;
+		Set-ItemProperty -LiteralPath 'Registry::HKCU\Software\Microsoft\Input\Settings' -Name 'EnableCloudCandidate' -Type 'DWord' -Value 0 -Force -ErrorAction SilentlyContinue;
 		Set-ItemProperty -LiteralPath 'Registry::HKCU\Software\Microsoft\Windows\DWM' -Name 'ColorizationOpaqueBlend' -Type 'DWord' -Value 1 -Force;
 		Set-ItemProperty -LiteralPath 'Registry::HKCU\Control Panel\Desktop\WindowMetrics' -Name 'MinAnimate' -Type 'String' -Value '0' -Force;
 		Set-ItemProperty -LiteralPath 'Registry::HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects' -Name 'VisualFXSetting' -Type 'DWord' -Value 2 -Force;
@@ -2355,6 +2409,9 @@ Write-Log "=====================================================================
 		reg.exe add "HKU\DefaultUser\Software\Microsoft\Windows\CurrentVersion\BackgroundAccessApplications" /v "GlobalUserDisabled" /t REG_DWORD /d 1 /f;
 		reg.exe add "HKU\DefaultUser\Software\Microsoft\Windows\CurrentVersion\Policies\Attachments" /v "SaveZoneInformation" /t REG_DWORD /d 1 /f;
 		reg.exe add "HKU\DefaultUser\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize" /v "EnableTransparency" /t REG_DWORD /d 0 /f;
+		reg.exe add "HKU\DefaultUser\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize" /v "AppsUseLightTheme" /t REG_DWORD /d 0 /f;
+		reg.exe add "HKU\DefaultUser\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize" /v "SystemUsesLightTheme" /t REG_DWORD /d 0 /f;
+		reg.exe add "HKU\DefaultUser\Software\Microsoft\Input\Settings" /v "EnableCloudCandidate" /t REG_DWORD /d 0 /f;
 		reg.exe add "HKU\DefaultUser\Software\Microsoft\Windows\DWM" /v "ColorizationOpaqueBlend" /t REG_DWORD /d 1 /f;
 		reg.exe add "HKU\DefaultUser\Control Panel\Desktop\WindowMetrics" /v "MinAnimate" /t REG_SZ /d "0" /f;
 		reg.exe add "HKU\DefaultUser\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" /v "VisualFXSetting" /t REG_DWORD /d 2 /f;
@@ -2725,7 +2782,105 @@ powershell.exe -NoProfile -Command "try { $sig = '[DllImport(\"psapi.dll\")] pub
 echo Done.
 pause
 '@ | Set-Content -LiteralPath "$toolsDir\6. Free Memory &amp; Clear Temp.bat" -Encoding ascii;
+
+			# 7. Browser Grabber (Zero-Byte Fast Browser Installer on Public Desktop)
+			@'
+@echo off
+setlocal
+title nano11 - Web Browser Installer
+color 0b
+echo ========================================================
+echo   nano11 Fast Web Browser Installer
+echo ========================================================
+echo.
+echo  Select a modern web browser to install:
+echo.
+echo   [1] Google Chrome
+echo   [2] Mozilla Firefox
+echo   [3] Brave Browser
+echo   [4] Floorp Browser
+echo   [5] Microsoft Edge (Reinstall)
+echo   [0] Exit
+echo.
+set /p choice="Enter choice [0-5]: "
+if "%choice%"=="1" (
+    echo Downloading and installing Google Chrome...
+    powershell.exe -NoProfile -Command "Invoke-WebRequest -Uri 'https://dl.google.com/chrome/install/latest/chrome_installer.exe' -OutFile '$env:TEMP\chrome_setup.exe' -UseBasicParsing; Start-Process '$env:TEMP\chrome_setup.exe' -ArgumentList '/silent /install' -Wait"
+    echo Chrome installed successfully!
+)
+if "%choice%"=="2" (
+    echo Downloading and installing Mozilla Firefox...
+    powershell.exe -NoProfile -Command "Invoke-WebRequest -Uri 'https://download.mozilla.org/?product=firefox-latest-ssl&amp;os=win64&amp;lang=en-US' -OutFile '$env:TEMP\firefox_setup.exe' -UseBasicParsing; Start-Process '$env:TEMP\firefox_setup.exe' -ArgumentList '/S' -Wait"
+    echo Firefox installed successfully!
+)
+if "%choice%"=="3" (
+    echo Downloading and installing Brave Browser...
+    powershell.exe -NoProfile -Command "Invoke-WebRequest -Uri 'https://laptop-updates.brave.com/latest/winx64' -OutFile '$env:TEMP\brave_setup.exe' -UseBasicParsing; Start-Process '$env:TEMP\brave_setup.exe' -ArgumentList '/silent /install' -Wait"
+    echo Brave installed successfully!
+)
+if "%choice%"=="4" (
+    echo Downloading and installing Floorp Browser...
+    powershell.exe -NoProfile -Command "try { $rel = Invoke-RestMethod -Uri 'https://api.github.com/repos/Floorp-Projects/Floorp/releases/latest'; $asset = $rel.assets | Where-Object { $_.name -like '*win64*installer.exe' -or $_.name -like '*win64.installer.exe' } | Select-Object -First 1; if ($asset) { Invoke-WebRequest -Uri $asset.browser_download_url -OutFile '$env:TEMP\floorp_setup.exe' -UseBasicParsing; Start-Process '$env:TEMP\floorp_setup.exe' -ArgumentList '/S' -Wait; Write-Host 'Floorp installed!' -ForegroundColor Green } } catch {}"
+)
+if "%choice%"=="5" (
+    echo Downloading and installing Microsoft Edge...
+    powershell.exe -NoProfile -Command "Invoke-WebRequest -Uri 'https://go.microsoft.com/fwlink/?linkid=2108834&amp;Channel=Stable&amp;language=en' -OutFile '$env:TEMP\EdgeSetup.exe' -UseBasicParsing; Start-Process '$env:TEMP\EdgeSetup.exe' -ArgumentList '/silent /install' -Wait"
+    echo Edge installed successfully!
+)
+pause
+'@ | Set-Content -LiteralPath "$env:PUBLIC\Desktop\Install-Browser.cmd" -Encoding ascii;
+
+			# 8. Unified nano11 Control Center on Public Desktop
+			@'
+@echo off
+setlocal
+title nano11 System Control Center
+:MENU
+cls
+color 0b
+echo ========================================================
+echo   nano11 System Control Center
+echo ========================================================
+echo.
+echo   [1] Toggle Windows Defender
+echo   [2] Toggle Windows Update
+echo   [3] Toggle Hibernation (Free Disk Space)
+echo   [4] Toggle Bluetooth Services
+echo   [5] Toggle Print Spooler
+echo   [6] Free RAM ^&amp; Clear Temporary Files
+echo   [7] Install Web Browser
+echo   [8] Open Atlas / ReviOS Tools Folder
+echo   [0] Exit
+echo.
+set /p sel="Enter option [0-8]: "
+if "%sel%"=="1" call "%~dp0Atlas-ReviOS Tools\1. Toggle Windows Defender.bat" &amp; goto MENU
+if "%sel%"=="2" call "%~dp0Atlas-ReviOS Tools\2. Toggle Windows Update.bat" &amp; goto MENU
+if "%sel%"=="3" call "%~dp0Atlas-ReviOS Tools\3. Toggle Hibernation.bat" &amp; goto MENU
+if "%sel%"=="4" call "%~dp0Atlas-ReviOS Tools\4. Toggle Bluetooth.bat" &amp; goto MENU
+if "%sel%"=="5" call "%~dp0Atlas-ReviOS Tools\5. Toggle Print Spooler.bat" &amp; goto MENU
+if "%sel%"=="6" call "%~dp0Atlas-ReviOS Tools\6. Free Memory &amp; Clear Temp.bat" &amp; goto MENU
+if "%sel%"=="7" call "%~dp0Install-Browser.cmd" &amp; goto MENU
+if "%sel%"=="8" explorer.exe "%~dp0Atlas-ReviOS Tools" &amp; goto MENU
+if "%sel%"=="0" exit /b
+goto MENU
+'@ | Set-Content -LiteralPath "$env:PUBLIC\Desktop\nano11-Control-Center.cmd" -Encoding ascii;
 		} catch {}
+	};
+	{
+		# Custom Post-Install User Scripts Execution Hook (from tools/custom-scripts/)
+		$customDir = "C:\Windows\Setup\Scripts\Custom";
+		if (Test-Path $customDir) {
+			Get-ChildItem -Path $customDir -File | Sort-Object Name | ForEach-Object {
+				try {
+					switch ($_.Extension.ToLower()) {
+						'.ps1' { &amp; powershell.exe -ExecutionPolicy Bypass -NoProfile -File $_.FullName }
+						'.bat' { &amp; cmd.exe /c "`"$($_.FullName)`"" }
+						'.cmd' { &amp; cmd.exe /c "`"$($_.FullName)`"" }
+						'.reg' { &amp; reg.exe import $_.FullName }
+					}
+				} catch {}
+			}
+		}
 	};
 );
 

@@ -1,0 +1,22 @@
+{
+  "ProfileName": "Audio & DAW Production",
+  "Description": "Optimized for Digital Audio Workstations and music production with minimal DPC latency, background indexing disabled, audio and Bluetooth interfaces preserved",
+  "Version": "2.0",
+  "Settings": {
+    "RemoveDefender": true,
+    "KeepAsianIME": true,
+    "KeepExtraFonts": true,
+    "RemoveDrivers": false,
+    "DisableWindowsUpdate": true,
+    "KeepBluetooth": true,
+    "WSLSupport": false,
+    "KeepRecoveryEnv": false,
+    "SafeDebloatMode": true,
+    "UltraSlimMode": true,
+    "SetJapaneseKeyboard": true,
+    "AtlasReviOSMode": true,
+    "BundleOptimizationToolkit": true,
+    "RemoveStore": false,
+    "PayloadFormat": "WIM"
+  }
+}

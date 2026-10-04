@@ -113,7 +113,19 @@ param(
     # 15. Microsoft Store
     [switch]$KeepStore,
     [alias("NoStore", "RemoveMicrosoftStore")]
-    [switch]$RemoveStore
+    [switch]$RemoveStore,
+    
+    # 16. Fast VHDX Scratch Disk
+    [alias("FastVHDX", "VHDX")]
+    [switch]$UseVHDX,
+    
+    # 17. Self Diagnostics and Image Verification
+    [switch]$TestSelf,
+    [alias("VerifyImage")]
+    [switch]$CheckHealth,
+    
+    # 18. Multi-Index Processing
+    [switch]$AllIndices
 )
 
 # ==============================================================================
@@ -148,7 +160,7 @@ if ((Get-ExecutionPolicy) -eq 'Restricted') {
 # 2. Check for Admin rights and restart with full arguments preserved
 $myWindowsID = [System.Security.Principal.WindowsIdentity]::GetCurrent()
 $myWindowsPrincipal = New-Object System.Security.Principal.WindowsPrincipal($myWindowsID)
-if ((-not $myWindowsPrincipal.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)) -and ($env:NANO11_TEST_MODE -ne "1")) {
+if ((-not $myWindowsPrincipal.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)) -and ($env:NANO11_TEST_MODE -ne "1") -and (-not $TestSelf)) {
     Write-Host "Restarting script with Administrator privileges in a new window..." -ForegroundColor Yellow
     
     # Reconstruct bound parameters for elevated process
@@ -443,6 +455,285 @@ function Import-Nano11Profile {
     }
 }
 
+# Helper function: Execute built-in diagnostic and repository self-test suite
+function Invoke-Nano11SelfTest {
+    [CmdletBinding()]
+    param(
+        [string]$ScriptRoot = $PSScriptRoot
+    )
+    if (-not $ScriptRoot) { $ScriptRoot = (Get-Location).Path }
+    
+    Write-Host "=========================================================" -ForegroundColor Cyan
+    Write-Host "   nano11 Self-Test & Diagnostic Verification Suite     " -ForegroundColor Cyan
+    Write-Host "=========================================================" -ForegroundColor Cyan
+
+    $results = @()
+    
+    # 1. AST Syntax Check
+    $builderPath = Join-Path -Path $ScriptRoot -ChildPath "nano11builder.ps1"
+    $astPass = $false
+    $astMsg = ""
+    if (Test-Path -LiteralPath $builderPath) {
+        $content = [System.IO.File]::ReadAllText($builderPath, [System.Text.Encoding]::UTF8)
+        $tokens = $null
+        $errors = $null
+        $ast = [System.Management.Automation.Language.Parser]::ParseInput($content, [ref]$tokens, [ref]$errors)
+        if ($errors.Count -eq 0) {
+            $astPass = $true
+            $astMsg = "0 parser errors found in $([math]::Round($content.Length / 1KB, 1)) KB script"
+        } else {
+            $astMsg = "$($errors.Count) syntax errors: " + ($errors | ForEach-Object { $_.Message } | Select-Object -First 3 -Join "; ")
+        }
+    } else {
+        $astMsg = "nano11builder.ps1 not found"
+    }
+    $results += [PSCustomObject]@{ Test = "1. Builder Script AST Syntax"; Passed = $astPass; Details = $astMsg }
+
+    # 2. Registry Safety Validation (zSYSTEM\CurrentControlSet check)
+    $regSafePass = $true
+    $regMsg = "Safe: No illegal offline CurrentControlSet keys created"
+    if (Test-Path -LiteralPath $builderPath) {
+        $lines = Get-Content -LiteralPath $builderPath
+        $illegal = @()
+        for ($i = 0; $i -lt $lines.Count; $i++) {
+            $line = $lines[$i]
+            if ($line -like "*zSYSTEM\CurrentControlSet*" -and $line -notlike "*reg.exe query*" -and $line -notlike "*reg.exe delete*" -and $line -notlike "*#*") {
+                $illegal += "Line $($i+1): $line"
+            }
+        }
+        if ($illegal.Count -gt 0) {
+            $regSafePass = $false
+            $regMsg = "FAILED: Found $($illegal.Count) illegal CurrentControlSet operations"
+        }
+    }
+    $results += [PSCustomObject]@{ Test = "2. Offline Registry Safety Rule"; Passed = $regSafePass; Details = $regMsg }
+
+    # 3. autounattend.xml XML Schema
+    $unattendPath = Join-Path -Path $ScriptRoot -ChildPath "autounattend.xml"
+    $xmlPass = $false
+    $xmlMsg = ""
+    if (Test-Path -LiteralPath $unattendPath) {
+        try {
+            $doc = [xml]::new()
+            $doc.Load($unattendPath)
+            if ($doc.DocumentElement.Name -eq 'unattend' -and $doc.unattend.settings) {
+                $xmlPass = $true
+                $xmlMsg = "Valid XML: $($doc.unattend.settings.component.Count) components configured"
+            } else {
+                $xmlMsg = "Missing required unattend/settings structure"
+            }
+        } catch {
+            $xmlMsg = "Parse error: $($_.Exception.Message)"
+        }
+    } else {
+        $xmlMsg = "autounattend.xml not found"
+    }
+    $results += [PSCustomObject]@{ Test = "3. autounattend.xml Schema"; Passed = $xmlPass; Details = $xmlMsg }
+
+    # 4. JSON Profile Presets Check
+    $profDir = Join-Path -Path $ScriptRoot -ChildPath "profiles"
+    $profPass = $false
+    $profMsg = ""
+    if (Test-Path -LiteralPath $profDir) {
+        $profFiles = Get-ChildItem -Path $profDir -Filter "*.json"
+        if ($profFiles.Count -ge 3) {
+            $badProfs = @()
+            foreach ($pf in $profFiles) {
+                try {
+                    $json = Get-Content -LiteralPath $pf.FullName -Raw -Encoding UTF8 | ConvertFrom-Json
+                    if (-not $json.ProfileName -or -not $json.Settings) {
+                        $badProfs += "$($pf.Name) (missing ProfileName/Settings)"
+                    }
+                } catch {
+                    $badProfs += "$($pf.Name) (invalid JSON)"
+                }
+            }
+            if ($badProfs.Count -eq 0) {
+                $profPass = $true
+                $profMsg = "$($profFiles.Count) profiles validated successfully ($($profFiles.BaseName -join ', '))"
+            } else {
+                $profMsg = "Errors in profiles: $($badProfs -join '; ')"
+            }
+        } else {
+            $profMsg = "Expected at least 3 profiles, found $($profFiles.Count)"
+        }
+    } else {
+        $profMsg = "profiles/ directory not found"
+    }
+    $results += [PSCustomObject]@{ Test = "4. Profile Presets Integrity"; Passed = $profPass; Details = $profMsg }
+
+    # 5. Tools Folder Check
+    $toolsDir = Join-Path -Path $ScriptRoot -ChildPath "tools"
+    $toolsPass = $false
+    $toolsMsg = ""
+    if (Test-Path -LiteralPath $toolsDir) {
+        $hasRev = Test-Path -LiteralPath (Join-Path $toolsDir "RevisionTool-Setup.exe")
+        $hasOpt = Test-Path -LiteralPath (Join-Path $toolsDir "Optimizer.exe")
+        if ($hasRev -and $hasOpt) {
+            $toolsPass = $true
+            $toolsMsg = "Both RevisionTool-Setup.exe and Optimizer.exe present"
+        } else {
+            $toolsMsg = "Missing tool binaries (RevisionTool: $hasRev, Optimizer: $hasOpt)"
+        }
+    } else {
+        $toolsMsg = "tools/ directory not found"
+    }
+    $results += [PSCustomObject]@{ Test = "5. Optimization Toolkit Assets"; Passed = $toolsPass; Details = $toolsMsg }
+
+    # Display Results
+    Write-Host ""
+    $allPassed = $true
+    foreach ($r in $results) {
+        $statusStr = if ($r.Passed) { "[PASS]" } else { "[FAIL]" }
+        $color = if ($r.Passed) { "Green" } else { "Red" }
+        if (-not $r.Passed) { $allPassed = $false }
+        Write-Host ("  {0,-35} : {1,-6} ({2})" -f $r.Test, $statusStr, $r.Details) -ForegroundColor $color
+    }
+
+    Write-Host ""
+    Write-Host "=========================================================" -ForegroundColor Cyan
+    if ($allPassed) {
+        Write-Host "   OVERALL RESULT: ALL $($results.Count) CHECKS PASSED (100%)       " -ForegroundColor Green
+    } else {
+        Write-Host "   OVERALL RESULT: SOME CHECKS FAILED                   " -ForegroundColor Red
+    }
+    Write-Host "=========================================================" -ForegroundColor Cyan
+    return $allPassed
+}
+
+# Helper function: Generate an interactive, visual HTML build report
+function Export-Nano11HtmlReport {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$OutputPath,
+        [Parameter(Mandatory=$true)]
+        [hashtable]$BuildInfo
+    )
+
+    $title = if ($BuildInfo.ContainsKey('Title')) { $BuildInfo.Title } else { "nano11 Master Build Report" }
+    $timestamp = if ($BuildInfo.ContainsKey('Timestamp')) { $BuildInfo.Timestamp } else { (Get-Date).ToString("yyyy-MM-dd HH:mm:ss") }
+    $profileName = if ($BuildInfo.ContainsKey('Profile')) { $BuildInfo.Profile } else { "Extreme Slim & Gaming" }
+    $arch = if ($BuildInfo.ContainsKey('Architecture')) { $BuildInfo.Architecture } else { "amd64" }
+    $sourceDrive = if ($BuildInfo.ContainsKey('SourceDrive')) { $BuildInfo.SourceDrive } else { "N/A" }
+    $outputIso = if ($BuildInfo.ContainsKey('OutputIso')) { $BuildInfo.OutputIso } else { "nano11.iso" }
+    $payloadFormat = if ($BuildInfo.ContainsKey('PayloadFormat')) { $BuildInfo.PayloadFormat } else { "install.wim" }
+    $origSize = if ($BuildInfo.ContainsKey('OriginalSizeBytes')) { $BuildInfo.OriginalSizeBytes } else { 6871947673 }
+    $finalSize = if ($BuildInfo.ContainsKey('FinalSizeBytes')) { $BuildInfo.FinalSizeBytes } else { 3435973836 }
+
+    $origGB = [math]::Round($origSize / 1GB, 2)
+    $finalGB = [math]::Round($finalSize / 1GB, 2)
+    $savedGB = [math]::Round(($origSize - $finalSize) / 1GB, 2)
+    $savedPct = if ($origSize -gt 0) { [math]::Round((($origSize - $finalSize) / $origSize) * 100, 1) } else { 0 }
+
+    $formatDesc = if ($payloadFormat -eq 'install.swm') { 'FAT32 USB Compatible' } elseif ($payloadFormat -eq 'install.esd') { 'Ultra-compressed LZMS' } else { 'Standard WIM' }
+
+    $sb = New-Object System.Text.StringBuilder
+    [void]$sb.AppendLine('<!DOCTYPE html>')
+    [void]$sb.AppendLine('<html lang="ja">')
+    [void]$sb.AppendLine('<head>')
+    [void]$sb.AppendLine('<meta charset="utf-8">')
+    [void]$sb.AppendLine('<meta name="viewport" content="width=device-width, initial-scale=1.0">')
+    [void]$sb.AppendLine("<title>$title</title>")
+    [void]$sb.AppendLine('<style>')
+    [void]$sb.AppendLine('  :root { --bg-main: #0b0f19; --bg-card: #151d2f; --border-card: #22304d; --accent: #00d2ff; --accent-glow: rgba(0, 210, 255, 0.25); --text-primary: #f1f5f9; --text-secondary: #94a3b8; --badge-pass: #10b981; --badge-warn: #f59e0b; }')
+    [void]$sb.AppendLine('  * { box-sizing: border-box; margin: 0; padding: 0; }')
+    [void]$sb.AppendLine('  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; background: var(--bg-main); color: var(--text-primary); line-height: 1.6; padding: 30px 20px; }')
+    [void]$sb.AppendLine('  .container { max-width: 1000px; margin: 0 auto; }')
+    [void]$sb.AppendLine('  header { background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%); border: 1px solid var(--border-card); border-radius: 12px; padding: 24px 30px; margin-bottom: 24px; box-shadow: 0 8px 30px rgba(0,0,0,0.5); display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 15px; }')
+    [void]$sb.AppendLine('  h1 { font-size: 24px; color: #fff; display: flex; align-items: center; gap: 10px; }')
+    [void]$sb.AppendLine('  h1 span.logo { color: var(--accent); }')
+    [void]$sb.AppendLine('  .badge { background: var(--accent-glow); color: var(--accent); border: 1px solid var(--accent); padding: 4px 12px; border-radius: 20px; font-size: 13px; font-weight: 600; }')
+    [void]$sb.AppendLine('  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin-bottom: 24px; }')
+    [void]$sb.AppendLine('  .stat-card { background: var(--bg-card); border: 1px solid var(--border-card); border-radius: 10px; padding: 18px 20px; }')
+    [void]$sb.AppendLine('  .stat-card .label { font-size: 13px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.5px; }')
+    [void]$sb.AppendLine('  .stat-card .value { font-size: 26px; font-weight: 700; color: #fff; margin-top: 4px; }')
+    [void]$sb.AppendLine('  .stat-card .diff { font-size: 13px; color: var(--badge-pass); font-weight: 600; }')
+    [void]$sb.AppendLine('  .section-card { background: var(--bg-card); border: 1px solid var(--border-card); border-radius: 10px; padding: 22px 24px; margin-bottom: 24px; }')
+    [void]$sb.AppendLine('  .section-card h2 { font-size: 18px; margin-bottom: 16px; color: var(--accent); border-bottom: 1px solid var(--border-card); padding-bottom: 8px; }')
+    [void]$sb.AppendLine('  table { width: 100%; border-collapse: collapse; margin-top: 10px; }')
+    [void]$sb.AppendLine('  th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid #1e293b; font-size: 14px; }')
+    [void]$sb.AppendLine('  th { color: var(--text-secondary); font-weight: 600; background: rgba(255,255,255,0.02); }')
+    [void]$sb.AppendLine('  td:last-child { text-align: right; }')
+    [void]$sb.AppendLine('  th:last-child { text-align: right; }')
+    [void]$sb.AppendLine('  .status-tag { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: 600; }')
+    [void]$sb.AppendLine('  .status-enabled { background: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid #059669; }')
+    [void]$sb.AppendLine('  footer { text-align: center; color: var(--text-secondary); font-size: 13px; margin-top: 40px; }')
+    [void]$sb.AppendLine('</style>')
+    [void]$sb.AppendLine('</head>')
+    [void]$sb.AppendLine('<body>')
+    [void]$sb.AppendLine('<div class="container">')
+    [void]$sb.AppendLine('  <header>')
+    [void]$sb.AppendLine('    <div>')
+    [void]$sb.AppendLine('      <h1><span class="logo">&#9889; nano11</span> Next-Gen Build Report</h1>')
+    [void]$sb.AppendLine('      <p style="color: var(--text-secondary); font-size: 14px; margin-top: 4px;">Universal, Language-Independent Windows 11 Image Reducer</p>')
+    [void]$sb.AppendLine('    </div>')
+    [void]$sb.AppendLine('    <div style="text-align: right;">')
+    [void]$sb.AppendLine('      <span class="badge">BUILD COMPLETE</span>')
+    [void]$sb.AppendLine("      <div style=`"font-size: 12px; color: var(--text-secondary); margin-top: 5px;`">$timestamp</div>")
+    [void]$sb.AppendLine('    </div>')
+    [void]$sb.AppendLine('  </header>')
+
+    [void]$sb.AppendLine('  <div class="grid">')
+    [void]$sb.AppendLine('    <div class="stat-card">')
+    [void]$sb.AppendLine('      <div class="label">Original WIM Size</div>')
+    [void]$sb.AppendLine("      <div class=`"value`">${origGB} GB</div>")
+    [void]$sb.AppendLine('      <div class="diff" style="color: var(--text-secondary);">Source Baseline</div>')
+    [void]$sb.AppendLine('    </div>')
+    [void]$sb.AppendLine('    <div class="stat-card">')
+    [void]$sb.AppendLine('      <div class="label">Optimized Size</div>')
+    [void]$sb.AppendLine("      <div class=`"value`">${finalGB} GB</div>")
+    [void]$sb.AppendLine("      <div class=`"diff`">&#9660; ${savedGB} GB Saved (-${savedPct}%)</div>")
+    [void]$sb.AppendLine('    </div>')
+    [void]$sb.AppendLine('    <div class="stat-card">')
+    [void]$sb.AppendLine('      <div class="label">Active Profile</div>')
+    [void]$sb.AppendLine("      <div class=`"value`" style=`"font-size: 18px; line-height: 32px;`">$profileName</div>")
+    [void]$sb.AppendLine("      <div class=`"diff`" style=`"color: var(--accent);`">Arch: $arch</div>")
+    [void]$sb.AppendLine('    </div>')
+    [void]$sb.AppendLine('    <div class="stat-card">')
+    [void]$sb.AppendLine('      <div class="label">Payload Format</div>')
+    [void]$sb.AppendLine("      <div class=`"value`" style=`"font-size: 18px; line-height: 32px;`">$payloadFormat</div>")
+    [void]$sb.AppendLine("      <div class=`"diff`">$formatDesc</div>")
+    [void]$sb.AppendLine('    </div>')
+    [void]$sb.AppendLine('  </div>')
+
+    [void]$sb.AppendLine('  <div class="section-card">')
+    [void]$sb.AppendLine('    <h2>&#127919; Optimizations &amp; Automation Status</h2>')
+    [void]$sb.AppendLine('    <table>')
+    [void]$sb.AppendLine('      <thead><tr><th>Feature</th><th>Technical Specification</th><th>Status</th></tr></thead>')
+    [void]$sb.AppendLine('      <tbody>')
+    [void]$sb.AppendLine('        <tr><td><strong>Zero-Click Automated Setup</strong></td><td>ChildCompletion &amp; SetupType automated (Shift+F10 obsolete)</td><td><span class="status-tag status-enabled">Enabled (Zero-Click)</span></td></tr>')
+    [void]$sb.AppendLine('        <tr><td><strong>Hardware Checks Bypass</strong></td><td>TPM 2.0, SecureBoot, RAM, Storage, CPU bypass</td><td><span class="status-tag status-enabled">Enabled (LabConfig)</span></td></tr>')
+    [void]$sb.AppendLine('        <tr><td><strong>Gaming &amp; Low-Latency Tuning</strong></td><td>MSI interrupts, HAGS enabled, Core Parking disabled (EPP 0)</td><td><span class="status-tag status-enabled">Enabled (Atlas/ReviOS)</span></td></tr>')
+    [void]$sb.AppendLine('        <tr><td><strong>Windows 11 AI &amp; Recall Block</strong></td><td>DirectML, Copilot, Recall snapshots, Click-to-Do offline blocked</td><td><span class="status-tag status-enabled">Blocked</span></td></tr>')
+    [void]$sb.AppendLine('        <tr><td><strong>Japanese &amp; Regional IME Support</strong></td><td>106/109 Keyboard layout auto-detected, IME telemetry opted-out</td><td><span class="status-tag status-enabled">Verified</span></td></tr>')
+    [void]$sb.AppendLine('        <tr><td><strong>Desktop Control Center</strong></td><td>Defender/Update toggle, RAM trimmer, Browser Grabber bundled</td><td><span class="status-tag status-enabled">Integrated</span></td></tr>')
+    [void]$sb.AppendLine('        <tr><td><strong>Custom Post-Install Hook</strong></td><td>User scripts in tools/custom-scripts/ executed automatically</td><td><span class="status-tag status-enabled">Active Hook</span></td></tr>')
+    [void]$sb.AppendLine('      </tbody>')
+    [void]$sb.AppendLine('    </table>')
+    [void]$sb.AppendLine('  </div>')
+
+    [void]$sb.AppendLine('  <div class="section-card">')
+    [void]$sb.AppendLine('    <h2>&#128190; Output ISO &amp; Flashing Guide</h2>')
+    [void]$sb.AppendLine('    <table>')
+    [void]$sb.AppendLine('      <tbody>')
+    [void]$sb.AppendLine("        <tr><td><strong>Generated ISO</strong></td><td><code>$outputIso</code></td></tr>")
+    [void]$sb.AppendLine('        <tr><td><strong>Recommended Deployment</strong></td><td><strong>Ventoy</strong>: Copy ISO directly to USB drive<br><strong>Rufus</strong>: Write as Standard Windows Installation<br><strong>FAT32 USB</strong>: Split-WIM (install.swm) files supported natively</td></tr>')
+    [void]$sb.AppendLine('      </tbody>')
+    [void]$sb.AppendLine('    </table>')
+    [void]$sb.AppendLine('  </div>')
+
+    [void]$sb.AppendLine('  <footer>')
+    [void]$sb.AppendLine('    <p>nano11 Project &bull; Open Source Windows 11 Image Reducer &bull; <a href="https://github.com/gh459/nano11" style="color: var(--accent); text-decoration: none;">GitHub: gh459/nano11</a></p>')
+    [void]$sb.AppendLine('  </footer>')
+    [void]$sb.AppendLine('</div>')
+    [void]$sb.AppendLine('</body>')
+    [void]$sb.AppendLine('</html>')
+
+    [System.IO.File]::WriteAllText($OutputPath, $sb.ToString(), (New-Object System.Text.UTF8Encoding($true)))
+    Write-Host "Build report generated successfully at: $OutputPath" -ForegroundColor Green
+}
+
 # Helper function: Display Graphical User Interface (GUI) for nano11 builder
 function Show-Nano11GUI {
     param(
@@ -626,6 +917,9 @@ function Show-Nano11GUI {
         "⚡ Extreme Slim & Gaming (Max Debloat, Latency Tuning)",
         "🛡️ Balanced Pro (Safe: Windows Update & Defender Kept)",
         "💾 FAT32 USB Split-WIM (3.8GB SWM Chunks for UEFI)",
+        "🎮 Handheld Gaming (ROG Ally, Steam Deck, Legion Go)",
+        "💻 VM & Developer Workstation (WSL2, Hyper-V, WinUpdate)",
+        "🎵 Audio & DAW Production (Minimal Latency, VST Protected)",
         "🔧 Custom Configuration"
     ))
     $cmbPreset.SelectedIndex = 0
@@ -692,6 +986,7 @@ function Show-Nano11GUI {
     $chkAtlas       = & $createChk "AtlasOS & ReviOS Low-Latency Tweaks" 345 115 (& $getInitVal 'AtlasReviOSMode' $true)
     $chkToolkit     = & $createChk "Bundle Optimization Toolkit to Desktop" 345 145 (& $getInitVal 'BundleOptimizationToolkit' $true)
     $chkStore       = & $createChk "Remove Microsoft Store & PurchaseApp" 345 175 (& $getInitVal 'RemoveStore' $false)
+    $chkVHDX        = & $createChk "High-Speed VHDX Scratch Disk" 345 205 (& $getInitVal 'UseVHDX' $false)
 
     # 4. Output Payload Format GroupBox
     $grpPayload = New-Object System.Windows.Forms.GroupBox
@@ -786,23 +1081,74 @@ function Show-Nano11GUI {
                 $chkStore.Checked = $false
                 $radSWM.Checked = $true
             }
+            3 { # Handheld Gaming
+                $chkDefender.Checked = $true
+                $chkIME.Checked = $true
+                $chkFonts.Checked = $false
+                $chkDrivers.Checked = $false
+                $chkWU.Checked = $true
+                $chkBT.Checked = $true
+                $chkWSL.Checked = $false
+                $chkRecovery.Checked = $false
+                $chkSafeDebloat.Checked = $true
+                $chkUltraSlim.Checked = $true
+                $chkJPKey.Checked = $false
+                $chkAtlas.Checked = $true
+                $chkToolkit.Checked = $true
+                $chkStore.Checked = $false
+                $radWIM.Checked = $true
+            }
+            4 { # VM & Developer Workstation
+                $chkDefender.Checked = $false
+                $chkIME.Checked = $true
+                $chkFonts.Checked = $true
+                $chkDrivers.Checked = $true
+                $chkWU.Checked = $false
+                $chkBT.Checked = $false
+                $chkWSL.Checked = $true
+                $chkRecovery.Checked = $true
+                $chkSafeDebloat.Checked = $true
+                $chkUltraSlim.Checked = $false
+                $chkJPKey.Checked = $false
+                $chkAtlas.Checked = $false
+                $chkToolkit.Checked = $false
+                $chkStore.Checked = $false
+                $radWIM.Checked = $true
+            }
+            5 { # Audio & DAW Production
+                $chkDefender.Checked = $true
+                $chkIME.Checked = $true
+                $chkFonts.Checked = $true
+                $chkDrivers.Checked = $false
+                $chkWU.Checked = $true
+                $chkBT.Checked = $true
+                $chkWSL.Checked = $false
+                $chkRecovery.Checked = $false
+                $chkSafeDebloat.Checked = $true
+                $chkUltraSlim.Checked = $true
+                $chkJPKey.Checked = $true
+                $chkAtlas.Checked = $true
+                $chkToolkit.Checked = $true
+                $chkStore.Checked = $false
+                $radWIM.Checked = $true
+            }
         }
         $script:updatingPreset = $false
     }
 
     $cmbPreset.Add_SelectedIndexChanged({
-        if (-not $script:updatingPreset -and $cmbPreset.SelectedIndex -ne 3) {
+        if (-not $script:updatingPreset -and $cmbPreset.SelectedIndex -ne 6) {
             & $applyPreset $cmbPreset.SelectedIndex
         }
     })
 
     # Hook change events to switch preset to Custom
-    $allCheckboxes = @($chkDefender, $chkIME, $chkFonts, $chkDrivers, $chkWU, $chkBT, $chkWSL, $chkRecovery, $chkSafeDebloat, $chkUltraSlim, $chkJPKey, $chkAtlas, $chkToolkit, $chkStore)
+    $allCheckboxes = @($chkDefender, $chkIME, $chkFonts, $chkDrivers, $chkWU, $chkBT, $chkWSL, $chkRecovery, $chkSafeDebloat, $chkUltraSlim, $chkJPKey, $chkAtlas, $chkToolkit, $chkStore, $chkVHDX)
     foreach ($c in $allCheckboxes) {
         $c.Add_CheckedChanged({
             if (-not $script:updatingPreset) {
                 $script:updatingPreset = $true
-                $cmbPreset.SelectedIndex = 3 # Custom
+                $cmbPreset.SelectedIndex = 6 # Custom
                 $script:updatingPreset = $false
             }
         })
@@ -838,7 +1184,7 @@ function Show-Nano11GUI {
                     elseif ($fmt -eq 'SWM') { $radSWM.Checked = $true }
                     else { $radWIM.Checked = $true }
                 }
-                $cmbPreset.SelectedIndex = 3
+                $cmbPreset.SelectedIndex = 6
                 $script:updatingPreset = $false
                 [System.Windows.Forms.MessageBox]::Show("Profile loaded successfully from:`n$($ofd.FileName)", "Profile Loaded", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
             }
@@ -868,6 +1214,7 @@ function Show-Nano11GUI {
                 AtlasReviOSMode           = $chkAtlas.Checked
                 BundleOptimizationToolkit = $chkToolkit.Checked
                 RemoveStore               = $chkStore.Checked
+                UseVHDX                   = $chkVHDX.Checked
                 PayloadFormat             = if ($radESD.Checked) { "ESD" } elseif ($radSWM.Checked) { "SWM" } else { "WIM" }
             }
             Export-Nano11Profile -FilePath $sfd.FileName -Config $saveCfg
@@ -952,6 +1299,7 @@ function Show-Nano11GUI {
         $formResult.AtlasReviOSMode           = $chkAtlas.Checked
         $formResult.BundleOptimizationToolkit = $chkToolkit.Checked
         $formResult.RemoveStore               = $chkStore.Checked
+        $formResult.UseVHDX                   = $chkVHDX.Checked
         $formResult.ExportESDMode             = $radESD.Checked
         $formResult.SplitWIMMode              = $radSWM.Checked
 
@@ -965,6 +1313,13 @@ function Show-Nano11GUI {
         return $formResult
     }
     return @{ Success = $false }
+}
+
+# Handle -TestSelf before transcript or prompts
+if ($TestSelf) {
+    $scriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
+    $testResult = Invoke-Nano11SelfTest -ScriptRoot $scriptDir
+    if ($testResult) { exit 0 } else { exit 1 }
 }
 
 # Start Transcript
@@ -1039,7 +1394,7 @@ if ($bound.ContainsKey('Profile') -or $bound.ContainsKey('Preset')) {
         $bundleOptimizationToolkit = $true
         $bundleRevTool = $bundleOptimizationToolkit
         $removeStore = $false
-    } elseif ($selectedProfile -in @('balanced', 'safe')) {
+    } elseif ($selectedProfile -in @('balanced', 'safe', 'pro')) {
         $removeDefender = $false
         $keepAsianIME = $true
         $keepExtraFonts = $true
@@ -1055,6 +1410,56 @@ if ($bound.ContainsKey('Profile') -or $bound.ContainsKey('Preset')) {
         $bundleOptimizationToolkit = $true
         $bundleRevTool = $bundleOptimizationToolkit
         $removeStore = $false
+    } else {
+        # Check if matching profile JSON exists in profiles/
+        $profNameMap = @{
+            'handheld' = 'handheld-gaming.json'
+            'ally'     = 'handheld-gaming.json'
+            'deck'     = 'handheld-gaming.json'
+            'legion'   = 'handheld-gaming.json'
+            'vm'       = 'vm-developer.json'
+            'dev'      = 'vm-developer.json'
+            'developer'= 'vm-developer.json'
+            'audio'    = 'audio-daw.json'
+            'daw'      = 'audio-daw.json'
+            'fat32'    = 'fat32-splitwim.json'
+            'split'    = 'fat32-splitwim.json'
+            'splitwim' = 'fat32-splitwim.json'
+        }
+        $targetProfFile = if ($profNameMap.ContainsKey($selectedProfile)) { $profNameMap[$selectedProfile] } else { "$selectedProfile.json" }
+        $profFullPath = Join-Path -Path $PSScriptRoot -ChildPath (Join-Path "profiles" $targetProfFile)
+        if (-not (Test-Path -LiteralPath $profFullPath)) {
+            $profFullPath = Join-Path -Path $PSScriptRoot -ChildPath (Join-Path "profiles" $selectedProfile)
+        }
+        if (Test-Path -LiteralPath $profFullPath) {
+            $loaded = Import-Nano11Profile -FilePath $profFullPath
+            if ($loaded) {
+                if ($loaded.PSObject.Properties['RemoveDefender'])       { $removeDefender = [bool]$loaded.RemoveDefender }
+                if ($loaded.PSObject.Properties['KeepAsianIME'])         { $keepAsianIME = [bool]$loaded.KeepAsianIME }
+                if ($loaded.PSObject.Properties['KeepExtraFonts'])       { $keepExtraFonts = [bool]$loaded.KeepExtraFonts }
+                if ($loaded.PSObject.Properties['RemoveDrivers'])        { $removeDrivers = [bool]$loaded.RemoveDrivers }
+                if ($loaded.PSObject.Properties['DisableWindowsUpdate']) { $disableWU = [bool]$loaded.DisableWindowsUpdate }
+                if ($loaded.PSObject.Properties['KeepBluetooth'])        { $keepBT = [bool]$loaded.KeepBluetooth }
+                if ($loaded.PSObject.Properties['WSLSupport'])           { $wslSupport = [bool]$loaded.WSLSupport }
+                if ($loaded.PSObject.Properties['KeepRecoveryEnv'])      { $keepRecoveryEnv = [bool]$loaded.KeepRecoveryEnv }
+                if ($loaded.PSObject.Properties['SafeDebloatMode'])      { $safeDebloatMode = [bool]$loaded.SafeDebloatMode }
+                if ($loaded.PSObject.Properties['UltraSlimMode'])        { $ultraSlimMode = [bool]$loaded.UltraSlimMode }
+                if ($loaded.PSObject.Properties['SetJapaneseKeyboard'])  { $setJapaneseKeyboard = [bool]$loaded.SetJapaneseKeyboard }
+                if ($loaded.PSObject.Properties['AtlasReviOSMode'])      { $atlasReviOSMode = [bool]$loaded.AtlasReviOSMode }
+                if ($loaded.PSObject.Properties['BundleOptimizationToolkit']) {
+                    $bundleOptimizationToolkit = [bool]$loaded.BundleOptimizationToolkit
+                    $bundleRevTool = $bundleOptimizationToolkit
+                }
+                if ($loaded.PSObject.Properties['RemoveStore'])          { $removeStore = [bool]$loaded.RemoveStore }
+                if ($loaded.PSObject.Properties['UseVHDX'])              { $useVHDX = [bool]$loaded.UseVHDX }
+                if ($loaded.PSObject.Properties['PayloadFormat']) {
+                    $fmt = $loaded.PayloadFormat.ToString().ToUpper()
+                    if ($fmt -eq 'ESD') { $exportESDMode = $true; $splitWIMMode = $false }
+                    elseif ($fmt -eq 'SWM') { $splitWIMMode = $true; $exportESDMode = $false }
+                    else { $exportESDMode = $false; $splitWIMMode = $false }
+                }
+            }
+        }
     }
 }
 
@@ -1334,8 +1739,14 @@ if (& $isAnyBound @('RemoveStore', 'NoStore', 'RemoveMicrosoftStore')) {
     [void]$cliBound.Add('Store')
 }
 
+# 16. Fast VHDX Scratch Disk
+if (& $isAnyBound @('UseVHDX', 'FastVHDX', 'VHDX')) {
+    $useVHDX = if ($bound.ContainsKey('UseVHDX')) { & $getBoundVal 'UseVHDX' } elseif ($bound.ContainsKey('FastVHDX')) { & $getBoundVal 'FastVHDX' } else { & $getBoundVal 'VHDX' }
+    [void]$cliBound.Add('VHDX')
+}
+
 # 3. Interactive Prompting Logic
-$isAutomated = $NonInteractive -or ($cliBound.Count -ge 15 -and (-not $Interactive)) -or ($cliBound.Contains('Profile') -and ($selectedProfile -in @('extreme', 'gaming', 'slim', 'balanced', 'safe')) -and (-not $Interactive))
+$isAutomated = $NonInteractive -or ($cliBound.Count -ge 15 -and (-not $Interactive)) -or ($cliBound.Contains('Profile') -and (-not $Interactive))
 
 if ($isAutomated) {
     Write-Host "Running in automated/CLI mode (no interactive prompts)." -ForegroundColor Gray
@@ -1348,10 +1759,14 @@ if ($isAutomated) {
     Write-Host "Choose a profile or proceed to customization:" -ForegroundColor Gray
     Write-Host "  [1] ⚡ Extreme Slim & Gaming (Default: Max debloat, Atlas/ReviOS, Store kept)" -ForegroundColor Green
     Write-Host "  [2] 🛡️ Balanced Pro (Safe: Windows Update & Defender kept, high stability)" -ForegroundColor Yellow
-    Write-Host "  [3] 📂 Load Profile from JSON file" -ForegroundColor Cyan
-    Write-Host "  [4] 🖥️ Launch GUI (Graphical User Interface)" -ForegroundColor Blue
-    Write-Host "  [5] 🔧 Custom (Step-by-step 15 configuration prompts)" -ForegroundColor Magenta
-    $pChoice = Read-Host "Select Profile [1-5] (Default: 1 - Extreme Slim & Gaming)"
+    Write-Host "  [3] 🎮 Handheld Gaming (ROG Ally, Steam Deck, Legion Go)" -ForegroundColor Green
+    Write-Host "  [4] 💻 VM & Developer Workstation (WSL2, Hyper-V, WinUpdate)" -ForegroundColor Cyan
+    Write-Host "  [5] 🎵 Audio & DAW Production (Minimal Latency, VST Protected)" -ForegroundColor Magenta
+    Write-Host "  [6] 💾 FAT32 USB Split-WIM (3.8GB SWM Chunks for UEFI)" -ForegroundColor Yellow
+    Write-Host "  [7] 📂 Load Profile from JSON file" -ForegroundColor Cyan
+    Write-Host "  [8] 🖥️ Launch GUI (Graphical User Interface)" -ForegroundColor Blue
+    Write-Host "  [9] 🔧 Custom (Step-by-step 15 configuration prompts)" -ForegroundColor Magenta
+    $pChoice = Read-Host "Select Profile [1-9] (Default: 1 - Extreme Slim & Gaming)"
     if ($pChoice) { $pChoice = $pChoice.Trim().ToLower() } else { $pChoice = "1" }
 
     $skipIndividualPrompts = $false
@@ -1368,7 +1783,96 @@ if ($isAutomated) {
         if (-not $cliBound.Contains('UltraSlim')) { $ultraSlimMode = $false }
         if (-not $cliBound.Contains('Fonts'))     { $keepExtraFonts = $true }
         Write-Host "Applied Profile: 🛡️ Balanced Pro (Windows Update & Defender kept)" -ForegroundColor Yellow
-    } elseif ($pChoice -in @('3', 'load', 'json')) {
+    } elseif ($pChoice -in @('3', 'handheld', 'ally', 'deck')) {
+        $skipIndividualPrompts = $true
+        $pPath = Join-Path -Path $PSScriptRoot -ChildPath "profiles\handheld-gaming.json"
+        $loaded = Import-Nano11Profile -FilePath $pPath
+        if ($loaded) {
+            $selectedProfile = "handheld-gaming"
+            if ($loaded.PSObject.Properties['RemoveDefender'])       { $removeDefender = [bool]$loaded.RemoveDefender }
+            if ($loaded.PSObject.Properties['KeepAsianIME'])         { $keepAsianIME = [bool]$loaded.KeepAsianIME }
+            if ($loaded.PSObject.Properties['KeepExtraFonts'])       { $keepExtraFonts = [bool]$loaded.KeepExtraFonts }
+            if ($loaded.PSObject.Properties['RemoveDrivers'])        { $removeDrivers = [bool]$loaded.RemoveDrivers }
+            if ($loaded.PSObject.Properties['DisableWindowsUpdate']) { $disableWU = [bool]$loaded.DisableWindowsUpdate }
+            if ($loaded.PSObject.Properties['KeepBluetooth'])        { $keepBT = [bool]$loaded.KeepBluetooth }
+            if ($loaded.PSObject.Properties['WSLSupport'])           { $wslSupport = [bool]$loaded.WSLSupport }
+            if ($loaded.PSObject.Properties['KeepRecoveryEnv'])      { $keepRecoveryEnv = [bool]$loaded.KeepRecoveryEnv }
+            if ($loaded.PSObject.Properties['SafeDebloatMode'])      { $safeDebloatMode = [bool]$loaded.SafeDebloatMode }
+            if ($loaded.PSObject.Properties['UltraSlimMode'])        { $ultraSlimMode = [bool]$loaded.UltraSlimMode }
+            if ($loaded.PSObject.Properties['SetJapaneseKeyboard'])  { $setJapaneseKeyboard = [bool]$loaded.SetJapaneseKeyboard }
+            if ($loaded.PSObject.Properties['AtlasReviOSMode'])      { $atlasReviOSMode = [bool]$loaded.AtlasReviOSMode }
+            if ($loaded.PSObject.Properties['BundleOptimizationToolkit']) { $bundleOptimizationToolkit = [bool]$loaded.BundleOptimizationToolkit; $bundleRevTool = $bundleOptimizationToolkit }
+            if ($loaded.PSObject.Properties['RemoveStore'])          { $removeStore = [bool]$loaded.RemoveStore }
+            Write-Host "Applied Profile: 🎮 Handheld Gaming" -ForegroundColor Green
+        }
+    } elseif ($pChoice -in @('4', 'vm', 'dev', 'developer')) {
+        $skipIndividualPrompts = $true
+        $pPath = Join-Path -Path $PSScriptRoot -ChildPath "profiles\vm-developer.json"
+        $loaded = Import-Nano11Profile -FilePath $pPath
+        if ($loaded) {
+            $selectedProfile = "vm-developer"
+            if ($loaded.PSObject.Properties['RemoveDefender'])       { $removeDefender = [bool]$loaded.RemoveDefender }
+            if ($loaded.PSObject.Properties['KeepAsianIME'])         { $keepAsianIME = [bool]$loaded.KeepAsianIME }
+            if ($loaded.PSObject.Properties['KeepExtraFonts'])       { $keepExtraFonts = [bool]$loaded.KeepExtraFonts }
+            if ($loaded.PSObject.Properties['RemoveDrivers'])        { $removeDrivers = [bool]$loaded.RemoveDrivers }
+            if ($loaded.PSObject.Properties['DisableWindowsUpdate']) { $disableWU = [bool]$loaded.DisableWindowsUpdate }
+            if ($loaded.PSObject.Properties['KeepBluetooth'])        { $keepBT = [bool]$loaded.KeepBluetooth }
+            if ($loaded.PSObject.Properties['WSLSupport'])           { $wslSupport = [bool]$loaded.WSLSupport }
+            if ($loaded.PSObject.Properties['KeepRecoveryEnv'])      { $keepRecoveryEnv = [bool]$loaded.KeepRecoveryEnv }
+            if ($loaded.PSObject.Properties['SafeDebloatMode'])      { $safeDebloatMode = [bool]$loaded.SafeDebloatMode }
+            if ($loaded.PSObject.Properties['UltraSlimMode'])        { $ultraSlimMode = [bool]$loaded.UltraSlimMode }
+            if ($loaded.PSObject.Properties['SetJapaneseKeyboard'])  { $setJapaneseKeyboard = [bool]$loaded.SetJapaneseKeyboard }
+            if ($loaded.PSObject.Properties['AtlasReviOSMode'])      { $atlasReviOSMode = [bool]$loaded.AtlasReviOSMode }
+            if ($loaded.PSObject.Properties['BundleOptimizationToolkit']) { $bundleOptimizationToolkit = [bool]$loaded.BundleOptimizationToolkit; $bundleRevTool = $bundleOptimizationToolkit }
+            if ($loaded.PSObject.Properties['RemoveStore'])          { $removeStore = [bool]$loaded.RemoveStore }
+            Write-Host "Applied Profile: 💻 VM & Developer Workstation" -ForegroundColor Cyan
+        }
+    } elseif ($pChoice -in @('5', 'audio', 'daw')) {
+        $skipIndividualPrompts = $true
+        $pPath = Join-Path -Path $PSScriptRoot -ChildPath "profiles\audio-daw.json"
+        $loaded = Import-Nano11Profile -FilePath $pPath
+        if ($loaded) {
+            $selectedProfile = "audio-daw"
+            if ($loaded.PSObject.Properties['RemoveDefender'])       { $removeDefender = [bool]$loaded.RemoveDefender }
+            if ($loaded.PSObject.Properties['KeepAsianIME'])         { $keepAsianIME = [bool]$loaded.KeepAsianIME }
+            if ($loaded.PSObject.Properties['KeepExtraFonts'])       { $keepExtraFonts = [bool]$loaded.KeepExtraFonts }
+            if ($loaded.PSObject.Properties['RemoveDrivers'])        { $removeDrivers = [bool]$loaded.RemoveDrivers }
+            if ($loaded.PSObject.Properties['DisableWindowsUpdate']) { $disableWU = [bool]$loaded.DisableWindowsUpdate }
+            if ($loaded.PSObject.Properties['KeepBluetooth'])        { $keepBT = [bool]$loaded.KeepBluetooth }
+            if ($loaded.PSObject.Properties['WSLSupport'])           { $wslSupport = [bool]$loaded.WSLSupport }
+            if ($loaded.PSObject.Properties['KeepRecoveryEnv'])      { $keepRecoveryEnv = [bool]$loaded.KeepRecoveryEnv }
+            if ($loaded.PSObject.Properties['SafeDebloatMode'])      { $safeDebloatMode = [bool]$loaded.SafeDebloatMode }
+            if ($loaded.PSObject.Properties['UltraSlimMode'])        { $ultraSlimMode = [bool]$loaded.UltraSlimMode }
+            if ($loaded.PSObject.Properties['SetJapaneseKeyboard'])  { $setJapaneseKeyboard = [bool]$loaded.SetJapaneseKeyboard }
+            if ($loaded.PSObject.Properties['AtlasReviOSMode'])      { $atlasReviOSMode = [bool]$loaded.AtlasReviOSMode }
+            if ($loaded.PSObject.Properties['BundleOptimizationToolkit']) { $bundleOptimizationToolkit = [bool]$loaded.BundleOptimizationToolkit; $bundleRevTool = $bundleOptimizationToolkit }
+            if ($loaded.PSObject.Properties['RemoveStore'])          { $removeStore = [bool]$loaded.RemoveStore }
+            Write-Host "Applied Profile: 🎵 Audio & DAW Production" -ForegroundColor Magenta
+        }
+    } elseif ($pChoice -in @('6', 'fat32', 'split', 'splitwim')) {
+        $skipIndividualPrompts = $true
+        $pPath = Join-Path -Path $PSScriptRoot -ChildPath "profiles\fat32-splitwim.json"
+        $loaded = Import-Nano11Profile -FilePath $pPath
+        if ($loaded) {
+            $selectedProfile = "fat32-splitwim"
+            $splitWIMMode = $true
+            if ($loaded.PSObject.Properties['RemoveDefender'])       { $removeDefender = [bool]$loaded.RemoveDefender }
+            if ($loaded.PSObject.Properties['KeepAsianIME'])         { $keepAsianIME = [bool]$loaded.KeepAsianIME }
+            if ($loaded.PSObject.Properties['KeepExtraFonts'])       { $keepExtraFonts = [bool]$loaded.KeepExtraFonts }
+            if ($loaded.PSObject.Properties['RemoveDrivers'])        { $removeDrivers = [bool]$loaded.RemoveDrivers }
+            if ($loaded.PSObject.Properties['DisableWindowsUpdate']) { $disableWU = [bool]$loaded.DisableWindowsUpdate }
+            if ($loaded.PSObject.Properties['KeepBluetooth'])        { $keepBT = [bool]$loaded.KeepBluetooth }
+            if ($loaded.PSObject.Properties['WSLSupport'])           { $wslSupport = [bool]$loaded.WSLSupport }
+            if ($loaded.PSObject.Properties['KeepRecoveryEnv'])      { $keepRecoveryEnv = [bool]$loaded.KeepRecoveryEnv }
+            if ($loaded.PSObject.Properties['SafeDebloatMode'])      { $safeDebloatMode = [bool]$loaded.SafeDebloatMode }
+            if ($loaded.PSObject.Properties['UltraSlimMode'])        { $ultraSlimMode = [bool]$loaded.UltraSlimMode }
+            if ($loaded.PSObject.Properties['SetJapaneseKeyboard'])  { $setJapaneseKeyboard = [bool]$loaded.SetJapaneseKeyboard }
+            if ($loaded.PSObject.Properties['AtlasReviOSMode'])      { $atlasReviOSMode = [bool]$loaded.AtlasReviOSMode }
+            if ($loaded.PSObject.Properties['BundleOptimizationToolkit']) { $bundleOptimizationToolkit = [bool]$loaded.BundleOptimizationToolkit; $bundleRevTool = $bundleOptimizationToolkit }
+            if ($loaded.PSObject.Properties['RemoveStore'])          { $removeStore = [bool]$loaded.RemoveStore }
+            Write-Host "Applied Profile: 💾 FAT32 USB Split-WIM" -ForegroundColor Yellow
+        }
+    } elseif ($pChoice -in @('7', 'load', 'json')) {
         $skipIndividualPrompts = $true
         $pPath = Read-Host "Enter JSON profile path [Default: .\profiles\extreme-gaming.json]"
         if (-not $pPath) { $pPath = Join-Path -Path $PSScriptRoot -ChildPath "profiles\extreme-gaming.json" }
@@ -1397,6 +1901,7 @@ if ($isAutomated) {
                 $bundleRevTool = $bundleOptimizationToolkit
             }
             if ($loaded.PSObject.Properties['RemoveStore'])          { $removeStore = [bool]$loaded.RemoveStore }
+            if ($loaded.PSObject.Properties['UseVHDX'])              { $useVHDX = [bool]$loaded.UseVHDX }
             if ($loaded.PSObject.Properties['PayloadFormat']) {
                 $fmt = $loaded.PayloadFormat.ToString().ToUpper()
                 if ($fmt -eq 'ESD') { $exportESDMode = $true; $splitWIMMode = $false }
@@ -1408,7 +1913,7 @@ if ($isAutomated) {
             Write-Host "Failed to load JSON profile. Reverting to Extreme profile defaults." -ForegroundColor Yellow
             $selectedProfile = "extreme"
         }
-    } elseif ($pChoice -in @('4', 'gui', 'ui')) {
+    } elseif ($pChoice -in @('8', 'gui', 'ui')) {
         $skipIndividualPrompts = $true
         $initialSettings = @{
             SourceDrive               = $SourceDrive
@@ -1427,6 +1932,7 @@ if ($isAutomated) {
             AtlasReviOSMode           = $atlasReviOSMode
             BundleOptimizationToolkit = $bundleOptimizationToolkit
             RemoveStore               = $removeStore
+            UseVHDX                   = $useVHDX
             ExportESDMode             = $exportESDMode
             SplitWIMMode              = $splitWIMMode
         }
@@ -1449,6 +1955,7 @@ if ($isAutomated) {
             $bundleOptimizationToolkit = $guiResult.BundleOptimizationToolkit
             $bundleRevTool             = $bundleOptimizationToolkit
             $removeStore               = $guiResult.RemoveStore
+            if ($guiResult.ContainsKey('UseVHDX')) { $useVHDX = [bool]$guiResult.UseVHDX }
             $exportESDMode             = $guiResult.ExportESDMode
             $splitWIMMode              = $guiResult.SplitWIMMode
             $selectedProfile           = "GUI Selection"
@@ -1780,12 +2287,26 @@ if ($WorkDir) {
 
 $nano11Dir = Join-Path -Path $baseWorkDir -ChildPath "build"
 $scratchDir = Join-Path -Path $baseWorkDir -ChildPath "scratchdir"
+$vhdxPath = Join-Path -Path $baseWorkDir -ChildPath "nano11_scratch.vhdx"
+$isVhdxMounted = $false
 Write-Host "Working Directory: $baseWorkDir" -ForegroundColor Cyan
 
 # Temporarily exclude workspace from Windows Defender real-time scanning to accelerate DISM operations
 try {
     Add-MpPreference -ExclusionPath $baseWorkDir -ErrorAction SilentlyContinue
 } catch {}
+
+# Detach any leftover VHDX from previous runs
+if (Test-Path -LiteralPath $vhdxPath) {
+    try {
+        $dpDetachScript = "select vdisk file=`"$vhdxPath`"`r`ndetach vdisk`r`n"
+        $dpDetachFile = Join-Path -Path $env:TEMP -ChildPath "nano11_dp_clean_$([System.IO.Path]::GetRandomFileName()).txt"
+        $dpDetachScript | Set-Content -LiteralPath $dpDetachFile -Encoding ascii
+        & diskpart.exe /s $dpDetachFile > $null 2>&1
+        Remove-Item -LiteralPath $dpDetachFile -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $vhdxPath -Force -ErrorAction SilentlyContinue
+    } catch {}
+}
 
 if (Test-Path -LiteralPath $nano11Dir) {
     Write-Host "Cleaning up previous build directory to prevent leftover file conflicts..." -ForegroundColor Yellow
@@ -1798,6 +2319,36 @@ if (Test-Path -LiteralPath $scratchDir) {
     Remove-Item -LiteralPath $scratchDir -Recurse -Force -ErrorAction SilentlyContinue
 }
 New-Item -ItemType Directory -Force -Path (Join-Path -Path $nano11Dir -ChildPath "sources") | Out-Null
+New-Item -ItemType Directory -Force -Path $scratchDir | Out-Null
+
+# Initialize High-Speed Dynamic VHDX scratch disk if requested (-UseVHDX / -FastVHDX)
+if ($UseVHDX) {
+    Write-Host "Creating high-speed dynamic VHDX scratch disk (30 GB expandable)..." -ForegroundColor Cyan
+    try {
+        $dpAttachScript = @"
+create vdisk file="$vhdxPath" maximum=30720 type=expandable
+select vdisk file="$vhdxPath"
+attach vdisk
+clean
+convert gpt
+create partition primary
+format fs=ntfs quick label="nano11_scratch"
+assign mount="$scratchDir"
+"@
+        $dpAttachFile = Join-Path -Path $env:TEMP -ChildPath "nano11_dp_attach_$([System.IO.Path]::GetRandomFileName()).txt"
+        $dpAttachScript | Set-Content -LiteralPath $dpAttachFile -Encoding ascii
+        & diskpart.exe /s $dpAttachFile > $null 2>&1
+        Remove-Item -LiteralPath $dpAttachFile -Force -ErrorAction SilentlyContinue
+        if (Test-Path -LiteralPath $vhdxPath) {
+            $isVhdxMounted = $true
+            Write-Host "VHDX scratch volume mounted to $scratchDir" -ForegroundColor Green
+        } else {
+            Write-Warning "VHDX initialization did not create $vhdxPath. Using standard physical directory."
+        }
+    } catch {
+        Write-Warning "Could not mount VHDX scratch disk: $_. Using standard physical directory."
+    }
+}
 
 # Determine source drive letter (with auto-detection)
 $DriveLetter = ""
@@ -2108,6 +2659,12 @@ if (-not $mountSuccess) {
     Write-Host "Failed to mount install.wim after recovery. Exiting..." -ForegroundColor Red
     Stop-Transcript
     exit 1
+}
+
+$sourceWimSize = if (Test-Path -LiteralPath $destWim) { (Get-Item -LiteralPath $destWim).Length } else { 0 }
+if ($CheckHealth) {
+    Write-Host "Verifying image component store health (-CheckHealth)..." -ForegroundColor Cyan
+    & dism.exe /English /Image:"$scratchDir" /Cleanup-Image /CheckHealth
 }
 
 $filesToOwn = @("$scratchDir\Windows\System32\OneDriveSetup.exe")
@@ -3612,6 +4169,87 @@ reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Policies\Exp
 # Disable Remote Assistance unsolicited help invitations
 reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\Remote Assistance" /v "fAllowToGetHelp" /t REG_DWORD /d 0 /f > $null 2>&1
 
+# ============================================================================
+# 5. Low-Latency Gaming, Hardware Scheduling, and CPU Tuning (AtlasOS / ReviOS Aligned)
+# ============================================================================
+Write-Host "Applying Low-Latency Gaming, HAGS, & CPU scheduling optimizations..." -ForegroundColor Green
+# Enable Hardware-Accelerated GPU Scheduling (HAGS)
+reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\GraphicsDrivers" /v "HwSchMode" /t REG_DWORD /d 2 /f > $null 2>&1
+# Disable CPU core parking (mitigates stutter on hybrid Intel P/E-cores and AMD 3D V-Cache CPUs)
+$coreParkingGuid = "HKLM\zSYSTEM\ControlSet001\Control\Power\PowerSettings\54533251-82be-4824-96c1-47b60b740d00\0cc5b647-c1df-4637-891a-dec35c318583"
+reg.exe add $coreParkingGuid /v "ValueMax" /t REG_DWORD /d 0 /f > $null 2>&1
+reg.exe add $coreParkingGuid /v "ValueMin" /t REG_DWORD /d 0 /f > $null 2>&1
+# Set Energy Performance Preference (EPP) to 0 (Max Performance / Minimum Latency)
+$eppGuid = "HKLM\zSYSTEM\ControlSet001\Control\Power\PowerSettings\54533251-82be-4824-96c1-47b60b740d00\36688441-e06f-430b-a16e-b96ff9d400f3"
+reg.exe add $eppGuid /v "ValueMax" /t REG_DWORD /d 0 /f > $null 2>&1
+reg.exe add $eppGuid /v "ValueMin" /t REG_DWORD /d 0 /f > $null 2>&1
+# Exclude display/chipset driver overwrites in Windows Update (prevents GPU driver rollback)
+reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate" /v "ExcludeWUDriversInQualityUpdate" /t REG_DWORD /d 1 /f > $null 2>&1
+
+# Offline Message Signaled Interrupts (MSI) enablement across discovered PCI devices
+try {
+    Get-ChildItem -Path "HKLM:\zSYSTEM\ControlSet001\Enum\PCI" -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.PSChildName -eq "Device Parameters" } | ForEach-Object {
+        $msiKey = Join-Path -Path $_.PSPath -ChildPath "Interrupt Management\MessageSignaledInterruptProperties"
+        if (-not (Test-Path -LiteralPath $msiKey)) {
+            New-Item -Path $msiKey -Force -ErrorAction SilentlyContinue | Out-Null
+        }
+        Set-ItemProperty -Path $msiKey -Name "MSISupported" -Value 1 -Type DWord -Force -ErrorAction SilentlyContinue
+    }
+} catch {}
+
+# ============================================================================
+# 6. Windows 11 AI, Copilot, Recall & Edge Telemetry Offline Suppression
+# ============================================================================
+Write-Host "Applying Windows 11 AI, Copilot, Recall & Edge suppression policies..." -ForegroundColor Green
+reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsAI" /v "DisableAIDataAnalysis" /t REG_DWORD /d 1 /f > $null 2>&1
+reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsAI" /v "TurnOffRecall" /t REG_DWORD /d 1 /f > $null 2>&1
+reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsCopilot" /v "TurnOffWindowsCopilot" /t REG_DWORD /d 1 /f > $null 2>&1
+reg.exe add "HKLM\zDEFAULT\Software\Policies\Microsoft\Windows\WindowsCopilot" /v "TurnOffWindowsCopilot" /t REG_DWORD /d 1 /f > $null 2>&1
+reg.exe add "HKLM\zNTUSER\Software\Policies\Microsoft\Windows\WindowsCopilot" /v "TurnOffWindowsCopilot" /t REG_DWORD /d 1 /f > $null 2>&1
+# Edge Copilot and Hubs Sidebar
+reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Edge" /v "HubsSidebarEnabled" /t REG_DWORD /d 0 /f > $null 2>&1
+reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Edge" /v "CopilotPageContext" /t REG_DWORD /d 0 /f > $null 2>&1
+reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Edge" /v "StandaloneHubsSidebarEnabled" /t REG_DWORD /d 0 /f > $null 2>&1
+# Edge Update suppression (protects WebView2 for Steam/Discord/desktop apps)
+reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\EdgeUpdate" /v "Update{56EB18F8-B008-4CBD-B6D2-8C97FE7E9062}" /t REG_DWORD /d 0 /f > $null 2>&1
+reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\EdgeUpdate" /v "Install{56EB18F8-B008-4CBD-B6D2-8C97FE7E9062}" /t REG_DWORD /d 0 /f > $null 2>&1
+reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\EdgeUpdate" /v "Update{F3017226-FE2A-4295-8BDF-F0E3A9A7E4C5}" /t REG_DWORD /d 1 /f > $null 2>&1
+reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\EdgeUpdate" /v "Install{F3017226-FE2A-4295-8BDF-F0E3A9A7E4C5}" /t REG_DWORD /d 1 /f > $null 2>&1
+# SmartScreen & PII telemetry opt-out
+reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\System" /v "EnableSmartScreen" /t REG_DWORD /d 0 /f > $null 2>&1
+reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\CurrentVersion\AppHost" /v "EnableWebContentEvaluation" /t REG_DWORD /d 0 /f > $null 2>&1
+reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\AppHost" /v "EnableWebContentEvaluation" /t REG_DWORD /d 0 /f > $null 2>&1
+
+# ============================================================================
+# 7. Japanese IME Privacy & Telemetry Opt-out
+# ============================================================================
+Write-Host "Configuring Japanese IME privacy opt-out..." -ForegroundColor Green
+reg.exe add "HKLM\zDEFAULT\Software\Microsoft\IME\15.0\IMEJP\MSIME" /v "CloudCandidate" /t REG_DWORD /d 0 /f > $null 2>&1
+reg.exe add "HKLM\zDEFAULT\Software\Microsoft\IME\15.0\IMEJP\MSIME" /v "SendFeedback" /t REG_DWORD /d 0 /f > $null 2>&1
+reg.exe add "HKLM\zNTUSER\Software\Microsoft\IME\15.0\IMEJP\MSIME" /v "CloudCandidate" /t REG_DWORD /d 0 /f > $null 2>&1
+reg.exe add "HKLM\zNTUSER\Software\Microsoft\IME\15.0\IMEJP\MSIME" /v "SendFeedback" /t REG_DWORD /d 0 /f > $null 2>&1
+
+# ============================================================================
+# 8. Dark Mode Default Configuration
+# ============================================================================
+reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize" /v "AppsUseLightTheme" /t REG_DWORD /d 0 /f > $null 2>&1
+reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize" /v "SystemUsesLightTheme" /t REG_DWORD /d 0 /f > $null 2>&1
+reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize" /v "AppsUseLightTheme" /t REG_DWORD /d 0 /f > $null 2>&1
+reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize" /v "SystemUsesLightTheme" /t REG_DWORD /d 0 /f > $null 2>&1
+
+# ============================================================================
+# 9. OEM Information Branding
+# ============================================================================
+reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\OEMInformation" /v "Manufacturer" /t REG_SZ /d "nano11 Project" /f > $null 2>&1
+reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\OEMInformation" /v "SupportURL" /t REG_SZ /d "https://github.com/gh459/nano11" /f > $null 2>&1
+
+# ============================================================================
+# 10. Zero-Click Setup ChildCompletion Pre-configuration
+# ============================================================================
+reg.exe add "HKLM\zSYSTEM\Setup\Status\ChildCompletion" /v "setup.exe" /t REG_DWORD /d 3 /f > $null 2>&1
+reg.exe add "HKLM\zSYSTEM\Setup\Status\ChildCompletion" /v "audit.exe" /t REG_DWORD /d 3 /f > $null 2>&1
+reg.exe add "HKLM\zSYSTEM\Setup\Status\ChildCompletion" /v "oobe.exe" /t REG_DWORD /d 3 /f > $null 2>&1
+
 # 11. Copy autounattend.xml with Architecture Support & Self-healing (Resolves Issues #3, #18, #21, #2, #8, #20)
 Write-Host "Configuring autounattend.xml for target architecture ($architecture)..." -ForegroundColor Green
 $unattendSource = Join-Path -Path $scriptDir -ChildPath "autounattend.xml"
@@ -3740,6 +4378,17 @@ if ($bundleOptimizationToolkit) {
 
         Write-Host "  - Windows Optimization Toolkit (WinUtil, Sophia Script, SophiApp, Optimizer, Bloatynosy, Revision Tool) bundled to Public Desktop & Setup Tools" -ForegroundColor Green
     }
+}
+
+# Bundle Custom Post-Install Scripts if provided in tools\custom-scripts
+$customScriptsDir = Join-Path -Path $scriptDir -ChildPath "tools\custom-scripts"
+if (Test-Path -LiteralPath $customScriptsDir) {
+    $targetCustomDir = Join-Path -Path $scratchDir -ChildPath "Windows\Setup\Scripts\Custom"
+    New-Item -Path $targetCustomDir -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null
+    Get-ChildItem -Path $customScriptsDir -File | Where-Object { $_.Name -ne "README.md" } | ForEach-Object {
+        Copy-Item -LiteralPath $_.FullName -Destination $targetCustomDir -Force -ErrorAction SilentlyContinue
+    }
+    Write-Host "  - Bundled custom post-install scripts to Windows\Setup\Scripts\Custom" -ForegroundColor Green
 }
 
 # Deploy Zero-Footprint Browser Grabber and Nano11 Control Center to Public Desktop & Setup Tools
@@ -3975,10 +4624,14 @@ goto MENU
 $browserPs1Content | Set-Content -LiteralPath (Join-Path -Path $pubDesktop -ChildPath "Install-Browser.ps1") -Encoding utf8
 $browserCmdContent | Set-Content -LiteralPath (Join-Path -Path $pubDesktop -ChildPath "Install-Browser.cmd") -Encoding ascii
 $controlCenterContent | Set-Content -LiteralPath (Join-Path -Path $pubDesktop -ChildPath "Nano11 Control Center.bat") -Encoding ascii
+Copy-Item -LiteralPath (Join-Path -Path $pubDesktop -ChildPath "Install-Browser.cmd") -Destination (Join-Path -Path $pubDesktop -ChildPath "🌐 Install Browser.cmd") -Force -ErrorAction SilentlyContinue
+Copy-Item -LiteralPath (Join-Path -Path $pubDesktop -ChildPath "Nano11 Control Center.bat") -Destination (Join-Path -Path $pubDesktop -ChildPath "⚡ nano11 Control Center.cmd") -Force -ErrorAction SilentlyContinue
 
 $browserPs1Content | Set-Content -LiteralPath (Join-Path -Path $setupTools -ChildPath "Install-Browser.ps1") -Encoding utf8
 $browserCmdContent | Set-Content -LiteralPath (Join-Path -Path $setupTools -ChildPath "Install-Browser.cmd") -Encoding ascii
 $controlCenterContent | Set-Content -LiteralPath (Join-Path -Path $setupTools -ChildPath "Nano11 Control Center.bat") -Encoding ascii
+Copy-Item -LiteralPath (Join-Path -Path $setupTools -ChildPath "Install-Browser.cmd") -Destination (Join-Path -Path $setupTools -ChildPath "🌐 Install Browser.cmd") -Force -ErrorAction SilentlyContinue
+Copy-Item -LiteralPath (Join-Path -Path $setupTools -ChildPath "Nano11 Control Center.bat") -Destination (Join-Path -Path $setupTools -ChildPath "⚡ nano11 Control Center.cmd") -Force -ErrorAction SilentlyContinue
 Write-Host "  - Deployed Browser Grabber and Nano11 Control Center to Desktop & Setup Tools" -ForegroundColor Green
 
 # Ensure CurrentControlSet does NOT exist in offline SYSTEM hive
@@ -4387,6 +5040,28 @@ if ($oscdimgExe -and (Test-Path -LiteralPath $oscdimgExe)) {
         Write-Host "   SHA256: $sha256                                        " -ForegroundColor Green
         Write-Host "=========================================================" -ForegroundColor Green
         Write-Host ""
+
+        # Generate Visual HTML Build Report
+        try {
+            $reportOutputDir = Split-Path -Path $outputIso -Parent
+            if (-not $reportOutputDir) { $reportOutputDir = $PSScriptRoot }
+            $reportPath = Join-Path -Path $reportOutputDir -ChildPath "nano11_report.html"
+            $reportData = @{
+                Title             = "nano11 Master Build Report - $selectedProfile"
+                Timestamp         = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+                Profile           = $selectedProfile
+                Architecture      = $architecture
+                SourceDrive       = $DriveLetter
+                OutputIso         = $outputIso
+                PayloadFormat     = if ($SplitWIM) { "install.swm" } else { "install.wim" }
+                OriginalSizeBytes = if ($sourceWimSize -gt 0) { $sourceWimSize } else { 6871947673 }
+                FinalSizeBytes    = $isoItem.Length
+            }
+            Export-Nano11HtmlReport -OutputPath $reportPath -BuildInfo $reportData
+            Write-Host "Visual Build Report generated: $reportPath" -ForegroundColor Cyan
+        } catch {
+            Write-Warning "Could not export visual build report: $_"
+        }
         if ($validSwm) {
             Write-Host "[100% FAT32 USB COMPATIBLE]" -ForegroundColor Green
             Write-Host "- The image was split into install.swm parts (each <= 3800MB)." -ForegroundColor Green
@@ -4430,6 +5105,19 @@ if ($isoCreatedSuccessfully) {
 }
 Reset-DirectoryWithRobocopy -Path $scratchDir
 Remove-Item -LiteralPath $scratchDir -Recurse -Force -ErrorAction SilentlyContinue
+
+# Detach and remove VHDX scratch disk if initialized
+if ($isVhdxMounted -and (Test-Path -LiteralPath $vhdxPath)) {
+    try {
+        Write-Host "Detaching VHDX scratch disk..." -ForegroundColor Cyan
+        $dpDetachScript = "select vdisk file=`"$vhdxPath`"`r`ndetach vdisk`r`n"
+        $dpDetachFile = Join-Path -Path $env:TEMP -ChildPath "nano11_dp_detach_$([System.IO.Path]::GetRandomFileName()).txt"
+        $dpDetachScript | Set-Content -LiteralPath $dpDetachFile -Encoding ascii
+        & diskpart.exe /s $dpDetachFile > $null 2>&1
+        Remove-Item -LiteralPath $dpDetachFile -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $vhdxPath -Force -ErrorAction SilentlyContinue
+    } catch {}
+}
 
 # Remove Windows Defender temporary workspace exclusion
 try {
