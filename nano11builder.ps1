@@ -984,7 +984,9 @@ function Show-Nano11GUI {
         }
 
         # 2. Candidate ISO files in common paths
-        $searchDirs = @("E:\", "D:\", "C:\", (Split-Path -Parent $PSScriptRoot), $env:USERPROFILE, [Environment]::GetFolderPath("Desktop"), [Environment]::GetFolderPath("Downloads"))
+        $downloadsDir = Join-Path -Path $env:USERPROFILE -ChildPath "Downloads"
+        $desktopDir = Join-Path -Path $env:USERPROFILE -ChildPath "Desktop"
+        $searchDirs = @("E:\", "D:\", "C:\", (Split-Path -Parent $PSScriptRoot), $env:USERPROFILE, $desktopDir, $downloadsDir)
         foreach ($p in $searchDirs) {
             if (Test-Path -LiteralPath $p) {
                 $foundIsos = Get-ChildItem -Path $p -Filter "*.iso" -File -ErrorAction SilentlyContinue |
