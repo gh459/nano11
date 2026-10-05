@@ -168,6 +168,8 @@ param(
     [string]$CpuBoostMode = 'Default',
     [ValidateSet('Desktop', 'Handheld', 'Balanced', 'VM', 'Default')]
     [string]$PowerPreset = 'Default',
+    [alias("NoActivationRestrictions", "UnlockPersonalization")]
+    [switch]$BypassActivationRestrictions,
     [hashtable]$TweakGroupOverrides
 )
 
@@ -669,6 +671,7 @@ function Export-Nano11Profile {
             SetJapaneseKeyboard        = [bool]$Config.SetJapaneseKeyboard
             AtlasReviOSMode            = [bool]$Config.AtlasReviOSMode
             RemoveStore                = [bool]$Config.RemoveStore
+            BypassActivationRestrictions = [bool]$Config.BypassActivationRestrictions
             UseVHDX                    = [bool]$Config.UseVHDX
             SkipEiCfg                  = [bool]$Config.SkipEiCfg
             NoPostInstallAssets        = [bool]$Config.NoPostInstallAssets
@@ -809,6 +812,7 @@ $script:BuiltInPresets = [ordered]@{
         FastExport           = $false
         UefiOnly             = $false
         CpuBoostMode         = 'Aggressive'
+        BypassActivationRestrictions = $true
         TweakGroups          = [ordered]@{
             NetworkStack   = $true
             TimerBCD       = $true
@@ -858,6 +862,7 @@ $script:BuiltInPresets = [ordered]@{
         FastExport           = $false
         UefiOnly             = $false
         CpuBoostMode         = 'Default'
+        BypassActivationRestrictions = $false
         TweakGroups          = [ordered]@{
             NetworkStack   = $true
             TimerBCD       = $true
@@ -907,6 +912,7 @@ $script:BuiltInPresets = [ordered]@{
         FastExport           = $false
         UefiOnly             = $false
         CpuBoostMode         = 'Aggressive'
+        BypassActivationRestrictions = $true
         TweakGroups          = [ordered]@{
             NetworkStack   = $true
             TimerBCD       = $true
@@ -956,6 +962,7 @@ $script:BuiltInPresets = [ordered]@{
         FastExport           = $false
         UefiOnly             = $false
         CpuBoostMode         = 'Efficient'
+        BypassActivationRestrictions = $true
         TweakGroups          = [ordered]@{
             NetworkStack   = $true
             TimerBCD       = $true
@@ -1005,6 +1012,7 @@ $script:BuiltInPresets = [ordered]@{
         FastExport           = $false
         UefiOnly             = $false
         CpuBoostMode         = 'Aggressive'
+        BypassActivationRestrictions = $true
         TweakGroups          = [ordered]@{
             NetworkStack   = $true
             TimerBCD       = $true
@@ -1054,6 +1062,7 @@ $script:BuiltInPresets = [ordered]@{
         FastExport           = $false
         UefiOnly             = $false
         CpuBoostMode         = 'Aggressive'
+        BypassActivationRestrictions = $true
         TweakGroups          = [ordered]@{
             NetworkStack   = $false
             TimerBCD       = $true
@@ -1148,6 +1157,7 @@ function Apply-ProfileSettings {
         $GuiControls.chkJPKey.Checked       = [bool](& $getVal 'SetJapaneseKeyboard' $true)
         $GuiControls.chkAtlas.Checked       = [bool](& $getVal 'AtlasReviOSMode' $true)
         $GuiControls.chkStore.Checked       = [bool](& $getVal 'RemoveStore' $false)
+        if ($GuiControls.chkBypassActivation) { $GuiControls.chkBypassActivation.Checked = [bool](& $getVal 'BypassActivationRestrictions' $true) }
         if ($GuiControls.chkBasicApps)   { $GuiControls.chkBasicApps.Checked   = [bool](& $getVal 'KeepBasicApps' $false) }
         if ($GuiControls.chkSearchIndex) { $GuiControls.chkSearchIndex.Checked = [bool](& $getVal 'KeepSearchIndex' $false) }
         if ($GuiControls.chkVhdx)        { $GuiControls.chkVhdx.Checked        = [bool](& $getVal 'UseVHDX' $false) }
@@ -1195,6 +1205,7 @@ function Apply-ProfileSettings {
         $script:uefiOnly             = [bool](& $getVal 'UefiOnly' $false)
         $script:cpuBoostMode         = (& $getVal 'CpuBoostMode' 'Default').ToString()
         $script:powerPreset          = (& $getVal 'PowerPreset' 'Default').ToString()
+        $script:bypassActivationRestrictions = [bool](& $getVal 'BypassActivationRestrictions' $true)
 
         # Modular Tweak Groups
         $tGroups = & $getVal 'TweakGroups' $null
@@ -1242,7 +1253,7 @@ function Import-Nano11Profile {
             'RemoveDrivers', 'DisableWindowsUpdate', 'SkipSecurityUpdates', 'KeepBluetooth',
             'WSLSupport', 'KeepRecoveryEnv', 'KeepWinRE', 'SafeDebloatMode',
             'UltraSlimMode', 'SetJapaneseKeyboard', 'AtlasReviOSMode',
-            'RemoveStore', 'KeepStore',
+            'RemoveStore', 'KeepStore', 'BypassActivationRestrictions', 'UnlockPersonalization', 'NoActivationRestrictions',
             'PayloadFormat', 'SplitWim', 'Fat32Compatible', 'EnableCompactOS',
             'CleanWinSxS', 'SkipEdge', 'KeepXboxServices', 'KeepAudioTweaks', 'KeepBasicApps', 'KeepSearchIndex',
             'UseVHDX', 'ProfileName', 'Description', 'Version', 'Architecture'
@@ -1660,6 +1671,9 @@ function Export-Nano11HtmlReport {
     $audioStatus = if ($settings.KeepAudioTweaks) { '<span class="status-tag status-enabled">Pro Audio MMCSS Priority</span>' } else { '<span class="status-tag status-retained">Standard Gaming Tuning</span>' }
     [void]$sb.AppendLine("        <tr><td><strong>Low-Latency Audio &amp; Multimedia</strong></td><td>MMCSS thread scheduling, SystemResponsiveness, ASIO low-jitter</td><td>$audioStatus</td></tr>")
 
+    $actStatus = if ($settings.BypassActivationRestrictions) { '<span class="status-tag status-enabled">Bypassed (Personalization &amp; Watermark Unlocked)</span>' } else { '<span class="status-tag status-retained">Standard Licensing</span>' }
+    [void]$sb.AppendLine("        <tr><td><strong>Activation Restrictions Bypass</strong></td><td>Watermark suppressed, personalization unlocked, SPP nag disabled</td><td>$actStatus</td></tr>")
+
     [void]$sb.AppendLine('        <tr><td><strong>Windows 11 AI &amp; Recall Block</strong></td><td>DirectML, Copilot, Recall snapshots, Click-to-Do offline blocked</td><td><span class="status-tag status-enabled">Blocked</span></td></tr>')
     [void]$sb.AppendLine('        <tr><td><strong>Japanese &amp; Regional IME Support</strong></td><td>106/109 Keyboard layout auto-detected, IME telemetry opted-out</td><td><span class="status-tag status-enabled">Verified</span></td></tr>')
 
@@ -2043,7 +2057,7 @@ function Show-Nano11GUI {
     $grpOpts = New-Object System.Windows.Forms.GroupBox
     $grpOpts.Text = " 3. デブロート & カスタマイズ設定 (Debloat & Options) "
     $grpOpts.Location = New-Object System.Drawing.Point(15, 243)
-    $grpOpts.Size = New-Object System.Drawing.Size(670, 275)
+    $grpOpts.Size = New-Object System.Drawing.Size(670, 305)
     $grpOpts.ForeColor = [System.Drawing.Color]::FromArgb(0, 190, 255)
     $mainPanel.Controls.Add($grpOpts)
 
@@ -2074,6 +2088,7 @@ function Show-Nano11GUI {
     $chkBT          = & $createChk "Bluetooth サービス & 周辺機器サポートの保持" 15 175 (& $getInitVal 'KeepBluetooth' $true)
     $chkWSL         = & $createChk "WSL2 & 仮想マシンプラットフォームの有効化" 15 205 (& $getInitVal 'WSLSupport' $false)
     $chkRecovery    = & $createChk "回復環境 (WinRE) の保持" 15 235 (& $getInitVal 'KeepRecoveryEnv' $false)
+    $chkBypassAct   = & $createChk "ライセンス未認証制限の解除 (個人用設定/透かし/通知)" 15 265 (& $getInitVal 'BypassActivationRestrictions' $true)
 
     # Right Column (X = 345)
     $chkSafeDebloat = & $createChk "安全な WinSxS コンポーネントストア軽量化" 345 25 (& $getInitVal 'SafeDebloatMode' $true)
@@ -2088,7 +2103,7 @@ function Show-Nano11GUI {
     # 4. Output Payload Format GroupBox
     $grpPayload = New-Object System.Windows.Forms.GroupBox
     $grpPayload.Text = " 4. 出力イメージ形式 (Payload Export Format) "
-    $grpPayload.Location = New-Object System.Drawing.Point(15, 528)
+    $grpPayload.Location = New-Object System.Drawing.Point(15, 558)
     $grpPayload.Size = New-Object System.Drawing.Size(670, 75)
     $grpPayload.ForeColor = [System.Drawing.Color]::FromArgb(0, 190, 255)
     $mainPanel.Controls.Add($grpPayload)
@@ -2142,6 +2157,7 @@ function Show-Nano11GUI {
         chkBasicApps   = $chkBasicApps
         chkSearchIndex = $chkSearchIndex
         chkVhdx        = $chkVHDX
+        chkBypassActivation = $chkBypassAct
         radESD         = $radESD
         radSWM         = $radSWM
         radWIM         = $radWIM
@@ -2164,7 +2180,7 @@ function Show-Nano11GUI {
     })
 
     # Hook change events to switch preset to Custom
-    $allCheckboxes = @($chkDefender, $chkIME, $chkFonts, $chkDrivers, $chkWU, $chkBT, $chkWSL, $chkRecovery, $chkSafeDebloat, $chkUltraSlim, $chkJPKey, $chkAtlas, $chkStore, $chkBasicApps, $chkSearchIndex, $chkVHDX)
+    $allCheckboxes = @($chkDefender, $chkIME, $chkFonts, $chkDrivers, $chkWU, $chkBT, $chkWSL, $chkRecovery, $chkBypassAct, $chkSafeDebloat, $chkUltraSlim, $chkJPKey, $chkAtlas, $chkStore, $chkBasicApps, $chkSearchIndex, $chkVHDX)
     foreach ($c in $allCheckboxes) {
         $c.Add_CheckedChanged({
             if (-not $script:updatingPreset) {
@@ -2254,6 +2270,7 @@ function Show-Nano11GUI {
         $formResult.KeepBluetooth             = $chkBT.Checked
         $formResult.WSLSupport                = $chkWSL.Checked
         $formResult.KeepRecoveryEnv           = $chkRecovery.Checked
+        $formResult.BypassActivationRestrictions = $chkBypassAct.Checked
         $formResult.SafeDebloatMode           = $chkSafeDebloat.Checked
         $formResult.UltraSlimMode             = $chkUltraSlim.Checked
         $formResult.SetJapaneseKeyboard       = $chkJPKey.Checked
@@ -2412,6 +2429,7 @@ $splitWIMMode = $false
 $removeStore = $false
 $keepXboxServices = $false
 $keepAudioTweaks = $false
+$bypassActivationRestrictions = $true
 $selectedProfile = $null
 
 # 2. Track explicitly supplied CLI parameters from bound parameters snapshot
@@ -2454,6 +2472,7 @@ if ($GUI) {
         KeepBluetooth             = $keepBT
         WSLSupport                = $wslSupport
         KeepRecoveryEnv           = $keepRecoveryEnv
+        BypassActivationRestrictions = $bypassActivationRestrictions
         SafeDebloatMode           = $safeDebloatMode
         UltraSlimMode             = $ultraSlimMode
         SetJapaneseKeyboard       = $setJapaneseKeyboard
@@ -2474,6 +2493,7 @@ if ($GUI) {
         $keepBT                    = $guiResult.KeepBluetooth
         $wslSupport                = $guiResult.WSLSupport
         $keepRecoveryEnv           = $guiResult.KeepRecoveryEnv
+        if ($guiResult.ContainsKey('BypassActivationRestrictions')) { $bypassActivationRestrictions = [bool]$guiResult.BypassActivationRestrictions }
         $safeDebloatMode           = $guiResult.SafeDebloatMode
         $ultraSlimMode             = $guiResult.UltraSlimMode
         $setJapaneseKeyboard       = $guiResult.SetJapaneseKeyboard
@@ -2687,6 +2707,12 @@ if (& $isAnyBound @('RemoveStore', 'NoStore', 'RemoveMicrosoftStore')) {
     [void]$cliBound.Add('Store')
 }
 
+# 15. Activation Restrictions Bypass (Default: $true)
+if (& $isAnyBound @('BypassActivationRestrictions', 'NoActivationRestrictions', 'UnlockPersonalization')) {
+    $bypassActivationRestrictions = if ($bound.ContainsKey('BypassActivationRestrictions')) { & $getBoundVal 'BypassActivationRestrictions' } elseif ($bound.ContainsKey('NoActivationRestrictions')) { & $getBoundVal 'NoActivationRestrictions' } else { & $getBoundVal 'UnlockPersonalization' }
+    [void]$cliBound.Add('ActivationRestrictions')
+}
+
 # 16. Fast VHDX Scratch Disk
 if (& $isAnyBound @('UseVHDX', 'FastVHDX', 'VHDX')) {
     $useVHDX = if ($bound.ContainsKey('UseVHDX')) { & $getBoundVal 'UseVHDX' } elseif ($bound.ContainsKey('FastVHDX')) { & $getBoundVal 'FastVHDX' } else { & $getBoundVal 'VHDX' }
@@ -2787,6 +2813,7 @@ if ($isAutomated) {
             KeepBluetooth             = $keepBT
             WSLSupport                = $wslSupport
             KeepRecoveryEnv           = $keepRecoveryEnv
+            BypassActivationRestrictions = $bypassActivationRestrictions
             SafeDebloatMode           = $safeDebloatMode
             UltraSlimMode             = $ultraSlimMode
             SetJapaneseKeyboard       = $setJapaneseKeyboard
@@ -2808,6 +2835,7 @@ if ($isAutomated) {
             $keepBT                    = $guiResult.KeepBluetooth
             $wslSupport                = $guiResult.WSLSupport
             $keepRecoveryEnv           = $guiResult.KeepRecoveryEnv
+            if ($guiResult.ContainsKey('BypassActivationRestrictions')) { $bypassActivationRestrictions = [bool]$guiResult.BypassActivationRestrictions }
             $safeDebloatMode           = $guiResult.SafeDebloatMode
             $ultraSlimMode             = $guiResult.UltraSlimMode
             $setJapaneseKeyboard       = $guiResult.SetJapaneseKeyboard
@@ -3036,6 +3064,7 @@ if ($isAutomated) {
             KeepBluetooth             = $keepBT
             WSLSupport                = $wslSupport
             KeepRecoveryEnv           = $keepRecoveryEnv
+            BypassActivationRestrictions = $bypassActivationRestrictions
             SafeDebloatMode           = $safeDebloatMode
             UltraSlimMode             = $ultraSlimMode
             SetJapaneseKeyboard       = $setJapaneseKeyboard
@@ -3060,11 +3089,11 @@ if ($SaveProfile) {
         KeepBluetooth             = $keepBT
         WSLSupport                = $wslSupport
         KeepRecoveryEnv           = $keepRecoveryEnv
+        BypassActivationRestrictions = $bypassActivationRestrictions
         SafeDebloatMode           = $safeDebloatMode
         UltraSlimMode             = $ultraSlimMode
         SetJapaneseKeyboard       = $setJapaneseKeyboard
         AtlasReviOSMode           = $atlasReviOSMode
-        BundleOptimizationToolkit = $bundleOptimizationToolkit
         RemoveStore               = $removeStore
         PayloadFormat             = if ($exportESDMode) { "ESD" } elseif ($splitWIMMode) { "SWM" } else { "WIM" }
     }
@@ -3090,6 +3119,7 @@ $resolvedConfig = [PSCustomObject]@{
     KeepBluetooth              = $keepBT
     WSLSupport                 = $wslSupport
     KeepRecoveryEnv            = $keepRecoveryEnv
+    BypassActivationRestrictions = $bypassActivationRestrictions
     SafeDebloatMode            = $safeDebloatMode
     UltraSlimMode              = $ultraSlimMode
     SetJapaneseKeyboard        = $setJapaneseKeyboard
@@ -3114,6 +3144,7 @@ Write-Host "  - Disable Windows Update:  $disableWU"
 Write-Host "  - Keep Bluetooth Services: $keepBT"
 Write-Host "  - Enable WSL2 Platform:    $wslSupport"
 Write-Host "  - Keep Recovery (WinRE):   $keepRecoveryEnv"
+Write-Host "  - Bypass Activation Limit: $bypassActivationRestrictions"
 Write-Host "  - Safe Debloat (WinSxS):   $safeDebloatMode"
 Write-Host "  - UltraSlim (~3GB ISO):    $ultraSlimMode"
 Write-Host "  - Japanese 106 Keyboard:   $setJapaneseKeyboard"
@@ -5442,6 +5473,39 @@ reg.exe add "HKLM\zSYSTEM\Setup\Status\ChildCompletion" /v "setup.exe" /t REG_DW
 reg.exe add "HKLM\zSYSTEM\Setup\Status\ChildCompletion" /v "audit.exe" /t REG_DWORD /d 3 /f > $null 2>&1
 reg.exe add "HKLM\zSYSTEM\Setup\Status\ChildCompletion" /v "oobe.exe" /t REG_DWORD /d 3 /f > $null 2>&1
 
+# ============================================================================
+# 11. Windows Activation Restriction Bypass & Watermark/SPP Suppression
+# ============================================================================
+if ($bypassActivationRestrictions) {
+    Write-Host "Applying Windows activation restriction bypass & personalization unlock policies..." -ForegroundColor Green
+    # Desktop watermark and not genuine banner suppression
+    reg.exe add "HKLM\zDEFAULT\Control Panel\Desktop" /v "PaintDesktopVersion" /t REG_DWORD /d 0 /f > $null 2>&1
+    reg.exe add "HKLM\zNTUSER\Control Panel\Desktop" /v "PaintDesktopVersion" /t REG_DWORD /d 0 /f > $null 2>&1
+    reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows NT\CurrentVersion\Windows" /v "DisplayNotGenuine" /t REG_DWORD /d 0 /f > $null 2>&1
+
+    # Personalization lockout bypass (unlock wallpaper, themes, lockscreen, colors)
+    reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\Personalization" /v "NoLockScreen" /t REG_DWORD /d 0 /f > $null 2>&1
+    reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\CurrentVersion\Policies\ActiveDesktop" /v "NoChangingWallPaper" /t REG_DWORD /d 0 /f > $null 2>&1
+    reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Policies\ActiveDesktop" /v "NoChangingWallPaper" /t REG_DWORD /d 0 /f > $null 2>&1
+    reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer" /v "NoThemesTab" /t REG_DWORD /d 0 /f > $null 2>&1
+    reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer" /v "NoThemesTab" /t REG_DWORD /d 0 /f > $null 2>&1
+    reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer" /v "NoThemesTab" /t REG_DWORD /d 0 /f > $null 2>&1
+    reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize" /v "EnableTransparency" /t REG_DWORD /d 1 /f > $null 2>&1
+    reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize" /v "EnableTransparency" /t REG_DWORD /d 1 /f > $null 2>&1
+
+    # Software Protection Platform (SPP) nag & toast notification suppression
+    reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows NT\CurrentVersion\SoftwareProtectionPlatform" /v "NoGenTicket" /t REG_DWORD /d 1 /f > $null 2>&1
+    reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows NT\CurrentVersion\SoftwareProtectionPlatform" /v "UserOperations" /t REG_DWORD /d 1 /f > $null 2>&1
+    reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows NT\CurrentVersion\SoftwareProtectionPlatform" /v "NotificationDisabled" /t REG_DWORD /d 1 /f > $null 2>&1
+    reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows NT\CurrentVersion\SoftwareProtectionPlatform" /v "NotificationDisabled" /t REG_DWORD /d 1 /f > $null 2>&1
+    reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows NT\CurrentVersion\SoftwareProtectionPlatform" /v "UserOperations" /t REG_DWORD /d 1 /f > $null 2>&1
+    reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Notifications\Settings\Windows.SystemToast.Activation" /v "Enabled" /t REG_DWORD /d 0 /f > $null 2>&1
+    reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\CurrentVersion\Notifications\Settings\Windows.SystemToast.Activation" /v "Enabled" /t REG_DWORD /d 0 /f > $null 2>&1
+    reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Notifications\Settings\Windows.SystemToast.Activation" /v "Enabled" /t REG_DWORD /d 0 /f > $null 2>&1
+    reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\CurrentVersion\Notifications\Settings\Windows.SystemToast.Licensing" /v "Enabled" /t REG_DWORD /d 0 /f > $null 2>&1
+    reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Notifications\Settings\Windows.SystemToast.Licensing" /v "Enabled" /t REG_DWORD /d 0 /f > $null 2>&1
+}
+
 Enter-Phase 11 "Configure autounattend.xml & Pre-extract Setup Scripts"
 
 # 11. Copy autounattend.xml with Architecture Support & Self-healing (Resolves Issues #3, #18, #21, #2, #8, #20)
@@ -5556,6 +5620,9 @@ echo %DATE% %TIME% SetupComplete > "%SystemDrive%\ProgramData\nano11\setupcomple
     if ($removeWebViewPostOOBE) {
         Set-Content -LiteralPath (Join-Path -Path $setupScriptsDir -ChildPath "remove-webview.flag") -Value "1" -Encoding ascii
     }
+    if ($bypassActivationRestrictions) {
+        Set-Content -LiteralPath (Join-Path -Path $setupScriptsDir -ChildPath "bypass-activation.flag") -Value "1" -Encoding ascii
+    }
 
     # Save build traceability manifest (nano11-build-info.json)
     $buildInfoObj = [ordered]@{
@@ -5568,6 +5635,7 @@ echo %DATE% %TIME% SetupComplete > "%SystemDrive%\ProgramData\nano11\setupcomple
         JapaneseKeyboard= $setJapaneseKeyboard
         KeepBasicApps   = $keepBasicApps
         KeepSearchIndex = $keepSearchIndex
+        BypassActivation= $bypassActivationRestrictions
         SourceDrive     = $DriveLetter
         PayloadFormat   = if ($exportESDMode) { "ESD" } elseif ($splitWIMMode) { "SWM" } else { "WIM" }
     }
