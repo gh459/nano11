@@ -3,6 +3,22 @@ chcp 65001 >nul
 setlocal
 title nano11 Builder GUI
 
+:: ビルダースクリプトの動的解決 (nano11builder.ps1 または nano11builder-*.ps1)
+set "BUILDER=%~dp0nano11builder.ps1"
+if not exist "%BUILDER%" (
+    for %%F in ("%~dp0nano11builder-*.ps1") do set "BUILDER=%%~fF"
+)
+if not exist "%BUILDER%" (
+    echo.
+    echo ==============================================================================
+    echo [エラー] nano11 ビルダースクリプトが見つかりません。
+    echo 期待されるファイル: %~dp0nano11builder.ps1
+    echo ==============================================================================
+    echo.
+    pause
+    exit /b 1
+)
+
 :: 管理者権限チェック (net session)
 net session >nul 2>&1
 if %errorLevel% equ 0 goto :RUN
@@ -12,7 +28,7 @@ echo  nano11 Builder GUI - Windows 11 次世代超軽量化＆カスタマイズ
 echo ==============================================================================
 echo.
 echo [nano11] 管理者権限で起動しています... ユーザーアカウント制御 (UAC) 画面で許可してください。
-powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "try { Start-Process powershell.exe -ArgumentList '-NoProfile -ExecutionPolicy Bypass -File """%~dp0nano11builder.ps1""" -GUI' -Verb RunAs } catch { exit 1223 }"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "try { Start-Process powershell.exe -ArgumentList '-NoProfile -ExecutionPolicy Bypass -File """%BUILDER%""" -GUI' -Verb RunAs } catch { exit 1223 }"
 set "ELEVATE_EXIT=%errorLevel%"
 
 if %ELEVATE_EXIT% equ 1223 (
@@ -35,10 +51,11 @@ echo ===========================================================================
 echo  nano11 Builder GUI - Windows 11 次世代超軽量化＆カスタマイズツール
 echo ==============================================================================
 echo.
+echo [nano11] ターゲットスクリプト: %BUILDER%
 echo [nano11] グラフィカル設定画面を起動しています...
 echo.
 
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0nano11builder.ps1" -GUI
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%BUILDER%" -GUI
 set "BUILD_EXIT=%errorLevel%"
 
 if %BUILD_EXIT% neq 0 (

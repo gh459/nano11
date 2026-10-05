@@ -2188,7 +2188,7 @@ Write-Log "=====================================================================
 		# eclean.gg: Network &amp; TCP/IP Low-Latency Gaming Engine (Nagle's Algorithm Disabled, Instant ACK, CTCP)
 		try {
 			Set-NetTCPSetting -SettingName * -ScalingHeuristics Disabled -InitialRto 3000 -Timestamps Disabled -MemoryPressureProtection Disabled -NonSackRttResiliency Disabled -MaxSynRetransmissions 2 -ErrorAction SilentlyContinue | Out-Null;
-			Set-NetOffloadGlobalSetting -PacketCoalescingFilter Disabled -Chimney Disabled -Taskoffload Enabled -ReceiveSideScaling Enabled -ReceiveSegmentCoalescing Disabled -ErrorAction SilentlyContinue | Out-Null;
+			Set-NetOffloadGlobalSetting -PacketCoalescingFilter Disabled -Taskoffload Enabled -ReceiveSideScaling Enabled -ReceiveSegmentCoalescing Disabled -ErrorAction SilentlyContinue | Out-Null;
 			Disable-NetAdapterLso -Name * -ErrorAction SilentlyContinue | Out-Null;
 			netsh.exe int tcp set global ecncapability=enabled | Out-Null;
 			netsh.exe interface tcp set global fastopen=enabled | Out-Null;
@@ -2600,13 +2600,17 @@ Write-Log "=====================================================================
 		} catch {}
 	};
 	{
-		# AtlasOS &amp; ReviOS: Ultimate Performance Power Plan Activation
+		# AtlasOS &amp; ReviOS: Ultimate Performance or High Performance Power Plan Activation
 		try {
 			$uPlan = &amp; powercfg.exe -duplicatescheme e9a42b02-d5df-448d-aa00-03f14749eb61 2&gt;$null;
 			if ($uPlan -match '([a-f0-9-]{36})') {
 				&amp; powercfg.exe -setactive $matches[1] 2&gt;$null;
+			} else {
+				&amp; powercfg.exe /setactive SCHEME_MIN 2&gt;$null;
 			}
-		} catch {}
+		} catch {
+			&amp; powercfg.exe /setactive SCHEME_MIN 2&gt;$null;
+		}
 	};
 	{
 		# AtlasOS &amp; ReviOS: Low-Latency BCD Boot &amp; Timer Tweaks
@@ -2621,7 +2625,7 @@ Write-Log "=====================================================================
 		try {
 			&amp; netsh.exe int tcp set global autotuninglevel=normal 2&gt;$null;
 			&amp; netsh.exe int tcp set global rss=enabled 2&gt;$null;
-			&amp; netsh.exe int tcp set global rsc=enabled 2&gt;$null;
+			&amp; netsh.exe int tcp set global rsc=disabled 2&gt;$null;
 			&amp; netsh.exe int tcp set global ecncapability=enabled 2&gt;$null;
 			&amp; netsh.exe int tcp set global timestamps=disabled 2&gt;$null;
 			&amp; netsh.exe int tcp set heuristics disabled 2&gt;$null;

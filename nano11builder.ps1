@@ -43,6 +43,11 @@ param(
     [switch]$SkipEiCfg,
     [switch]$NoPostInstallAssets,
     
+    # Customization & Maintenance Settings
+    [string]$ComputerName = '*',
+    [string]$UserName = 'User',
+    [int]$KeepLogs = 10,
+    
     # 1. Windows Defender
     [switch]$KeepDefender,
     [alias("NoDefender")]
@@ -172,15 +177,25 @@ Write-Host ""
 
 # 1. Check and adjust Execution Policy
 if ((Get-ExecutionPolicy) -eq 'Restricted') {
-    Write-Host "Your current PowerShell Execution Policy is 'Restricted', which prevents scripts from running." -ForegroundColor Yellow
-    Write-Host "Do you want to change it to 'RemoteSigned'? (yes/no)"
-    $response = Read-Host
-    if ($response -and ($response.Trim().ToLower() -in @('yes', 'y'))) {
-        Set-ExecutionPolicy RemoteSigned -Scope CurrentUser -Confirm:$false
-        Write-Host "Execution Policy has been changed to RemoteSigned." -ForegroundColor Green
+    if ($NonInteractive) {
+        Write-Warning "PowerShell Execution Policy is 'Restricted' in -NonInteractive mode. Attempting to set RemoteSigned for CurrentUser..."
+        try {
+            Set-ExecutionPolicy RemoteSigned -Scope CurrentUser -Confirm:$false -ErrorAction Stop
+            Write-Host "Execution Policy set to RemoteSigned." -ForegroundColor Green
+        } catch {
+            throw "Execution Policy is Restricted and cannot be changed non-interactively. Run: Set-ExecutionPolicy RemoteSigned -Scope CurrentUser"
+        }
     } else {
-        Write-Host "The script cannot run without changing the execution policy. Exiting..." -ForegroundColor Red
-        exit 1
+        Write-Host "Your current PowerShell Execution Policy is 'Restricted', which prevents scripts from running." -ForegroundColor Yellow
+        Write-Host "Do you want to change it to 'RemoteSigned'? (yes/no)"
+        $response = Read-Host
+        if ($response -and ($response.Trim().ToLower() -in @('yes', 'y'))) {
+            Set-ExecutionPolicy RemoteSigned -Scope CurrentUser -Confirm:$false
+            Write-Host "Execution Policy has been changed to RemoteSigned." -ForegroundColor Green
+        } else {
+            Write-Host "The script cannot run without changing the execution policy. Exiting..." -ForegroundColor Red
+            exit 1
+        }
     }
 }
 
@@ -312,21 +327,41 @@ function Invoke-Dism {
         [Parameter(Mandatory=$true)]
         [string[]]$DismArgs,
         [int]$Retries = 1,
-        [string]$ActivityDescription = ""
+        [string]$ActivityDescription = "",
+        [switch]$CaptureOutput,
+        [switch]$Quiet
     )
     if ($ActivityDescription) {
         Write-Host "  -> DISM: $ActivityDescription..." -ForegroundColor Cyan
     }
+    $fullArgs = @('/English')
+    if ($script:DismLogPath) {
+        $fullArgs += @("/LogPath:$script:DismLogPath", "/LogLevel:3")
+    }
+    $fullArgs += $DismArgs
+
     for ($i = 1; $i -le $Retries; $i++) {
-        & dism.exe /English @DismArgs
-        if ($LASTEXITCODE -eq 0) {
-            return $true
+        if ($CaptureOutput) {
+            $output = & dism.exe @fullArgs 2>&1
+            if ($LASTEXITCODE -eq 0) {
+                return $output
+            }
+        } else {
+            if ($Quiet) {
+                & dism.exe @fullArgs > $null 2>&1
+            } else {
+                & dism.exe @fullArgs
+            }
+            if ($LASTEXITCODE -eq 0) {
+                return $true
+            }
         }
         if ($i -lt $Retries) {
             Write-Host "DISM command failed (Exit code: $LASTEXITCODE). Retrying ($i/$Retries)..." -ForegroundColor Yellow
             Start-Sleep -Seconds 2
         }
     }
+    if ($CaptureOutput) { return $null }
     return $false
 }
 
@@ -526,7 +561,7 @@ function Remove-ProtectedDirectory {
     $emptyTemp = Join-Path -Path $ScratchPath -ChildPath "empty_dir_for_delete_$([System.IO.Path]::GetRandomFileName())"
     try {
         New-Item -Path $emptyTemp -ItemType Directory -Force | Out-Null
-        & robocopy.exe $emptyTemp $Path /MIR /R:0 /W:0 /NP /NFL /NDL /NJH /NJS > $null 2>&1
+        & robocopy.exe $emptyTemp $Path /MIR /XJ /R:0 /W:0 /NP /NFL /NDL /NJH /NJS > $null 2>&1
         Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction SilentlyContinue
     } finally {
         if (Test-Path -LiteralPath $emptyTemp) {
@@ -565,7 +600,7 @@ function Reset-DirectoryWithRobocopy {
         $emptyTemp = Join-Path -Path ([System.IO.Path]::GetTempPath()) -ChildPath "nano11_empty_$([System.IO.Path]::GetRandomFileName())"
         try {
             New-Item -Path $emptyTemp -ItemType Directory -Force | Out-Null
-            & robocopy.exe $emptyTemp $Path /MIR /R:0 /W:0 /NP /NFL /NDL /NJH /NJS > $null 2>&1
+            & robocopy.exe $emptyTemp $Path /MIR /XJ /R:0 /W:0 /NP /NFL /NDL /NJH /NJS > $null 2>&1
             Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction SilentlyContinue
         } finally {
             if (Test-Path -LiteralPath $emptyTemp) {
@@ -648,6 +683,109 @@ function Test-OscdimgIntegrity {
     } catch {}
 
     return $false
+}
+
+# Phase Progress & Telemetry Tracking
+$script:CurrentPhase = 0
+$script:TotalPhases = 18
+$script:PhaseTimings = [ordered]@{}
+$script:PhaseStopwatch = $null
+
+function Enter-Phase {
+    param(
+        [int]$PhaseNumber,
+        [string]$PhaseName
+    )
+    if ($script:PhaseStopwatch -and $script:CurrentPhase -gt 0) {
+        $script:PhaseStopwatch.Stop()
+        $prevPhaseKey = "Phase $($script:CurrentPhase)"
+        $script:PhaseTimings[$prevPhaseKey] = [math]::Round($script:PhaseStopwatch.Elapsed.TotalSeconds, 1)
+    }
+    $script:CurrentPhase = $PhaseNumber
+    $script:PhaseStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+    $phaseTitle = "nano11 [$PhaseNumber/$($script:TotalPhases)] $PhaseName"
+    try { $host.UI.RawUI.WindowTitle = $phaseTitle } catch {}
+    Write-Host ""
+    Write-Host "=========================================================" -ForegroundColor Cyan
+    Write-Host " [$PhaseNumber/$($script:TotalPhases)] $PhaseName" -ForegroundColor Cyan
+    Write-Host "=========================================================" -ForegroundColor Cyan
+}
+
+function Exit-Phase {
+    if ($script:PhaseStopwatch) {
+        $script:PhaseStopwatch.Stop()
+        $prevPhaseKey = "Phase $($script:CurrentPhase)"
+        $script:PhaseTimings[$prevPhaseKey] = [math]::Round($script:PhaseStopwatch.Elapsed.TotalSeconds, 1)
+        $script:PhaseStopwatch = $null
+    }
+}
+
+# Helper function: Unified profile settings application
+function Apply-ProfileSettings {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [PSCustomObject]$ProfileObject,
+        [switch]$UpdateGui,
+        [hashtable]$GuiControls
+    )
+
+    $p = if ($ProfileObject.Settings) { $ProfileObject.Settings } else { $ProfileObject }
+
+    if ($UpdateGui -and $GuiControls) {
+        if ($p.PSObject.Properties['RemoveDefender'])            { $GuiControls.chkDefender.Checked = [bool]$p.RemoveDefender }
+        if ($p.PSObject.Properties['KeepAsianIME'])              { $GuiControls.chkIME.Checked = [bool]$p.KeepAsianIME }
+        if ($p.PSObject.Properties['KeepExtraFonts'])            { $GuiControls.chkFonts.Checked = [bool]$p.KeepExtraFonts }
+        if ($p.PSObject.Properties['RemoveDrivers'])             { $GuiControls.chkDrivers.Checked = [bool]$p.RemoveDrivers }
+        if ($p.PSObject.Properties['DisableWindowsUpdate'])      { $GuiControls.chkWU.Checked = [bool]$p.DisableWindowsUpdate }
+        if ($p.PSObject.Properties['KeepBluetooth'])             { $GuiControls.chkBT.Checked = [bool]$p.KeepBluetooth }
+        if ($p.PSObject.Properties['WSLSupport'])                { $GuiControls.chkWSL.Checked = [bool]$p.WSLSupport }
+        if ($p.PSObject.Properties['KeepRecoveryEnv'])           { $GuiControls.chkRecovery.Checked = [bool]$p.KeepRecoveryEnv }
+        if ($p.PSObject.Properties['SafeDebloatMode'])           { $GuiControls.chkSafeDebloat.Checked = [bool]$p.SafeDebloatMode }
+        if ($p.PSObject.Properties['UltraSlimMode'])             { $GuiControls.chkUltraSlim.Checked = [bool]$p.UltraSlimMode }
+        if ($p.PSObject.Properties['SetJapaneseKeyboard'])       { $GuiControls.chkJPKey.Checked = [bool]$p.SetJapaneseKeyboard }
+        if ($p.PSObject.Properties['AtlasReviOSMode'])           { $GuiControls.chkAtlas.Checked = [bool]$p.AtlasReviOSMode }
+        if ($p.PSObject.Properties['BundleOptimizationToolkit']) { $GuiControls.chkToolkit.Checked = [bool]$p.BundleOptimizationToolkit }
+        if ($p.PSObject.Properties['RemoveStore'])               { $GuiControls.chkStore.Checked = [bool]$p.RemoveStore }
+        if ($p.PSObject.Properties['UseVHDX'])                   { if ($GuiControls.chkVhdx) { $GuiControls.chkVhdx.Checked = [bool]$p.UseVHDX } }
+        if ($p.PSObject.Properties['SkipEiCfg'])                 { if ($GuiControls.chkSkipEiCfg) { $GuiControls.chkSkipEiCfg.Checked = [bool]$p.SkipEiCfg } }
+        if ($p.PSObject.Properties['NoPostInstallAssets'])       { if ($GuiControls.chkNoPostInstall) { $GuiControls.chkNoPostInstall.Checked = [bool]$p.NoPostInstallAssets } }
+        if ($p.PSObject.Properties['PayloadFormat']) {
+            $fmt = $p.PayloadFormat.ToString().ToUpper()
+            if ($fmt -eq 'ESD') { $GuiControls.radESD.Checked = $true }
+            elseif ($fmt -eq 'SWM') { $GuiControls.radSWM.Checked = $true }
+            else { $GuiControls.radWIM.Checked = $true }
+        }
+    } else {
+        if ($p.PSObject.Properties['RemoveDefender'])            { $script:removeDefender = [bool]$p.RemoveDefender }
+        if ($p.PSObject.Properties['KeepAsianIME'])              { $script:keepAsianIME = [bool]$p.KeepAsianIME }
+        if ($p.PSObject.Properties['KeepExtraFonts'])            { $script:keepExtraFonts = [bool]$p.KeepExtraFonts }
+        if ($p.PSObject.Properties['RemoveDrivers'])             { $script:removeDrivers = [bool]$p.RemoveDrivers }
+        if ($p.PSObject.Properties['DisableWindowsUpdate'])      { $script:disableWU = [bool]$p.DisableWindowsUpdate }
+        if ($p.PSObject.Properties['KeepBluetooth'])             { $script:keepBT = [bool]$p.KeepBluetooth }
+        if ($p.PSObject.Properties['WSLSupport'])                { $script:wslSupport = [bool]$p.WSLSupport }
+        if ($p.PSObject.Properties['KeepRecoveryEnv'])           { $script:keepRecoveryEnv = [bool]$p.KeepRecoveryEnv }
+        if ($p.PSObject.Properties['SafeDebloatMode'])           { $script:safeDebloatMode = [bool]$p.SafeDebloatMode }
+        if ($p.PSObject.Properties['UltraSlimMode'])             { $script:ultraSlimMode = [bool]$p.UltraSlimMode }
+        if ($p.PSObject.Properties['SetJapaneseKeyboard'])       { $script:setJapaneseKeyboard = [bool]$p.SetJapaneseKeyboard }
+        if ($p.PSObject.Properties['AtlasReviOSMode'])           { $script:atlasReviOSMode = [bool]$p.AtlasReviOSMode }
+        if ($p.PSObject.Properties['BundleOptimizationToolkit']) {
+            $script:bundleOptimizationToolkit = [bool]$p.BundleOptimizationToolkit
+            $script:bundleRevTool = $script:bundleOptimizationToolkit
+        }
+        if ($p.PSObject.Properties['RemoveStore'])               { $script:removeStore = [bool]$p.RemoveStore }
+        if ($p.PSObject.Properties['KeepXboxServices'])          { $script:keepXboxServices = [bool]$p.KeepXboxServices }
+        if ($p.PSObject.Properties['KeepAudioTweaks'])           { $script:keepAudioTweaks = [bool]$p.KeepAudioTweaks }
+        if ($p.PSObject.Properties['UseVHDX'])                   { $script:useVHDX = [bool]$p.UseVHDX }
+        if ($p.PSObject.Properties['SkipEiCfg'])                 { $script:skipEiCfg = [bool]$p.SkipEiCfg }
+        if ($p.PSObject.Properties['NoPostInstallAssets'])       { $script:noPostInstallAssets = [bool]$p.NoPostInstallAssets }
+        if ($p.PSObject.Properties['PayloadFormat']) {
+            $fmt = $p.PayloadFormat.ToString().ToUpper()
+            if ($fmt -eq 'ESD') { $script:exportESDMode = $true; $script:splitWIMMode = $false }
+            elseif ($fmt -eq 'SWM') { $script:splitWIMMode = $true; $script:exportESDMode = $false }
+            else { $script:exportESDMode = $false; $script:splitWIMMode = $false }
+        }
+    }
 }
 
 # Helper function: Import configuration settings from a JSON profile
@@ -871,6 +1009,58 @@ function Invoke-Nano11SelfTest {
         $toolsMsg = "tools/ directory not found"
     }
     $results += [PSCustomObject]@{ Test = "5. Optimization Toolkit Assets"; Passed = $toolsPass; Details = $toolsMsg }
+
+    # 6. Batch Script Dynamic Target Resolution Check
+    $batPass = $false
+    $batMsg = ""
+    $batFiles = Get-ChildItem -Path $ScriptRoot -Filter "*.bat" -File -ErrorAction SilentlyContinue
+    if ($batFiles.Count -gt 0) {
+        $badBats = @()
+        foreach ($bf in $batFiles) {
+            $batText = [System.IO.File]::ReadAllText($bf.FullName, [System.Text.Encoding]::UTF8)
+            if ($batText -match 'BUILDER' -or $batText -match 'nano11builder') {
+                # Valid reference
+            } else {
+                $badBats += "$($bf.Name) (no builder reference)"
+            }
+        }
+        if ($badBats.Count -eq 0) {
+            $batPass = $true
+            $batMsg = "$($batFiles.Count) batch file(s) verified with dynamic builder resolution"
+        } else {
+            $batMsg = "Batch issues: $($badBats -join ', ')"
+        }
+    } else {
+        $batPass = $true
+        $batMsg = "No .bat files found in root"
+    }
+    $results += [PSCustomObject]@{ Test = "6. Batch Target Resolution"; Passed = $batPass; Details = $batMsg }
+
+    # 7. autounattend Singularity & Embedded Scripts Integrity
+    $unattendSingularPass = $false
+    $unattendSingularMsg = ""
+    $allUnattends = Get-ChildItem -Path $ScriptRoot -Filter "*unattend*.xml" -File -ErrorAction SilentlyContinue
+    if ($allUnattends.Count -eq 1 -and $allUnattends[0].Name -ieq "autounattend.xml") {
+        $xmlRaw = [System.IO.File]::ReadAllText($allUnattends[0].FullName, [System.Text.Encoding]::UTF8)
+        $requiredScripts = @('Specialize.ps1', 'FirstLogon.ps1', 'DefaultUser.ps1', 'UserOnce.ps1')
+        $missingScripts = @()
+        foreach ($rs in $requiredScripts) {
+            if ($xmlRaw -notmatch [regex]::Escape($rs)) {
+                $missingScripts += $rs
+            }
+        }
+        if ($missingScripts.Count -eq 0) {
+            $unattendSingularPass = $true
+            $unattendSingularMsg = "Single canonical autounattend.xml present; all 4 setup scripts embedded"
+        } else {
+            $unattendSingularMsg = "Missing scripts: $($missingScripts -join ', ')"
+        }
+    } elseif ($allUnattends.Count -gt 1) {
+        $unattendSingularMsg = "Multiple unattend files detected ($($allUnattends.Name -join ', ')) - only autounattend.xml should exist"
+    } else {
+        $unattendSingularMsg = "autounattend.xml missing"
+    }
+    $results += [PSCustomObject]@{ Test = "7. Unattend Singularity & Scripts"; Passed = $unattendSingularPass; Details = $unattendSingularMsg }
 
     # Display Results
     Write-Host ""
@@ -1569,7 +1759,7 @@ function Show-Nano11GUI {
     }
 
     $cmbPreset.Add_SelectedIndexChanged({
-        if (-not $script:updatingPreset -and $cmbPreset.SelectedIndex -ne 6) {
+        if (-not $script:updatingPreset -and $cmbPreset.SelectedIndex -ne ($cmbPreset.Items.Count - 1)) {
             & $applyPreset $cmbPreset.SelectedIndex
         }
     })
@@ -1580,13 +1770,34 @@ function Show-Nano11GUI {
         $c.Add_CheckedChanged({
             if (-not $script:updatingPreset) {
                 $script:updatingPreset = $true
-                $cmbPreset.SelectedIndex = 6 # Custom
+                $cmbPreset.SelectedIndex = ($cmbPreset.Items.Count - 1) # Custom
                 $script:updatingPreset = $false
             }
         })
     }
 
     # Load / Save Profile Handlers
+    $guiControlsMap = @{
+        chkDefender    = $chkDefender
+        chkIME         = $chkIME
+        chkFonts       = $chkFonts
+        chkDrivers     = $chkDrivers
+        chkWU          = $chkWU
+        chkBT          = $chkBT
+        chkWSL         = $chkWSL
+        chkRecovery    = $chkRecovery
+        chkSafeDebloat = $chkSafeDebloat
+        chkUltraSlim   = $chkUltraSlim
+        chkJPKey       = $chkJPKey
+        chkAtlas       = $chkAtlas
+        chkToolkit     = $chkToolkit
+        chkStore       = $chkStore
+        chkVhdx        = $chkVHDX
+        radESD         = $radESD
+        radSWM         = $radSWM
+        radWIM         = $radWIM
+    }
+
     $btnLoadProfile.Add_Click({
         $ofd = New-Object System.Windows.Forms.OpenFileDialog
         $ofd.Filter = "nano11 Profile (*.json)|*.json|All files (*.*)|*.*"
@@ -1596,27 +1807,8 @@ function Show-Nano11GUI {
             $loaded = Import-Nano11Profile -FilePath $ofd.FileName
             if ($loaded) {
                 $script:updatingPreset = $true
-                if ($loaded.PSObject.Properties['RemoveDefender'])       { $chkDefender.Checked = [bool]$loaded.RemoveDefender }
-                if ($loaded.PSObject.Properties['KeepAsianIME'])         { $chkIME.Checked = [bool]$loaded.KeepAsianIME }
-                if ($loaded.PSObject.Properties['KeepExtraFonts'])       { $chkFonts.Checked = [bool]$loaded.KeepExtraFonts }
-                if ($loaded.PSObject.Properties['RemoveDrivers'])        { $chkDrivers.Checked = [bool]$loaded.RemoveDrivers }
-                if ($loaded.PSObject.Properties['DisableWindowsUpdate']) { $chkWU.Checked = [bool]$loaded.DisableWindowsUpdate }
-                if ($loaded.PSObject.Properties['KeepBluetooth'])        { $chkBT.Checked = [bool]$loaded.KeepBluetooth }
-                if ($loaded.PSObject.Properties['WSLSupport'])           { $chkWSL.Checked = [bool]$loaded.WSLSupport }
-                if ($loaded.PSObject.Properties['KeepRecoveryEnv'])      { $chkRecovery.Checked = [bool]$loaded.KeepRecoveryEnv }
-                if ($loaded.PSObject.Properties['SafeDebloatMode'])      { $chkSafeDebloat.Checked = [bool]$loaded.SafeDebloatMode }
-                if ($loaded.PSObject.Properties['UltraSlimMode'])        { $chkUltraSlim.Checked = [bool]$loaded.UltraSlimMode }
-                if ($loaded.PSObject.Properties['SetJapaneseKeyboard'])  { $chkJPKey.Checked = [bool]$loaded.SetJapaneseKeyboard }
-                if ($loaded.PSObject.Properties['AtlasReviOSMode'])      { $chkAtlas.Checked = [bool]$loaded.AtlasReviOSMode }
-                if ($loaded.PSObject.Properties['BundleOptimizationToolkit']) { $chkToolkit.Checked = [bool]$loaded.BundleOptimizationToolkit }
-                if ($loaded.PSObject.Properties['RemoveStore'])          { $chkStore.Checked = [bool]$loaded.RemoveStore }
-                if ($loaded.PSObject.Properties['PayloadFormat']) {
-                    $fmt = $loaded.PayloadFormat.ToString().ToUpper()
-                    if ($fmt -eq 'ESD') { $radESD.Checked = $true }
-                    elseif ($fmt -eq 'SWM') { $radSWM.Checked = $true }
-                    else { $radWIM.Checked = $true }
-                }
-                $cmbPreset.SelectedIndex = 6
+                Apply-ProfileSettings -ProfileObject $loaded -UpdateGui -GuiControls $guiControlsMap
+                $cmbPreset.SelectedIndex = $cmbPreset.Items.Count - 1
                 $script:updatingPreset = $false
                 [System.Windows.Forms.MessageBox]::Show("プロファイルを正常に読み込みました:`n$($ofd.FileName)", "プロファイル読込完了", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
             }
@@ -1775,11 +1967,20 @@ try {
         New-Item -ItemType Directory -Force -Path $logDir | Out-Null
     }
     $transcriptPath = Join-Path -Path $logDir -ChildPath "nano11_$timestampStr.log"
+    $script:DismLogPath = Join-Path -Path $logDir -ChildPath "dism_$timestampStr.log"
     Start-Transcript -Path $transcriptPath -Force
-    # Prune logs beyond latest 10
+    # Prune logs beyond parameter -KeepLogs (Default: 10)
     Get-ChildItem -Path $logDir -Filter "nano11_*.log" -File -ErrorAction SilentlyContinue |
         Sort-Object LastWriteTime -Descending |
-        Select-Object -Skip 10 |
+        Select-Object -Skip $KeepLogs |
+        Remove-Item -Force -ErrorAction SilentlyContinue
+    Get-ChildItem -Path $logDir -Filter "dism_*.log" -File -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -Skip $KeepLogs |
+        Remove-Item -Force -ErrorAction SilentlyContinue
+    Get-ChildItem -Path $logDir -Filter "nano11_*.config.json" -File -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -Skip $KeepLogs |
         Remove-Item -Force -ErrorAction SilentlyContinue
 } catch {
     $fallbackLogDir = $env:TEMP
@@ -1901,32 +2102,7 @@ if ($bound.ContainsKey('Profile') -or $bound.ContainsKey('Preset')) {
         if (Test-Path -LiteralPath $profFullPath) {
             $loaded = Import-Nano11Profile -FilePath $profFullPath
             if ($loaded) {
-                if ($loaded.PSObject.Properties['RemoveDefender'])       { $removeDefender = [bool]$loaded.RemoveDefender }
-                if ($loaded.PSObject.Properties['KeepAsianIME'])         { $keepAsianIME = [bool]$loaded.KeepAsianIME }
-                if ($loaded.PSObject.Properties['KeepExtraFonts'])       { $keepExtraFonts = [bool]$loaded.KeepExtraFonts }
-                if ($loaded.PSObject.Properties['RemoveDrivers'])        { $removeDrivers = [bool]$loaded.RemoveDrivers }
-                if ($loaded.PSObject.Properties['DisableWindowsUpdate']) { $disableWU = [bool]$loaded.DisableWindowsUpdate }
-                if ($loaded.PSObject.Properties['KeepBluetooth'])        { $keepBT = [bool]$loaded.KeepBluetooth }
-                if ($loaded.PSObject.Properties['WSLSupport'])           { $wslSupport = [bool]$loaded.WSLSupport }
-                if ($loaded.PSObject.Properties['KeepRecoveryEnv'])      { $keepRecoveryEnv = [bool]$loaded.KeepRecoveryEnv }
-                if ($loaded.PSObject.Properties['SafeDebloatMode'])      { $safeDebloatMode = [bool]$loaded.SafeDebloatMode }
-                if ($loaded.PSObject.Properties['UltraSlimMode'])        { $ultraSlimMode = [bool]$loaded.UltraSlimMode }
-                if ($loaded.PSObject.Properties['SetJapaneseKeyboard'])  { $setJapaneseKeyboard = [bool]$loaded.SetJapaneseKeyboard }
-                if ($loaded.PSObject.Properties['AtlasReviOSMode'])      { $atlasReviOSMode = [bool]$loaded.AtlasReviOSMode }
-                if ($loaded.PSObject.Properties['BundleOptimizationToolkit']) {
-                    $bundleOptimizationToolkit = [bool]$loaded.BundleOptimizationToolkit
-                    $bundleRevTool = $bundleOptimizationToolkit
-                }
-                if ($loaded.PSObject.Properties['RemoveStore'])          { $removeStore = [bool]$loaded.RemoveStore }
-                if ($loaded.PSObject.Properties['KeepXboxServices'])     { $keepXboxServices = [bool]$loaded.KeepXboxServices }
-                if ($loaded.PSObject.Properties['KeepAudioTweaks'])      { $keepAudioTweaks = [bool]$loaded.KeepAudioTweaks }
-                if ($loaded.PSObject.Properties['UseVHDX'])              { $useVHDX = [bool]$loaded.UseVHDX }
-                if ($loaded.PSObject.Properties['PayloadFormat']) {
-                    $fmt = $loaded.PayloadFormat.ToString().ToUpper()
-                    if ($fmt -eq 'ESD') { $exportESDMode = $true; $splitWIMMode = $false }
-                    elseif ($fmt -eq 'SWM') { $splitWIMMode = $true; $exportESDMode = $false }
-                    else { $exportESDMode = $false; $splitWIMMode = $false }
-                }
+                Apply-ProfileSettings -ProfileObject $loaded
             }
         }
     }
@@ -1944,31 +2120,7 @@ if ($bound.ContainsKey('LoadProfile') -and $bound['LoadProfile']) {
     if ($loaded) {
         $selectedProfile = "json ($([System.IO.Path]::GetFileNameWithoutExtension($loadProfPath)))"
         [void]$cliBound.Add('Profile')
-        if ($loaded.PSObject.Properties['RemoveDefender'])       { $removeDefender = [bool]$loaded.RemoveDefender }
-        if ($loaded.PSObject.Properties['KeepAsianIME'])         { $keepAsianIME = [bool]$loaded.KeepAsianIME }
-        if ($loaded.PSObject.Properties['KeepExtraFonts'])       { $keepExtraFonts = [bool]$loaded.KeepExtraFonts }
-        if ($loaded.PSObject.Properties['RemoveDrivers'])        { $removeDrivers = [bool]$loaded.RemoveDrivers }
-        if ($loaded.PSObject.Properties['DisableWindowsUpdate']) { $disableWU = [bool]$loaded.DisableWindowsUpdate }
-        if ($loaded.PSObject.Properties['KeepBluetooth'])        { $keepBT = [bool]$loaded.KeepBluetooth }
-        if ($loaded.PSObject.Properties['WSLSupport'])           { $wslSupport = [bool]$loaded.WSLSupport }
-        if ($loaded.PSObject.Properties['KeepRecoveryEnv'])      { $keepRecoveryEnv = [bool]$loaded.KeepRecoveryEnv }
-        if ($loaded.PSObject.Properties['SafeDebloatMode'])      { $safeDebloatMode = [bool]$loaded.SafeDebloatMode }
-        if ($loaded.PSObject.Properties['UltraSlimMode'])        { $ultraSlimMode = [bool]$loaded.UltraSlimMode }
-        if ($loaded.PSObject.Properties['SetJapaneseKeyboard'])  { $setJapaneseKeyboard = [bool]$loaded.SetJapaneseKeyboard }
-        if ($loaded.PSObject.Properties['AtlasReviOSMode'])      { $atlasReviOSMode = [bool]$loaded.AtlasReviOSMode }
-        if ($loaded.PSObject.Properties['BundleOptimizationToolkit']) {
-            $bundleOptimizationToolkit = [bool]$loaded.BundleOptimizationToolkit
-            $bundleRevTool = $bundleOptimizationToolkit
-        }
-        if ($loaded.PSObject.Properties['RemoveStore'])          { $removeStore = [bool]$loaded.RemoveStore }
-        if ($loaded.PSObject.Properties['KeepXboxServices'])     { $keepXboxServices = [bool]$loaded.KeepXboxServices }
-        if ($loaded.PSObject.Properties['KeepAudioTweaks'])      { $keepAudioTweaks = [bool]$loaded.KeepAudioTweaks }
-        if ($loaded.PSObject.Properties['PayloadFormat']) {
-            $fmt = $loaded.PayloadFormat.ToString().ToUpper()
-            if ($fmt -eq 'ESD') { $exportESDMode = $true; $splitWIMMode = $false }
-            elseif ($fmt -eq 'SWM') { $splitWIMMode = $true; $exportESDMode = $false }
-            else { $exportESDMode = $false; $splitWIMMode = $false }
-        }
+        Apply-ProfileSettings -ProfileObject $loaded
         Write-Host "Loaded profile configuration from: $loadProfPath" -ForegroundColor Green
     }
 }
@@ -2017,6 +2169,12 @@ if ($GUI) {
         $removeStore               = $guiResult.RemoveStore
         $exportESDMode             = $guiResult.ExportESDMode
         $splitWIMMode              = $guiResult.SplitWIMMode
+        if ($guiResult.ContainsKey('UseVHDX')) { $useVHDX = [bool]$guiResult.UseVHDX }
+        if ($guiResult.ContainsKey('Validate')) { $Validate = [bool]$guiResult.Validate }
+        if ($guiResult.ContainsKey('Resume')) { $Resume = [bool]$guiResult.Resume }
+        if ($guiResult.ContainsKey('DryRun')) { $DryRun = [bool]$guiResult.DryRun }
+        if ($guiResult.ContainsKey('SkipEiCfg')) { $skipEiCfg = [bool]$guiResult.SkipEiCfg }
+        if ($guiResult.ContainsKey('NoPostInstallAssets')) { $noPostInstallAssets = [bool]$guiResult.NoPostInstallAssets }
         $NonInteractive            = $true
         $selectedProfile           = "GUI Selection"
         Write-Host "Applied GUI Configuration successfully." -ForegroundColor Green
@@ -2276,20 +2434,7 @@ if ($isAutomated) {
         $loaded = Import-Nano11Profile -FilePath $pPath
         if ($loaded) {
             $selectedProfile = "handheld-gaming"
-            if ($loaded.PSObject.Properties['RemoveDefender'])       { $removeDefender = [bool]$loaded.RemoveDefender }
-            if ($loaded.PSObject.Properties['KeepAsianIME'])         { $keepAsianIME = [bool]$loaded.KeepAsianIME }
-            if ($loaded.PSObject.Properties['KeepExtraFonts'])       { $keepExtraFonts = [bool]$loaded.KeepExtraFonts }
-            if ($loaded.PSObject.Properties['RemoveDrivers'])        { $removeDrivers = [bool]$loaded.RemoveDrivers }
-            if ($loaded.PSObject.Properties['DisableWindowsUpdate']) { $disableWU = [bool]$loaded.DisableWindowsUpdate }
-            if ($loaded.PSObject.Properties['KeepBluetooth'])        { $keepBT = [bool]$loaded.KeepBluetooth }
-            if ($loaded.PSObject.Properties['WSLSupport'])           { $wslSupport = [bool]$loaded.WSLSupport }
-            if ($loaded.PSObject.Properties['KeepRecoveryEnv'])      { $keepRecoveryEnv = [bool]$loaded.KeepRecoveryEnv }
-            if ($loaded.PSObject.Properties['SafeDebloatMode'])      { $safeDebloatMode = [bool]$loaded.SafeDebloatMode }
-            if ($loaded.PSObject.Properties['UltraSlimMode'])        { $ultraSlimMode = [bool]$loaded.UltraSlimMode }
-            if ($loaded.PSObject.Properties['SetJapaneseKeyboard'])  { $setJapaneseKeyboard = [bool]$loaded.SetJapaneseKeyboard }
-            if ($loaded.PSObject.Properties['AtlasReviOSMode'])      { $atlasReviOSMode = [bool]$loaded.AtlasReviOSMode }
-            if ($loaded.PSObject.Properties['BundleOptimizationToolkit']) { $bundleOptimizationToolkit = [bool]$loaded.BundleOptimizationToolkit; $bundleRevTool = $bundleOptimizationToolkit }
-            if ($loaded.PSObject.Properties['RemoveStore'])          { $removeStore = [bool]$loaded.RemoveStore }
+            Apply-ProfileSettings -ProfileObject $loaded
             Write-Host "Applied Profile: 🎮 Handheld Gaming" -ForegroundColor Green
         }
     } elseif ($pChoice -in @('4', 'vm', 'dev', 'developer')) {
@@ -2298,20 +2443,7 @@ if ($isAutomated) {
         $loaded = Import-Nano11Profile -FilePath $pPath
         if ($loaded) {
             $selectedProfile = "vm-developer"
-            if ($loaded.PSObject.Properties['RemoveDefender'])       { $removeDefender = [bool]$loaded.RemoveDefender }
-            if ($loaded.PSObject.Properties['KeepAsianIME'])         { $keepAsianIME = [bool]$loaded.KeepAsianIME }
-            if ($loaded.PSObject.Properties['KeepExtraFonts'])       { $keepExtraFonts = [bool]$loaded.KeepExtraFonts }
-            if ($loaded.PSObject.Properties['RemoveDrivers'])        { $removeDrivers = [bool]$loaded.RemoveDrivers }
-            if ($loaded.PSObject.Properties['DisableWindowsUpdate']) { $disableWU = [bool]$loaded.DisableWindowsUpdate }
-            if ($loaded.PSObject.Properties['KeepBluetooth'])        { $keepBT = [bool]$loaded.KeepBluetooth }
-            if ($loaded.PSObject.Properties['WSLSupport'])           { $wslSupport = [bool]$loaded.WSLSupport }
-            if ($loaded.PSObject.Properties['KeepRecoveryEnv'])      { $keepRecoveryEnv = [bool]$loaded.KeepRecoveryEnv }
-            if ($loaded.PSObject.Properties['SafeDebloatMode'])      { $safeDebloatMode = [bool]$loaded.SafeDebloatMode }
-            if ($loaded.PSObject.Properties['UltraSlimMode'])        { $ultraSlimMode = [bool]$loaded.UltraSlimMode }
-            if ($loaded.PSObject.Properties['SetJapaneseKeyboard'])  { $setJapaneseKeyboard = [bool]$loaded.SetJapaneseKeyboard }
-            if ($loaded.PSObject.Properties['AtlasReviOSMode'])      { $atlasReviOSMode = [bool]$loaded.AtlasReviOSMode }
-            if ($loaded.PSObject.Properties['BundleOptimizationToolkit']) { $bundleOptimizationToolkit = [bool]$loaded.BundleOptimizationToolkit; $bundleRevTool = $bundleOptimizationToolkit }
-            if ($loaded.PSObject.Properties['RemoveStore'])          { $removeStore = [bool]$loaded.RemoveStore }
+            Apply-ProfileSettings -ProfileObject $loaded
             Write-Host "Applied Profile: 💻 VM & Developer Workstation" -ForegroundColor Cyan
         }
     } elseif ($pChoice -in @('5', 'audio', 'daw')) {
@@ -2320,20 +2452,7 @@ if ($isAutomated) {
         $loaded = Import-Nano11Profile -FilePath $pPath
         if ($loaded) {
             $selectedProfile = "audio-daw"
-            if ($loaded.PSObject.Properties['RemoveDefender'])       { $removeDefender = [bool]$loaded.RemoveDefender }
-            if ($loaded.PSObject.Properties['KeepAsianIME'])         { $keepAsianIME = [bool]$loaded.KeepAsianIME }
-            if ($loaded.PSObject.Properties['KeepExtraFonts'])       { $keepExtraFonts = [bool]$loaded.KeepExtraFonts }
-            if ($loaded.PSObject.Properties['RemoveDrivers'])        { $removeDrivers = [bool]$loaded.RemoveDrivers }
-            if ($loaded.PSObject.Properties['DisableWindowsUpdate']) { $disableWU = [bool]$loaded.DisableWindowsUpdate }
-            if ($loaded.PSObject.Properties['KeepBluetooth'])        { $keepBT = [bool]$loaded.KeepBluetooth }
-            if ($loaded.PSObject.Properties['WSLSupport'])           { $wslSupport = [bool]$loaded.WSLSupport }
-            if ($loaded.PSObject.Properties['KeepRecoveryEnv'])      { $keepRecoveryEnv = [bool]$loaded.KeepRecoveryEnv }
-            if ($loaded.PSObject.Properties['SafeDebloatMode'])      { $safeDebloatMode = [bool]$loaded.SafeDebloatMode }
-            if ($loaded.PSObject.Properties['UltraSlimMode'])        { $ultraSlimMode = [bool]$loaded.UltraSlimMode }
-            if ($loaded.PSObject.Properties['SetJapaneseKeyboard'])  { $setJapaneseKeyboard = [bool]$loaded.SetJapaneseKeyboard }
-            if ($loaded.PSObject.Properties['AtlasReviOSMode'])      { $atlasReviOSMode = [bool]$loaded.AtlasReviOSMode }
-            if ($loaded.PSObject.Properties['BundleOptimizationToolkit']) { $bundleOptimizationToolkit = [bool]$loaded.BundleOptimizationToolkit; $bundleRevTool = $bundleOptimizationToolkit }
-            if ($loaded.PSObject.Properties['RemoveStore'])          { $removeStore = [bool]$loaded.RemoveStore }
+            Apply-ProfileSettings -ProfileObject $loaded
             Write-Host "Applied Profile: 🎵 Audio & DAW Production" -ForegroundColor Magenta
         }
     } elseif ($pChoice -in @('6', 'fat32', 'split', 'splitwim')) {
@@ -2342,21 +2461,7 @@ if ($isAutomated) {
         $loaded = Import-Nano11Profile -FilePath $pPath
         if ($loaded) {
             $selectedProfile = "fat32-splitwim"
-            $splitWIMMode = $true
-            if ($loaded.PSObject.Properties['RemoveDefender'])       { $removeDefender = [bool]$loaded.RemoveDefender }
-            if ($loaded.PSObject.Properties['KeepAsianIME'])         { $keepAsianIME = [bool]$loaded.KeepAsianIME }
-            if ($loaded.PSObject.Properties['KeepExtraFonts'])       { $keepExtraFonts = [bool]$loaded.KeepExtraFonts }
-            if ($loaded.PSObject.Properties['RemoveDrivers'])        { $removeDrivers = [bool]$loaded.RemoveDrivers }
-            if ($loaded.PSObject.Properties['DisableWindowsUpdate']) { $disableWU = [bool]$loaded.DisableWindowsUpdate }
-            if ($loaded.PSObject.Properties['KeepBluetooth'])        { $keepBT = [bool]$loaded.KeepBluetooth }
-            if ($loaded.PSObject.Properties['WSLSupport'])           { $wslSupport = [bool]$loaded.WSLSupport }
-            if ($loaded.PSObject.Properties['KeepRecoveryEnv'])      { $keepRecoveryEnv = [bool]$loaded.KeepRecoveryEnv }
-            if ($loaded.PSObject.Properties['SafeDebloatMode'])      { $safeDebloatMode = [bool]$loaded.SafeDebloatMode }
-            if ($loaded.PSObject.Properties['UltraSlimMode'])        { $ultraSlimMode = [bool]$loaded.UltraSlimMode }
-            if ($loaded.PSObject.Properties['SetJapaneseKeyboard'])  { $setJapaneseKeyboard = [bool]$loaded.SetJapaneseKeyboard }
-            if ($loaded.PSObject.Properties['AtlasReviOSMode'])      { $atlasReviOSMode = [bool]$loaded.AtlasReviOSMode }
-            if ($loaded.PSObject.Properties['BundleOptimizationToolkit']) { $bundleOptimizationToolkit = [bool]$loaded.BundleOptimizationToolkit; $bundleRevTool = $bundleOptimizationToolkit }
-            if ($loaded.PSObject.Properties['RemoveStore'])          { $removeStore = [bool]$loaded.RemoveStore }
+            Apply-ProfileSettings -ProfileObject $loaded
             Write-Host "Applied Profile: 💾 FAT32 USB Split-WIM" -ForegroundColor Yellow
         }
     } elseif ($pChoice -in @('7', 'load', 'json')) {
@@ -2371,30 +2476,7 @@ if ($isAutomated) {
         $loaded = Import-Nano11Profile -FilePath $pPath
         if ($loaded) {
             $selectedProfile = "json ($([System.IO.Path]::GetFileNameWithoutExtension($pPath)))"
-            if ($loaded.PSObject.Properties['RemoveDefender'])       { $removeDefender = [bool]$loaded.RemoveDefender }
-            if ($loaded.PSObject.Properties['KeepAsianIME'])         { $keepAsianIME = [bool]$loaded.KeepAsianIME }
-            if ($loaded.PSObject.Properties['KeepExtraFonts'])       { $keepExtraFonts = [bool]$loaded.KeepExtraFonts }
-            if ($loaded.PSObject.Properties['RemoveDrivers'])        { $removeDrivers = [bool]$loaded.RemoveDrivers }
-            if ($loaded.PSObject.Properties['DisableWindowsUpdate']) { $disableWU = [bool]$loaded.DisableWindowsUpdate }
-            if ($loaded.PSObject.Properties['KeepBluetooth'])        { $keepBT = [bool]$loaded.KeepBluetooth }
-            if ($loaded.PSObject.Properties['WSLSupport'])           { $wslSupport = [bool]$loaded.WSLSupport }
-            if ($loaded.PSObject.Properties['KeepRecoveryEnv'])      { $keepRecoveryEnv = [bool]$loaded.KeepRecoveryEnv }
-            if ($loaded.PSObject.Properties['SafeDebloatMode'])      { $safeDebloatMode = [bool]$loaded.SafeDebloatMode }
-            if ($loaded.PSObject.Properties['UltraSlimMode'])        { $ultraSlimMode = [bool]$loaded.UltraSlimMode }
-            if ($loaded.PSObject.Properties['SetJapaneseKeyboard'])  { $setJapaneseKeyboard = [bool]$loaded.SetJapaneseKeyboard }
-            if ($loaded.PSObject.Properties['AtlasReviOSMode'])      { $atlasReviOSMode = [bool]$loaded.AtlasReviOSMode }
-            if ($loaded.PSObject.Properties['BundleOptimizationToolkit']) {
-                $bundleOptimizationToolkit = [bool]$loaded.BundleOptimizationToolkit
-                $bundleRevTool = $bundleOptimizationToolkit
-            }
-            if ($loaded.PSObject.Properties['RemoveStore'])          { $removeStore = [bool]$loaded.RemoveStore }
-            if ($loaded.PSObject.Properties['UseVHDX'])              { $useVHDX = [bool]$loaded.UseVHDX }
-            if ($loaded.PSObject.Properties['PayloadFormat']) {
-                $fmt = $loaded.PayloadFormat.ToString().ToUpper()
-                if ($fmt -eq 'ESD') { $exportESDMode = $true; $splitWIMMode = $false }
-                elseif ($fmt -eq 'SWM') { $splitWIMMode = $true; $exportESDMode = $false }
-                else { $exportESDMode = $false; $splitWIMMode = $false }
-            }
+            Apply-ProfileSettings -ProfileObject $loaded
             Write-Host "Applied Profile from JSON: $pPath" -ForegroundColor Green
         } else {
             Write-Host "Failed to load JSON profile. Reverting to Extreme profile defaults." -ForegroundColor Yellow
@@ -2564,7 +2646,8 @@ if ($isAutomated) {
         }
     }
 
-    # 9. Component Store (WinSxS) Optimization Mode
+    Enter-Phase 9 "Component Store (WinSxS) Optimization"
+# 9. Component Store (WinSxS) Optimization Mode
     if ($cliBound.Contains('WinSxS') -and (-not $Interactive)) {
         Write-Host "9. Component Store mode: $(if ($safeDebloatMode) { '1 (Safe Cleanup)' } else { '2 (Aggressive Pruning)' }) [CLI: Specified]" -ForegroundColor DarkCyan
     } else {
@@ -2983,6 +3066,9 @@ function Find-AndMountHealthyWindowsIso {
                         return $dl
                     }
                 }
+                # Dismount candidate if it does not contain a healthy install.wim
+                try { Dismount-DiskImage -ImagePath $iso.FullName -ErrorAction SilentlyContinue > $null } catch {}
+                $script:MountedIso = $null
             }
         } catch {}
     }
@@ -3087,14 +3173,19 @@ if (-not $DriveLetter) {
         }
     }
 
-    while (-not $DriveLetter) {
-        $inputDrive = Read-Host "Please enter the drive letter for the Windows 11 installation media (e.g. D or D:)"
-        if ($inputDrive) {
-            $candDrive = $inputDrive.Trim().TrimEnd(':') + ":"
-            if (Test-Path -LiteralPath $candDrive) {
-                $DriveLetter = $candDrive
-            } else {
-                Write-Host "Drive $candDrive does not exist. Please check and re-enter." -ForegroundColor Red
+    if (-not $DriveLetter) {
+        if ($NonInteractive) {
+            throw "No Windows 11 installation media detected. In -NonInteractive mode, please specify a valid media drive or ISO path via -SourceDrive."
+        }
+        while (-not $DriveLetter) {
+            $inputDrive = Read-Host "Please enter the drive letter for the Windows 11 installation media (e.g. D or D:)"
+            if ($inputDrive) {
+                $candDrive = $inputDrive.Trim().TrimEnd(':') + ":"
+                if (Test-Path -LiteralPath $candDrive) {
+                    $DriveLetter = $candDrive
+                } else {
+                    Write-Host "Drive $candDrive does not exist. Please check and re-enter." -ForegroundColor Red
+                }
             }
         }
     }
@@ -3112,12 +3203,28 @@ $hasSourceEsd = (Test-Path -LiteralPath $sourceEsd) -and ((Get-Item -LiteralPath
 $destSourcesDir = Join-Path -Path $nano11Dir -ChildPath "sources"
 New-Item -ItemType Directory -Force -Path $destSourcesDir | Out-Null
 
+$sourceMediaFile = if ($hasSourceWim) { $sourceWim } else { $sourceEsd }
+$cacheMetaFile = Join-Path -Path $nano11Dir -ChildPath ".nano11-source.meta"
+$skipMediaCopy = $false
+
+if (-not $Clean -and (Test-Path -LiteralPath $destWim) -and (Test-Path -LiteralPath $cacheMetaFile)) {
+    try {
+        $cachedMeta = Get-Content -LiteralPath $cacheMetaFile -Raw -Encoding utf8 | ConvertFrom-Json
+        $srcItem = Get-Item -LiteralPath $sourceMediaFile -ErrorAction SilentlyContinue
+        if ($srcItem -and $cachedMeta.SourcePath -eq $sourceMediaFile -and $cachedMeta.Length -eq $srcItem.Length -and $cachedMeta.LastWriteTime -eq $srcItem.LastWriteTime.ToString("o")) {
+            $skipMediaCopy = $true
+            Write-Host "Reusing valid cached installation media in $nano11Dir (Source unchanged). Skipping multi-gigabyte media copy!" -ForegroundColor Green
+        }
+    } catch {}
+}
+
+if (-not $skipMediaCopy) {
 Write-Host "Copying Windows installation files to $nano11Dir..." -ForegroundColor Green
 $sourcePath = $DriveLetter.TrimEnd('\') + "\"
 $copySuccess = $false
 # If converting from install.esd, exclude both install.esd and install.wim from initial robocopy
 # so we don't spend unnecessary minutes duplicating multi-gigabyte source archives.
-$robocopyArgs = @("$sourcePath", "$nano11Dir", "/E", "/R:1", "/W:1", "/NP", "/NFL", "/NDL", "/NJH", "/NJS")
+$robocopyArgs = @("$sourcePath", "$nano11Dir", "/E", "/XJ", "/MT:16", "/J", "/R:1", "/W:1", "/NP", "/NFL", "/NDL", "/NJH", "/NJS")
 if (-not $hasSourceWim -and $hasSourceEsd) {
     $robocopyArgs += @("/XF", "install.esd", "install.wim")
 } elseif (-not $hasSourceWim) {
@@ -3193,6 +3300,19 @@ if (-not (Test-Path -LiteralPath $destWim) -or ((Get-Item -LiteralPath $destWim)
         Stop-Transcript
         exit 1
     }
+}
+    # Record media cache metadata for incremental skips
+    try {
+        $srcItem = Get-Item -LiteralPath $sourceMediaFile -ErrorAction SilentlyContinue
+        if ($srcItem) {
+            $metaData = @{
+                SourcePath    = $sourceMediaFile
+                Length        = $srcItem.Length
+                LastWriteTime = $srcItem.LastWriteTime.ToString("o")
+            }
+            $metaData | ConvertTo-Json | Set-Content -LiteralPath $cacheMetaFile -Encoding utf8
+        }
+    } catch {}
 }
 
 # Explicitly ensure critical boot files exist in target image
@@ -3349,6 +3469,7 @@ if ($wslSupport) {
     Write-Host "  - WSL2 and VirtualMachinePlatform enabled." -ForegroundColor Green
 }
 
+Enter-Phase 5 "Removing provisioned AppX packages (Bloatware)"
 # 5. Removing provisioned AppX packages (Bloatware)
 Write-Host "Removing provisioned AppX packages (bloatware)..." -ForegroundColor Cyan
 $appxPatterns = @(
@@ -3423,6 +3544,7 @@ Write-Host "Disabling Recall and modern AI optional features..." -ForegroundColo
 & dism.exe /English "/image:$scratchDir" /Disable-Feature /FeatureName:Recall /Remove > $null 2>&1
 & dism.exe /English "/image:$scratchDir" /Disable-Feature /FeatureName:Windows-Recall-Optional-Package /Remove > $null 2>&1
 
+Enter-Phase 6 "Removing system packages (FoD / Optional features)"
 # 6. Removing system packages (FoD / Optional features)
 Write-Host "Removing unnecessary system packages..." -ForegroundColor Cyan
 $packagePatterns = @(
@@ -3552,10 +3674,12 @@ foreach ($packageIdentity in $packagesToRemove) {
     & dism.exe /English "/image:$scratchDir" /Remove-Package "/PackageName:$packageIdentity" > $null 2>&1
 }
 
+Enter-Phase 7 "Removing NativeImages (.NET)"
 # 7. Removing NativeImages (.NET)
 Write-Host "Removing pre-compiled .NET Native Images..." -ForegroundColor Cyan
 Remove-Item -Path "$scratchDir\Windows\assembly\NativeImages_*" -Recurse -Force -ErrorAction SilentlyContinue
 
+Enter-Phase 8 "File system slimming (Drivers, WinRE, Fonts)"
 # 8. File system slimming
 $winDir = "$scratchDir\Windows"
 
@@ -3871,6 +3995,7 @@ if ($safeDebloatMode) {
     Rename-Item -LiteralPath $tempWinSxS -NewName "WinSxS" -Force
 }
 
+Enter-Phase 10 "Load Registry Hives and Apply Optimizations"
 # 10. Load Registry Hives and Apply Optimizations
 Write-Host "Loading offline registry hives..." -ForegroundColor Cyan
 $systemHive    = "$scratchDir\Windows\System32\config\SYSTEM"
@@ -4912,6 +5037,7 @@ reg.exe add "HKLM\zSYSTEM\Setup\Status\ChildCompletion" /v "setup.exe" /t REG_DW
 reg.exe add "HKLM\zSYSTEM\Setup\Status\ChildCompletion" /v "audit.exe" /t REG_DWORD /d 3 /f > $null 2>&1
 reg.exe add "HKLM\zSYSTEM\Setup\Status\ChildCompletion" /v "oobe.exe" /t REG_DWORD /d 3 /f > $null 2>&1
 
+Enter-Phase 11 "Configure autounattend.xml & Pre-extract Setup Scripts"
 # 11. Copy autounattend.xml with Architecture Support & Self-healing (Resolves Issues #3, #18, #21, #2, #8, #20)
 Write-Host "Configuring autounattend.xml for target architecture ($architecture)..." -ForegroundColor Green
 $unattendSource = Join-Path -Path $scriptDir -ChildPath "autounattend.xml"
@@ -4941,6 +5067,25 @@ if (Test-Path -LiteralPath $unattendSource) {
     $xmlContent = $xmlContent -replace '(?s)<ProductKey>\s*<WillShowUI>[^<]*</WillShowUI>\s*</ProductKey>', ''
     # Dynamically normalize all Password and AdministratorPassword Value tags to single-line empty values (prevents blank-password login failure)
     $xmlContent = $xmlContent -replace '(?s)<Value>\s+</Value>', '<Value></Value>'
+    # Dynamically parameterize ComputerName and UserName
+    $xmlContent = $xmlContent -replace '<ComputerName>nano11</ComputerName>', "<ComputerName>$ComputerName</ComputerName>"
+    $xmlContent = $xmlContent -replace '<Username>User</Username>', "<Username>$UserName</Username>"
+
+    # Inject Japanese 106/109 Keyboard & Tokyo TimeZone if enabled
+    if ($setJapaneseKeyboard) {
+        if ($xmlContent -notmatch '<TimeZone>Tokyo Standard Time</TimeZone>') {
+            $xmlContent = $xmlContent -replace '(<component name="Microsoft-Windows-Shell-Setup"[^>]*>\s*<ComputerName>[^<]*</ComputerName>)', "`$1`r`n      <TimeZone>Tokyo Standard Time</TimeZone>"
+        }
+        if ($xmlContent -notmatch 'Microsoft-Windows-International-Core') {
+            $intlComponent = @"
+    <component name="Microsoft-Windows-International-Core" processorArchitecture="$architecture" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+      <InputLocale>0411:00000411</InputLocale>
+    </component>
+"@
+            $xmlContent = $xmlContent -replace '(<settings pass="specialize">)', "`$1`r`n$intlComponent"
+        }
+    }
+
     # Dynamically match detected architecture
     $xmlContent = $xmlContent -replace 'processorArchitecture="amd64"', "processorArchitecture=`"$architecture`""
     
@@ -4963,6 +5108,22 @@ if (Test-Path -LiteralPath $unattendSource) {
     # even if dynamic XML extraction during Specialize pass is blocked or delayed.
     $setupScriptsDir = Join-Path -Path $scratchDir -ChildPath "Windows\Setup\Scripts"
     New-Item -Path $setupScriptsDir -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null
+    
+    # Save build traceability manifest (nano11-build-info.json)
+    $buildInfoObj = [ordered]@{
+        BuilderVersion  = $script:Nano11Version
+        BuildUtc        = [DateTime]::UtcNow.ToString("o")
+        Profile         = $selectedProfile
+        Architecture    = $architecture
+        ComputerName    = $ComputerName
+        UserName        = $UserName
+        JapaneseKeyboard= $setJapaneseKeyboard
+        SourceDrive     = $DriveLetter
+        PayloadFormat   = if ($exportESDMode) { "ESD" } elseif ($splitWIMMode) { "SWM" } else { "WIM" }
+    }
+    $buildInfoJson = $buildInfoObj | ConvertTo-Json -Depth 4
+    $buildInfoJson | Set-Content -LiteralPath (Join-Path -Path $nano11Dir -ChildPath "nano11-build-info.json") -Encoding utf8
+    $buildInfoJson | Set-Content -LiteralPath (Join-Path -Path $setupScriptsDir -ChildPath "nano11-build-info.json") -Encoding utf8
     try {
         $xmlDoc = [xml]$xmlContent
         if ($xmlDoc.unattend -and $xmlDoc.unattend.Extensions -and $xmlDoc.unattend.Extensions.File) {
@@ -5333,6 +5494,7 @@ Write-Host "Unmounting offline registry hives..." -ForegroundColor Cyan
 }
 $script:HivesLoaded = $false
 
+Enter-Phase 12 "Unmount and Commit install.wim Image"
 # 12. Unmount and export install image
 Write-Host "Unmounting install image and committing changes..." -ForegroundColor Green
 Write-Host "  -> Saving WIM image changes. Progress will display below..." -ForegroundColor Cyan
@@ -5371,6 +5533,7 @@ if (-not $unmountSuccess) {
     }
 }
 
+Enter-Phase 13 "Export Modified Image (WIM / ESD / SWM)"
 # 13. Export modified image
 # Note: On Windows 11 24H2 (build 26100+), DISM /Compress:recovery (LZMS) has a known crash bug (0xc0000005 in WIMGAPI.DLL).
 # Exporting to install.wim via /Compress:max (LZX) completes in ~20 seconds, never crashes, and produces a 100% compliant Windows Setup payload.
@@ -5424,6 +5587,7 @@ if (-not $esdSuccess) {
     }
 }
 
+Enter-Phase 14 "Patch boot.wim (LabConfig & Bypasses)"
 # 14. Shrink and modify boot.wim (Setup bypasses & dynamic index handling)
 $bootWimPath = Join-Path -Path "$nano11Dir\sources" -ChildPath "boot.wim"
 if (-not (Test-Path -LiteralPath $bootWimPath)) {
@@ -5487,6 +5651,7 @@ if (Test-Path -LiteralPath $bootWimPath) {
     }
 }
 
+Enter-Phase 15 "Verify Final Installation Payload"
 # 15. Verify final installation payload
 $esdCheck = Join-Path -Path "$nano11Dir\sources" -ChildPath "install.esd"
 $wimCheck = Join-Path -Path "$nano11Dir\sources" -ChildPath "install.wim"
@@ -5534,9 +5699,10 @@ if ($validWim) {
     exit 1
 }
 
+Enter-Phase 16 "ISO Root Cleanup & Traceability Embedding"
 # 16. Final cleanup of ISO root and sources
 Write-Host "Performing final cleanup of ISO root..." -ForegroundColor Cyan
-$keepList = @("boot", "efi", "sources", "bootmgr", "bootmgr.efi", "bootmgfw.efi", "setup.exe", "autounattend.xml")
+$keepList = @("boot", "efi", "sources", "bootmgr", "bootmgr.efi", "bootmgfw.efi", "setup.exe", "autounattend.xml", "nano11-build-info.json")
 Get-ChildItem -Path $nano11Dir | Where-Object { $_.Name -notin $keepList } | ForEach-Object {
     Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
 }
@@ -5549,6 +5715,7 @@ if (Test-Path -LiteralPath $sourcesDir) {
     Remove-Item -Path "$sourcesDir\*.diagxml" -Force -ErrorAction SilentlyContinue
 }
 
+Enter-Phase 17 "Locate or Verify oscdimg.exe"
 # 17. Locate or download oscdimg.exe (checks local dirs, PATH, ADK, and multi-mirror fallback)
 $oscdimgCandidates = @(
     (Join-Path -Path $scriptDir -ChildPath "oscdimg.exe"),
@@ -5628,6 +5795,7 @@ if (-not $oscdimgExe) {
     }
 }
 
+Enter-Phase 18 "Create Bootable ISO Image"
 # 18. Create bootable ISO (oscdimg) with Architecture-aware bootdata and Volume Label
 Write-Host "Creating bootable ISO image..." -ForegroundColor Green
 $profSlug = if ($selectedProfile) { ($selectedProfile -replace '[^\w\-]', '_').Trim('_') } else { "custom" }
@@ -5846,6 +6014,12 @@ if ($Validate) {
 } catch {
     Write-Host ""
     Write-Host "Build failed with unhandled exception: $_" -ForegroundColor Red
+    if ($_.InvocationInfo -and $_.InvocationInfo.PositionMessage) {
+        Write-Host "Exception location: $($_.InvocationInfo.PositionMessage)" -ForegroundColor Red
+    }
+    if ($_.ScriptStackTrace) {
+        Write-Host "Stack Trace: $($_.ScriptStackTrace)" -ForegroundColor DarkGray
+    }
     throw
 } finally {
     Write-Host ""

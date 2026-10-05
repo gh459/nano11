@@ -28,6 +28,7 @@ Describe "nano11 Core Architecture & Integrity Suite" {
             $batText = [System.IO.File]::ReadAllText($guiBat, [System.Text.Encoding]::UTF8)
             ($batText -match 'chcp 65001') | Should Be $true
             ($batText -match 'nano11builder\.ps1') | Should Be $true
+            ($batText -match 'BUILDER') | Should Be $true
         }
 
         It "Show-Nano11GUI should contain localized Japanese strings" {
@@ -56,6 +57,19 @@ Describe "nano11 Core Architecture & Integrity Suite" {
                 }
             }
             $badLines.Count | Should Be 0
+        }
+
+        It "nano11builder.ps1 should define Apply-ProfileSettings, Enter-Phase, and Exit-Phase" {
+            $scriptContent = Get-Content -LiteralPath $builderScript -Raw
+            ($scriptContent -match 'function Apply-ProfileSettings') | Should Be $true
+            ($scriptContent -match 'function Enter-Phase') | Should Be $true
+            ($scriptContent -match 'function Exit-Phase') | Should Be $true
+        }
+
+        It "nano11builder.ps1 should expose parameterized ComputerName and UserName" {
+            $scriptContent = Get-Content -LiteralPath $builderScript -Raw
+            ($scriptContent -match '\[string\]\$ComputerName\s*=\s*''\*''') | Should Be $true
+            ($scriptContent -match '\[string\]\$UserName\s*=\s*''User''') | Should Be $true
         }
     }
 
