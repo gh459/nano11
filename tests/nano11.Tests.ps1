@@ -127,6 +127,17 @@ Describe "nano11 Core Architecture & Integrity Suite" {
             ($scriptContent -match '\[switch\]\$FastExport') | Should Be $true
             ($scriptContent -match '\[switch\]\$UefiOnly') | Should Be $true
         }
+
+        It "nano11builder.ps1 and autounattend.xml should implement Windows activation bypass features" {
+            $scriptContent = Get-Content -LiteralPath $builderScript -Raw
+            ($scriptContent -match '\[switch\]\$BypassActivationRestrictions') | Should Be $true
+            ($scriptContent -match 'DisplayNotGenuine') | Should Be $true
+            ($scriptContent -match 'NoLockScreen') | Should Be $true
+            ($scriptContent -match 'bypass-activation\.flag') | Should Be $true
+            $xmlContent = Get-Content -LiteralPath $unattendXml -Raw -Encoding utf8
+            ($xmlContent -match 'bypass-activation\.flag') | Should Be $true
+            ($xmlContent -match 'Activate Windows \(MAS\)\.bat') | Should Be $true
+        }
     }
 
     Context "Optimization Toolkit Removal & Deployment Tooling" {
