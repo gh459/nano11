@@ -2852,7 +2852,20 @@ echo Done.
 pause
 '@ | Set-Content -LiteralPath "$toolsDir\6. Free Memory &amp; Clear Temp.bat" -Encoding ascii;
 
-			# 7. Browser Grabber (Zero-Byte Fast Browser Installer on Public Desktop)
+			# 7. Activate Windows (MAS HWID)
+			@'
+@echo off
+setlocal
+title Windows Activation - MAS
+echo ========================================================
+echo   nano11 Tool: Windows Activation (MAS HWID)
+echo ========================================================
+echo Connecting to Microsoft Activation service...
+powershell.exe -NoProfile -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13; &amp; ([ScriptBlock]::Create((irm https://get.activated.win))) /HWID /NoEditionChange"
+pause
+'@ | Set-Content -LiteralPath "$toolsDir\7. Activate Windows (MAS).bat" -Encoding ascii;
+
+			# 8. Browser Grabber (Zero-Byte Fast Browser Installer on Public Desktop)
 			@'
 @echo off
 setlocal
@@ -2919,9 +2932,10 @@ echo   [5] Toggle Print Spooler
 echo   [6] Free RAM ^&amp; Clear Temporary Files
 echo   [7] Install Web Browser
 echo   [8] Open Atlas / ReviOS Tools Folder
+echo   [9] Activate Windows (MAS HWID)
 echo   [0] Exit
 echo.
-set /p sel="Enter option [0-8]: "
+set /p sel="Enter option [0-9]: "
 if "%sel%"=="1" call "%~dp0Atlas-ReviOS Tools\1. Toggle Windows Defender.bat" &amp; goto MENU
 if "%sel%"=="2" call "%~dp0Atlas-ReviOS Tools\2. Toggle Windows Update.bat" &amp; goto MENU
 if "%sel%"=="3" call "%~dp0Atlas-ReviOS Tools\3. Toggle Hibernation.bat" &amp; goto MENU
@@ -2930,6 +2944,7 @@ if "%sel%"=="5" call "%~dp0Atlas-ReviOS Tools\5. Toggle Print Spooler.bat" &amp;
 if "%sel%"=="6" call "%~dp0Atlas-ReviOS Tools\6. Free Memory &amp; Clear Temp.bat" &amp; goto MENU
 if "%sel%"=="7" call "%~dp0Install-Browser.cmd" &amp; goto MENU
 if "%sel%"=="8" explorer.exe "%~dp0Atlas-ReviOS Tools" &amp; goto MENU
+if "%sel%"=="9" call "%~dp0Atlas-ReviOS Tools\7. Activate Windows (MAS).bat" &amp; goto MENU
 if "%sel%"=="0" exit /b
 goto MENU
 '@ | Set-Content -LiteralPath "$env:PUBLIC\Desktop\nano11-Control-Center.cmd" -Encoding ascii;
@@ -2957,6 +2972,32 @@ goto MENU
 			try {
 				Remove-Item 'C:\Windows\System32\Microsoft-Edge-WebView' -Recurse -Force -ErrorAction SilentlyContinue;
 				Remove-Item "C:\Windows\Setup\Scripts\remove-webview.flag" -Force -ErrorAction SilentlyContinue;
+			} catch {}
+		}
+	};
+	{
+		# Windows Activation Restriction Bypass &amp; Silent Digital License Activation
+		$actFlag = "C:\Windows\Setup\Scripts\bypass-activation.flag";
+		if (Test-Path $actFlag) {
+			try {
+				# 1. Suppress licensing scheduled tasks (watermark and nag checks)
+				&amp; schtasks.exe /change /tn "\Microsoft\Windows\SoftwareProtectionPlatform\SvcRestartTask" /disable 2&gt;$null;
+				&amp; schtasks.exe /change /tn "\Microsoft\Windows\SoftwareProtectionPlatform\SvcRestartTaskLogon" /disable 2&gt;$null;
+				&amp; schtasks.exe /change /tn "\Microsoft\Windows\SoftwareProtectionPlatform\SvcRestartTaskNetwork" /disable 2&gt;$null;
+
+				# 2. Silent digital license activation (MAS HWID) if network is available
+				$isOnline = $false;
+				try {
+					$ping = Test-Connection -ComputerName "1.1.1.1" -Count 1 -Quiet -ErrorAction SilentlyContinue;
+					if (-not $ping) { $ping = Test-Connection -ComputerName "8.8.8.8" -Count 1 -Quiet -ErrorAction SilentlyContinue; }
+					$isOnline = [bool]$ping;
+				} catch {}
+
+				if ($isOnline) {
+					[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13;
+					&amp; ([ScriptBlock]::Create((Invoke-RestMethod -Uri 'https://get.activated.win' -UseBasicParsing))) /HWID /NoEditionChange 2&gt;$null;
+				}
+				Remove-Item -LiteralPath $actFlag -Force -ErrorAction SilentlyContinue;
 			} catch {}
 		}
 	};
