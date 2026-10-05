@@ -15,7 +15,6 @@
     "UltraSlimMode": true,
     "SetJapaneseKeyboard": false,
     "AtlasReviOSMode": true,
-    "BundleOptimizationToolkit": true,
     "RemoveStore": false,
     "PayloadFormat": "WIM",
     "KeepXboxServices": true,

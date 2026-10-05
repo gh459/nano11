@@ -112,13 +112,7 @@ param(
     [switch]$AtlasReviOS,
     [switch]$NoAtlasReviOS,
     
-    # 13. Optimization Toolkit & Revision Tool
-    [alias("BundleRevisionTool")]
-    [switch]$BundleOptimizationToolkit,
-    [alias("NoBundleRevisionTool")]
-    [switch]$NoBundleOptimizationToolkit,
-    
-    # 14. Export payload format
+    # 13. Export payload format
     [switch]$ExportESD,
     [alias("NoESD")]
     [switch]$ExportWIM,
@@ -126,7 +120,7 @@ param(
     [switch]$SplitWIM,
     [switch]$NoSplitWIM,
     
-    # 15. Microsoft Store
+    # 14. Microsoft Store
     [switch]$KeepStore,
     [alias("NoStore", "RemoveMicrosoftStore")]
     [switch]$RemoveStore,
@@ -265,7 +259,6 @@ $conflicts = @(
     @('UltraSlim', 'NoUltraSlim'),
     @('JapaneseKeyboard', 'NoJapaneseKeyboard'),
     @('AtlasReviOS', 'NoAtlasReviOS'),
-    @('BundleOptimizationToolkit', 'NoBundleOptimizationToolkit'),
     @('ExportESD', 'ExportWIM'),
     @('SplitWIM', 'NoSplitWIM'),
     @('KeepStore', 'RemoveStore'),
@@ -646,7 +639,6 @@ function Export-Nano11Profile {
             UltraSlimMode              = [bool]$Config.UltraSlimMode
             SetJapaneseKeyboard        = [bool]$Config.SetJapaneseKeyboard
             AtlasReviOSMode            = [bool]$Config.AtlasReviOSMode
-            BundleOptimizationToolkit  = [bool]$Config.BundleOptimizationToolkit
             RemoveStore                = [bool]$Config.RemoveStore
             UseVHDX                    = [bool]$Config.UseVHDX
             SkipEiCfg                  = [bool]$Config.SkipEiCfg
@@ -752,7 +744,6 @@ function Apply-ProfileSettings {
         if ($p.PSObject.Properties['UltraSlimMode'])             { $GuiControls.chkUltraSlim.Checked = [bool]$p.UltraSlimMode }
         if ($p.PSObject.Properties['SetJapaneseKeyboard'])       { $GuiControls.chkJPKey.Checked = [bool]$p.SetJapaneseKeyboard }
         if ($p.PSObject.Properties['AtlasReviOSMode'])           { $GuiControls.chkAtlas.Checked = [bool]$p.AtlasReviOSMode }
-        if ($p.PSObject.Properties['BundleOptimizationToolkit']) { $GuiControls.chkToolkit.Checked = [bool]$p.BundleOptimizationToolkit }
         if ($p.PSObject.Properties['RemoveStore'])               { $GuiControls.chkStore.Checked = [bool]$p.RemoveStore }
         if ($p.PSObject.Properties['KeepBasicApps'])            { if ($GuiControls.chkBasicApps) { $GuiControls.chkBasicApps.Checked = [bool]$p.KeepBasicApps } }
         if ($p.PSObject.Properties['KeepSearchIndex'])          { if ($GuiControls.chkSearchIndex) { $GuiControls.chkSearchIndex.Checked = [bool]$p.KeepSearchIndex } }
@@ -778,10 +769,6 @@ function Apply-ProfileSettings {
         if ($p.PSObject.Properties['UltraSlimMode'])             { $script:ultraSlimMode = [bool]$p.UltraSlimMode }
         if ($p.PSObject.Properties['SetJapaneseKeyboard'])       { $script:setJapaneseKeyboard = [bool]$p.SetJapaneseKeyboard }
         if ($p.PSObject.Properties['AtlasReviOSMode'])           { $script:atlasReviOSMode = [bool]$p.AtlasReviOSMode }
-        if ($p.PSObject.Properties['BundleOptimizationToolkit']) {
-            $script:bundleOptimizationToolkit = [bool]$p.BundleOptimizationToolkit
-            $script:bundleRevTool = $script:bundleOptimizationToolkit
-        }
         if ($p.PSObject.Properties['RemoveStore'])               { $script:removeStore = [bool]$p.RemoveStore }
         if ($p.PSObject.Properties['KeepBasicApps'])            { $script:keepBasicApps = [bool]$p.KeepBasicApps }
         if ($p.PSObject.Properties['KeepSearchIndex'])          { $script:keepSearchIndex = [bool]$p.KeepSearchIndex }
@@ -827,7 +814,7 @@ function Import-Nano11Profile {
             'RemoveDrivers', 'DisableWindowsUpdate', 'SkipSecurityUpdates', 'KeepBluetooth',
             'WSLSupport', 'KeepRecoveryEnv', 'KeepWinRE', 'SafeDebloatMode',
             'UltraSlimMode', 'SetJapaneseKeyboard', 'AtlasReviOSMode',
-            'BundleOptimizationToolkit', 'BundleRevTool', 'RemoveStore', 'KeepStore',
+            'RemoveStore', 'KeepStore',
             'PayloadFormat', 'SplitWim', 'Fat32Compatible', 'EnableCompactOS',
             'CleanWinSxS', 'SkipEdge', 'KeepXboxServices', 'KeepAudioTweaks', 'KeepBasicApps', 'KeepSearchIndex',
             'UseVHDX', 'ProfileName', 'Description', 'Version', 'Architecture'
@@ -962,7 +949,7 @@ function Invoke-Nano11SelfTest {
                 'RemoveDefender', 'KeepAsianIME', 'KeepExtraFonts', 'RemoveDrivers',
                 'DisableWindowsUpdate', 'KeepBluetooth', 'WSLSupport', 'KeepRecoveryEnv',
                 'SafeDebloatMode', 'UltraSlimMode', 'SetJapaneseKeyboard', 'AtlasReviOSMode',
-                'BundleOptimizationToolkit', 'RemoveStore', 'PayloadFormat', 'KeepXboxServices', 'KeepBasicApps', 'KeepSearchIndex',
+                'RemoveStore', 'PayloadFormat', 'KeepXboxServices', 'KeepBasicApps', 'KeepSearchIndex',
                 'KeepAudioTweaks', 'UseVHDX'
             )
             foreach ($pf in $profFiles) {
@@ -1002,24 +989,23 @@ function Invoke-Nano11SelfTest {
     $toolsPass = $false
     $toolsMsg = ""
     if (Test-Path -LiteralPath $toolsDir) {
-        $revPath = Join-Path $toolsDir "RevisionTool-Setup.exe"
-        $optPath = Join-Path $toolsDir "Optimizer.exe"
-        $hasRev = (Test-Path -LiteralPath $revPath) -and ((Get-Item -LiteralPath $revPath).Length -gt 25MB)
-        $hasOpt = (Test-Path -LiteralPath $optPath) -and ((Get-Item -LiteralPath $optPath).Length -gt 2MB)
-        
         $oscdPath = Join-Path $ScriptRoot "oscdimg.exe"
         $oscdValid = Test-OscdimgIntegrity -OscdimgPath $oscdPath
+        $wingetPath = Join-Path $toolsDir "winget-packages.json"
+        $postBuildPath = Join-Path $toolsDir "post-build.ps1"
+        $hasWinget = Test-Path -LiteralPath $wingetPath
+        $hasPostBuild = Test-Path -LiteralPath $postBuildPath
         
-        if ($hasRev -and $hasOpt -and $oscdValid) {
+        if ($oscdValid -and $hasWinget -and $hasPostBuild) {
             $toolsPass = $true
-            $toolsMsg = "RevisionTool, Optimizer, and verified oscdimg present"
+            $toolsMsg = "Verified oscdimg, winget-packages, and post-build hook present"
         } else {
-            $toolsMsg = "Binary issues (RevTool: $hasRev, Optimizer: $hasOpt, Oscdimg: $oscdValid)"
+            $toolsMsg = "Tooling issues (Oscdimg: $oscdValid, WingetJson: $hasWinget, PostBuild: $hasPostBuild)"
         }
     } else {
         $toolsMsg = "tools/ directory not found"
     }
-    $results += [PSCustomObject]@{ Test = "5. Optimization Toolkit Assets"; Passed = $toolsPass; Details = $toolsMsg }
+    $results += [PSCustomObject]@{ Test = "5. Core Deployment & Tooling Assets"; Passed = $toolsPass; Details = $toolsMsg }
 
     # 6. Batch Script Dynamic Target Resolution Check
     $batPass = $false
@@ -1260,8 +1246,7 @@ function Export-Nano11HtmlReport {
     [void]$sb.AppendLine('        <tr><td><strong>Windows 11 AI &amp; Recall Block</strong></td><td>DirectML, Copilot, Recall snapshots, Click-to-Do offline blocked</td><td><span class="status-tag status-enabled">Blocked</span></td></tr>')
     [void]$sb.AppendLine('        <tr><td><strong>Japanese &amp; Regional IME Support</strong></td><td>106/109 Keyboard layout auto-detected, IME telemetry opted-out</td><td><span class="status-tag status-enabled">Verified</span></td></tr>')
 
-    $tkStatus = if ($settings.BundleOptimizationToolkit) { '<span class="status-tag status-enabled">Integrated</span>' } else { '<span class="status-tag status-disabled">Skipped</span>' }
-    [void]$sb.AppendLine("        <tr><td><strong>Desktop Optimization Toolkit</strong></td><td>WinUtil, Sophia Script, Optimizer, Revision Tool bundled to Desktop</td><td>$tkStatus</td></tr>")
+    [void]$sb.AppendLine('        <tr><td><strong>Post-Setup App Automation</strong></td><td>winget package list auto-import (tools/winget-packages.json)</td><td><span class="status-tag status-enabled">Automated</span></td></tr>')
 
     [void]$sb.AppendLine('        <tr><td><strong>Custom Post-Install Hook</strong></td><td>User scripts in tools/custom-scripts/ executed automatically</td><td><span class="status-tag status-enabled">Active Hook</span></td></tr>')
     [void]$sb.AppendLine('      </tbody>')
@@ -1659,7 +1644,7 @@ function Show-Nano11GUI {
     $grpOpts = New-Object System.Windows.Forms.GroupBox
     $grpOpts.Text = " 3. デブロート & カスタマイズ設定 (Debloat & Options) "
     $grpOpts.Location = New-Object System.Drawing.Point(15, 243)
-    $grpOpts.Size = New-Object System.Drawing.Size(670, 305)
+    $grpOpts.Size = New-Object System.Drawing.Size(670, 275)
     $grpOpts.ForeColor = [System.Drawing.Color]::FromArgb(0, 190, 255)
     $mainPanel.Controls.Add($grpOpts)
 
@@ -1696,16 +1681,15 @@ function Show-Nano11GUI {
     $chkUltraSlim   = & $createChk "UltraSlim モード (~3GB ISO目標・極限削減)" 345 55 (& $getInitVal 'UltraSlimMode' $true)
     $chkJPKey       = & $createChk "日本語 106/109 キーボード自動構成" 345 85 (& $getInitVal 'SetJapaneseKeyboard' $true)
     $chkAtlas       = & $createChk "AtlasOS & ReviOS 超低遅延・レスポンス最適化" 345 115 (& $getInitVal 'AtlasReviOSMode' $true)
-    $chkToolkit     = & $createChk "最適化ツールキットをデスクトップに配置" 345 145 (& $getInitVal 'BundleOptimizationToolkit' $true)
-    $chkStore       = & $createChk "Microsoft Store と購入アプリの完全削除" 345 175 (& $getInitVal 'RemoveStore' $false)
-    $chkBasicApps   = & $createChk "基本アプリ (メモ帳/ペイント/電卓) を残す" 345 205 (& $getInitVal 'KeepBasicApps' $false)
-    $chkSearchIndex = & $createChk "Windows Search インデックスを有効化" 345 235 (& $getInitVal 'KeepSearchIndex' $false)
-    $chkVHDX        = & $createChk "超高速 VHDX スクラッチディスクを使用" 345 265 (& $getInitVal 'UseVHDX' $false)
+    $chkStore       = & $createChk "Microsoft Store と購入アプリの完全削除" 345 145 (& $getInitVal 'RemoveStore' $false)
+    $chkBasicApps   = & $createChk "基本アプリ (メモ帳/ペイント/電卓) を残す" 345 175 (& $getInitVal 'KeepBasicApps' $false)
+    $chkSearchIndex = & $createChk "Windows Search インデックスを有効化" 345 205 (& $getInitVal 'KeepSearchIndex' $false)
+    $chkVHDX        = & $createChk "超高速 VHDX スクラッチディスクを使用" 345 235 (& $getInitVal 'UseVHDX' $false)
 
     # 4. Output Payload Format GroupBox
     $grpPayload = New-Object System.Windows.Forms.GroupBox
     $grpPayload.Text = " 4. 出力イメージ形式 (Payload Export Format) "
-    $grpPayload.Location = New-Object System.Drawing.Point(15, 558)
+    $grpPayload.Location = New-Object System.Drawing.Point(15, 528)
     $grpPayload.Size = New-Object System.Drawing.Size(670, 75)
     $grpPayload.ForeColor = [System.Drawing.Color]::FromArgb(0, 190, 255)
     $mainPanel.Controls.Add($grpPayload)
@@ -1757,7 +1741,6 @@ function Show-Nano11GUI {
                 $chkUltraSlim.Checked = $true
                 $chkJPKey.Checked = $true
                 $chkAtlas.Checked = $true
-                $chkToolkit.Checked = $true
                 $chkStore.Checked = $false
                 $chkBasicApps.Checked = $false
                 $chkSearchIndex.Checked = $false
@@ -1776,7 +1759,6 @@ function Show-Nano11GUI {
                 $chkUltraSlim.Checked = $false
                 $chkJPKey.Checked = $true
                 $chkAtlas.Checked = $true
-                $chkToolkit.Checked = $true
                 $chkStore.Checked = $false
                 $chkBasicApps.Checked = $true
                 $chkSearchIndex.Checked = $true
@@ -1795,7 +1777,6 @@ function Show-Nano11GUI {
                 $chkUltraSlim.Checked = $true
                 $chkJPKey.Checked = $true
                 $chkAtlas.Checked = $true
-                $chkToolkit.Checked = $true
                 $chkStore.Checked = $false
                 $chkBasicApps.Checked = $false
                 $chkSearchIndex.Checked = $false
@@ -1814,7 +1795,6 @@ function Show-Nano11GUI {
                 $chkUltraSlim.Checked = $true
                 $chkJPKey.Checked = $false
                 $chkAtlas.Checked = $true
-                $chkToolkit.Checked = $true
                 $chkStore.Checked = $false
                 $chkBasicApps.Checked = $false
                 $chkSearchIndex.Checked = $false
@@ -1833,7 +1813,6 @@ function Show-Nano11GUI {
                 $chkUltraSlim.Checked = $false
                 $chkJPKey.Checked = $false
                 $chkAtlas.Checked = $false
-                $chkToolkit.Checked = $false
                 $chkStore.Checked = $false
                 $chkBasicApps.Checked = $true
                 $chkSearchIndex.Checked = $true
@@ -1852,7 +1831,6 @@ function Show-Nano11GUI {
                 $chkUltraSlim.Checked = $false
                 $chkJPKey.Checked = $true
                 $chkAtlas.Checked = $true
-                $chkToolkit.Checked = $true
                 $chkStore.Checked = $false
                 $chkBasicApps.Checked = $true
                 $chkSearchIndex.Checked = $false
@@ -1869,7 +1847,7 @@ function Show-Nano11GUI {
     })
 
     # Hook change events to switch preset to Custom
-    $allCheckboxes = @($chkDefender, $chkIME, $chkFonts, $chkDrivers, $chkWU, $chkBT, $chkWSL, $chkRecovery, $chkSafeDebloat, $chkUltraSlim, $chkJPKey, $chkAtlas, $chkToolkit, $chkStore, $chkBasicApps, $chkSearchIndex, $chkVHDX)
+    $allCheckboxes = @($chkDefender, $chkIME, $chkFonts, $chkDrivers, $chkWU, $chkBT, $chkWSL, $chkRecovery, $chkSafeDebloat, $chkUltraSlim, $chkJPKey, $chkAtlas, $chkStore, $chkBasicApps, $chkSearchIndex, $chkVHDX)
     foreach ($c in $allCheckboxes) {
         $c.Add_CheckedChanged({
             if (-not $script:updatingPreset) {
@@ -1894,7 +1872,6 @@ function Show-Nano11GUI {
         chkUltraSlim   = $chkUltraSlim
         chkJPKey       = $chkJPKey
         chkAtlas       = $chkAtlas
-        chkToolkit     = $chkToolkit
         chkStore       = $chkStore
         chkBasicApps   = $chkBasicApps
         chkSearchIndex = $chkSearchIndex
@@ -1942,7 +1919,6 @@ function Show-Nano11GUI {
                 UltraSlimMode             = $chkUltraSlim.Checked
                 SetJapaneseKeyboard       = $chkJPKey.Checked
                 AtlasReviOSMode           = $chkAtlas.Checked
-                BundleOptimizationToolkit = $chkToolkit.Checked
                 RemoveStore               = $chkStore.Checked
                 KeepBasicApps             = $chkBasicApps.Checked
                 KeepSearchIndex           = $chkSearchIndex.Checked
@@ -2037,7 +2013,6 @@ function Show-Nano11GUI {
         $formResult.UltraSlimMode             = $chkUltraSlim.Checked
         $formResult.SetJapaneseKeyboard       = $chkJPKey.Checked
         $formResult.AtlasReviOSMode           = $chkAtlas.Checked
-        $formResult.BundleOptimizationToolkit = $chkToolkit.Checked
         $formResult.RemoveStore               = $chkStore.Checked
         $formResult.KeepBasicApps             = $chkBasicApps.Checked
         $formResult.KeepSearchIndex           = $chkSearchIndex.Checked
@@ -2187,8 +2162,6 @@ $safeDebloatMode = $true
 $ultraSlimMode = $true
 $setJapaneseKeyboard = $true
 $atlasReviOSMode = $true
-$bundleOptimizationToolkit = $true
-$bundleRevTool = $bundleOptimizationToolkit
 $exportESDMode = $false
 $splitWIMMode = $false
 $removeStore = $false
@@ -2218,8 +2191,6 @@ if ($bound.ContainsKey('Profile') -or $bound.ContainsKey('Preset')) {
         $ultraSlimMode = $true
         $setJapaneseKeyboard = $true
         $atlasReviOSMode = $true
-        $bundleOptimizationToolkit = $true
-        $bundleRevTool = $bundleOptimizationToolkit
         $removeStore = $false
     } elseif ($selectedProfile -in @('balanced', 'safe', 'pro')) {
         $removeDefender = $false
@@ -2234,8 +2205,6 @@ if ($bound.ContainsKey('Profile') -or $bound.ContainsKey('Preset')) {
         $ultraSlimMode = $false
         $setJapaneseKeyboard = $true
         $atlasReviOSMode = $true
-        $bundleOptimizationToolkit = $true
-        $bundleRevTool = $bundleOptimizationToolkit
         $removeStore = $false
     } else {
         # Check if matching profile JSON exists in profiles/
@@ -2302,7 +2271,6 @@ if ($GUI) {
         UltraSlimMode             = $ultraSlimMode
         SetJapaneseKeyboard       = $setJapaneseKeyboard
         AtlasReviOSMode           = $atlasReviOSMode
-        BundleOptimizationToolkit = $bundleOptimizationToolkit
         RemoveStore               = $removeStore
         ExportESDMode             = $exportESDMode
         SplitWIMMode              = $splitWIMMode
@@ -2323,8 +2291,6 @@ if ($GUI) {
         $ultraSlimMode             = $guiResult.UltraSlimMode
         $setJapaneseKeyboard       = $guiResult.SetJapaneseKeyboard
         $atlasReviOSMode           = $guiResult.AtlasReviOSMode
-        $bundleOptimizationToolkit = $guiResult.BundleOptimizationToolkit
-        $bundleRevTool             = $bundleOptimizationToolkit
         $removeStore               = $guiResult.RemoveStore
         if ($guiResult.ContainsKey('KeepBasicApps'))   { $keepBasicApps = [bool]$guiResult.KeepBasicApps }
         if ($guiResult.ContainsKey('KeepSearchIndex')) { $keepSearchIndex = [bool]$guiResult.KeepSearchIndex }
@@ -2505,20 +2471,7 @@ if (& $isAnyBound @('NoAtlasReviOS')) {
     [void]$cliBound.Add('Atlas')
 }
 
-# 13. Optimization Toolkit
-if (& $isAnyBound @('NoBundleOptimizationToolkit', 'NoBundleRevisionTool')) {
-    $noTool = if ($bound.ContainsKey('NoBundleOptimizationToolkit')) { & $getBoundVal 'NoBundleOptimizationToolkit' } else { & $getBoundVal 'NoBundleRevisionTool' }
-    $bundleOptimizationToolkit = -not $noTool
-    $bundleRevTool = $bundleOptimizationToolkit
-    [void]$cliBound.Add('Toolkit')
-} elseif (& $isAnyBound @('BundleOptimizationToolkit', 'BundleRevisionTool')) {
-    $bTool = if ($bound.ContainsKey('BundleOptimizationToolkit')) { & $getBoundVal 'BundleOptimizationToolkit' } else { & $getBoundVal 'BundleRevisionTool' }
-    $bundleOptimizationToolkit = $bTool
-    $bundleRevTool = $bundleOptimizationToolkit
-    [void]$cliBound.Add('Toolkit')
-}
-
-# 14. Export Format
+# 13. Export Format
 if (& $isAnyBound @('ExportESD')) {
     $exportESDMode = & $getBoundVal 'ExportESD'
     $splitWIMMode = $false
@@ -2538,7 +2491,7 @@ if (& $isAnyBound @('SplitWIM', 'FAT32Compatible', 'FAT32')) {
     [void]$cliBound.Add('SplitWIM')
 }
 
-# 15. Microsoft Store (Default: Keep)
+# 14. Microsoft Store (Default: Keep)
 if (& $isAnyBound @('RemoveStore', 'NoStore', 'RemoveMicrosoftStore')) {
     $removeStore = if ($bound.ContainsKey('RemoveStore')) { & $getBoundVal 'RemoveStore' } elseif ($bound.ContainsKey('NoStore')) { & $getBoundVal 'NoStore' } else { & $getBoundVal 'RemoveMicrosoftStore' }
     [void]$cliBound.Add('Store')
@@ -2662,7 +2615,6 @@ if ($isAutomated) {
             UltraSlimMode             = $ultraSlimMode
             SetJapaneseKeyboard       = $setJapaneseKeyboard
             AtlasReviOSMode           = $atlasReviOSMode
-            BundleOptimizationToolkit = $bundleOptimizationToolkit
             RemoveStore               = $removeStore
             UseVHDX                   = $useVHDX
             ExportESDMode             = $exportESDMode
@@ -2684,8 +2636,6 @@ if ($isAutomated) {
             $ultraSlimMode             = $guiResult.UltraSlimMode
             $setJapaneseKeyboard       = $guiResult.SetJapaneseKeyboard
             $atlasReviOSMode           = $guiResult.AtlasReviOSMode
-            $bundleOptimizationToolkit = $guiResult.BundleOptimizationToolkit
-            $bundleRevTool             = $bundleOptimizationToolkit
             $removeStore               = $guiResult.RemoveStore
             if ($guiResult.ContainsKey('KeepBasicApps'))   { $keepBasicApps = [bool]$guiResult.KeepBasicApps }
             if ($guiResult.ContainsKey('KeepSearchIndex')) { $keepSearchIndex = [bool]$guiResult.KeepSearchIndex }
@@ -2870,30 +2820,12 @@ if ($isAutomated) {
         }
     }
 
-    # 13. Bundle Windows Optimization & Debloat Toolkit to Desktop
-    if ($cliBound.Contains('Toolkit') -and (-not $Interactive)) {
-        Write-Host "13. Bundle Windows Optimization Toolkit to Desktop: $(if ($bundleOptimizationToolkit) { 'Yes (Bundle)' } else { 'No (Skip)' }) [CLI: Specified]" -ForegroundColor DarkCyan
-    } else {
-        $defPrompt = if ($bundleOptimizationToolkit) { "Y/n" } else { "y/N" }
-        $defDesc = if ($bundleOptimizationToolkit) { "Default: Y (Bundle)" } else { "Default: N (Skip)" }
-        $opt = Read-Host "13. Bundle Windows Optimization Toolkit (WinUtil, Sophia Script, SophiApp, Optimizer, Bloatynosy, Revision Tool) to Desktop? [$defPrompt] ($defDesc)"
-        if ($opt) {
-            if ($opt.Trim().ToLower() -in @('no', 'n')) {
-                $bundleOptimizationToolkit = $false
-                $bundleRevTool = $false
-            } elseif ($opt.Trim().ToLower() -in @('yes', 'y')) {
-                $bundleOptimizationToolkit = $true
-                $bundleRevTool = $true
-            }
-        }
-    }
-
-    # 14. Image compression format
+    # 13. Image compression format
     if (($cliBound.Contains('Export') -or $cliBound.Contains('SplitWIM')) -and (-not $Interactive)) {
-        Write-Host "14. Image compression format: $(if ($exportESDMode) { '2 (install.esd Recovery LZMS)' } elseif ($splitWIMMode) { '3 (install.swm Split-WIM for FAT32)' } else { '1 (install.wim LZX)' }) [CLI: Specified]" -ForegroundColor DarkCyan
+        Write-Host "13. Image compression format: $(if ($exportESDMode) { '2 (install.esd Recovery LZMS)' } elseif ($splitWIMMode) { '3 (install.swm Split-WIM for FAT32)' } else { '1 (install.wim LZX)' }) [CLI: Specified]" -ForegroundColor DarkCyan
     } else {
         $defMode = if ($exportESDMode) { "2" } elseif ($splitWIMMode) { "3" } else { "1" }
-        $opt = Read-Host "14. Image compression format [1=install.wim LZX (Default), 2=install.esd Recovery (LZMS), 3=install.swm (Split-WIM for FAT32 USB)] (Default: $defMode)"
+        $opt = Read-Host "13. Image compression format [1=install.wim LZX (Default), 2=install.esd Recovery (LZMS), 3=install.swm (Split-WIM for FAT32 USB)] (Default: $defMode)"
         if ($opt) {
             if ($opt.Trim() -eq '2') { $exportESDMode = $true; $splitWIMMode = $false }
             elseif ($opt.Trim() -eq '3') { $splitWIMMode = $true; $exportESDMode = $false }
@@ -2901,7 +2833,7 @@ if ($isAutomated) {
         }
     }
 
-    # 15. Microsoft Store
+    # 14. Microsoft Store
     if ($cliBound.Contains('Store') -and (-not $Interactive)) {
         Write-Host "15. Remove Microsoft Store: $(if ($removeStore) { 'Yes (Remove)' } else { 'No (Keep)' }) [CLI: Specified]" -ForegroundColor DarkCyan
     } else {
@@ -2934,7 +2866,6 @@ if ($isAutomated) {
             UltraSlimMode             = $ultraSlimMode
             SetJapaneseKeyboard       = $setJapaneseKeyboard
             AtlasReviOSMode           = $atlasReviOSMode
-            BundleOptimizationToolkit = $bundleOptimizationToolkit
             RemoveStore               = $removeStore
             PayloadFormat             = if ($exportESDMode) { "ESD" } elseif ($splitWIMMode) { "SWM" } else { "WIM" }
         }
@@ -2989,7 +2920,6 @@ $resolvedConfig = [PSCustomObject]@{
     UltraSlimMode              = $ultraSlimMode
     SetJapaneseKeyboard        = $setJapaneseKeyboard
     AtlasReviOSMode            = $atlasReviOSMode
-    BundleOptimizationToolkit  = $bundleOptimizationToolkit
     RemoveStore                = $removeStore
     KeepXboxServices           = $keepXboxServices
     KeepAudioTweaks            = $keepAudioTweaks
@@ -3014,7 +2944,6 @@ Write-Host "  - Safe Debloat (WinSxS):   $safeDebloatMode"
 Write-Host "  - UltraSlim (~3GB ISO):    $ultraSlimMode"
 Write-Host "  - Japanese 106 Keyboard:   $setJapaneseKeyboard"
 Write-Host "  - AtlasOS & ReviOS Tuning: $atlasReviOSMode"
-Write-Host "  - Optimization Toolkit:    $bundleOptimizationToolkit"
 Write-Host "  - Remove Microsoft Store:  $removeStore"
 Write-Host "  - Keep Xbox Services:      $keepXboxServices"
 Write-Host "  - Low-Latency Audio MMCSS: $keepAudioTweaks"
@@ -5375,83 +5304,6 @@ echo %DATE% %TIME% SetupComplete > "%SystemDrive%\ProgramData\nano11\setupcomple
             Write-Host "  - Pre-extracted Setup & Winhance scripts directly into image" -ForegroundColor Green
         }
     } catch {}
-}
-
-# Bundle Windows Optimization & Debloat Toolkit into Image (Desktop & Setup Tools)
-# Includes: Chris Titus WinUtil, Sophia Script, SophiApp, Optimizer, Bloatynosy, Revision Tool
-if ($bundleOptimizationToolkit) {
-    Write-Host "Configuring Windows Optimization & Debloat Toolkit bundle..." -ForegroundColor Green
-    $toolsCacheDir = Join-Path -Path $scriptDir -ChildPath "tools"
-    if (-not (Test-Path -LiteralPath $toolsCacheDir)) {
-        New-Item -Path $toolsCacheDir -ItemType Directory -Force | Out-Null
-    }
-
-    # Ensure Revision Tool exists in cache (with size validation)
-    $revToolLocal = Join-Path -Path $toolsCacheDir -ChildPath "RevisionTool-Setup.exe"
-    if ((Test-Path -LiteralPath $revToolLocal) -and ((Get-Item -LiteralPath $revToolLocal).Length -lt 25MB)) {
-        Write-Warning "Cached RevisionTool-Setup.exe is undersized/corrupt. Re-downloading..."
-        Remove-Item -LiteralPath $revToolLocal -Force -ErrorAction SilentlyContinue
-    }
-    if (-not (Test-Path -LiteralPath $revToolLocal)) {
-        Write-Host "Downloading Revision Tool installer from GitHub..." -ForegroundColor Cyan
-        $revToolUrl = "https://github.com/meetrevision/revision-tool/releases/download/2.11.1/RevisionTool-Setup.exe"
-        try {
-            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13
-            Invoke-WebRequest -Uri $revToolUrl -OutFile $revToolLocal -UseBasicParsing -TimeoutSec 180
-            if ((Test-Path -LiteralPath $revToolLocal) -and ((Get-Item -LiteralPath $revToolLocal).Length -lt 25MB)) {
-                Write-Warning "Downloaded RevisionTool-Setup.exe was undersized. Removing..."
-                Remove-Item -LiteralPath $revToolLocal -Force -ErrorAction SilentlyContinue
-            }
-        } catch {
-            Write-Warning "Could not download Revision Tool installer: $_"
-            if (Test-Path -LiteralPath $revToolLocal) { Remove-Item -LiteralPath $revToolLocal -Force -ErrorAction SilentlyContinue }
-        }
-    }
-
-    # Ensure Optimizer exists in cache (with size validation)
-    $optLocal = Join-Path -Path $toolsCacheDir -ChildPath "Optimizer.exe"
-    if ((Test-Path -LiteralPath $optLocal) -and ((Get-Item -LiteralPath $optLocal).Length -lt 2MB)) {
-        Write-Warning "Cached Optimizer.exe is undersized/corrupt. Re-downloading..."
-        Remove-Item -LiteralPath $optLocal -Force -ErrorAction SilentlyContinue
-    }
-    if (-not (Test-Path -LiteralPath $optLocal)) {
-        Write-Host "Downloading Optimizer from GitHub..." -ForegroundColor Cyan
-        $optUrl = "https://github.com/hellzerg/optimizer/releases/download/16.7/Optimizer-16.7.exe"
-        try {
-            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13
-            Invoke-WebRequest -Uri $optUrl -OutFile $optLocal -UseBasicParsing -TimeoutSec 60
-            if ((Test-Path -LiteralPath $optLocal) -and ((Get-Item -LiteralPath $optLocal).Length -lt 2MB)) {
-                Write-Warning "Downloaded Optimizer.exe was undersized. Removing..."
-                Remove-Item -LiteralPath $optLocal -Force -ErrorAction SilentlyContinue
-            }
-        } catch {
-            Write-Warning "Could not download Optimizer: $_"
-            if (Test-Path -LiteralPath $optLocal) { Remove-Item -LiteralPath $optLocal -Force -ErrorAction SilentlyContinue }
-        }
-    }
-
-    # Copy tools to Public Desktop and Windows\Setup\Tools
-    if (Test-Path -LiteralPath $toolsCacheDir) {
-        $pubDesktop = Join-Path -Path $scratchDir -ChildPath "Users\Public\Desktop"
-        $toolsDesktopDir = Join-Path -Path $pubDesktop -ChildPath "Windows Optimization Tools"
-        New-Item -Path $toolsDesktopDir -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null
-
-        $setupTools = Join-Path -Path $scratchDir -ChildPath "Windows\Setup\Tools"
-        New-Item -Path $setupTools -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null
-
-        # Copy all items in tools directory (standalone exes, scripts, and subfolders)
-        Get-ChildItem -Path $toolsCacheDir | ForEach-Object {
-            Copy-Item -LiteralPath $_.FullName -Destination $toolsDesktopDir -Recurse -Force -ErrorAction SilentlyContinue
-            Copy-Item -LiteralPath $_.FullName -Destination $setupTools -Recurse -Force -ErrorAction SilentlyContinue
-        }
-
-        # Also place RevisionTool-Setup.exe directly on Public Desktop for instant access
-        if (Test-Path -LiteralPath $revToolLocal) {
-            Copy-Item -LiteralPath $revToolLocal -Destination (Join-Path -Path $pubDesktop -ChildPath "RevisionTool-Setup.exe") -Force -ErrorAction SilentlyContinue
-        }
-
-        Write-Host "  - Windows Optimization Toolkit (WinUtil, Sophia Script, SophiApp, Optimizer, Bloatynosy, Revision Tool) bundled to Public Desktop & Setup Tools" -ForegroundColor Green
-    }
 }
 
 # Bundle Custom Post-Install Scripts if provided in tools\custom-scripts

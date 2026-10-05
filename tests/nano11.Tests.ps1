@@ -117,15 +117,17 @@ Describe "nano11 Core Architecture & Integrity Suite" {
         }
     }
 
-    Context "Optimization Toolkit Cache" {
-        It "RevisionTool-Setup.exe should be present in tools cache" {
+    Context "Optimization Toolkit Removal & Deployment Tooling" {
+        It "RevisionTool-Setup.exe and Optimizer.exe should NOT be present in tools cache" {
             $revPath = Join-Path -Path $toolsDir -ChildPath "RevisionTool-Setup.exe"
-            Test-Path -LiteralPath $revPath | Should Be $true
+            $optPath = Join-Path -Path $toolsDir -ChildPath "Optimizer.exe"
+            Test-Path -LiteralPath $revPath | Should Be $false
+            Test-Path -LiteralPath $optPath | Should Be $false
         }
 
-        It "Optimizer.exe should be present in tools cache" {
-            $optPath = Join-Path -Path $toolsDir -ChildPath "Optimizer.exe"
-            Test-Path -LiteralPath $optPath | Should Be $true
+        It "oscdimg.exe should be present and valid" {
+            $oscdPath = Join-Path -Path $repoRoot -ChildPath "oscdimg.exe"
+            Test-Path -LiteralPath $oscdPath | Should Be $true
         }
     }
 

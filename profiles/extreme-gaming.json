@@ -15,7 +15,6 @@
     "UltraSlimMode": true,
     "SetJapaneseKeyboard": true,
     "AtlasReviOSMode": true,
-    "BundleOptimizationToolkit": true,
     "RemoveStore": false,
     "PayloadFormat": "WIM",
     "KeepBasicApps": false,
