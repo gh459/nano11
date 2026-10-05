@@ -47,6 +47,9 @@ param(
     [string]$ComputerName = '*',
     [string]$UserName = 'User',
     [int]$KeepLogs = 10,
+    [string]$InjectDrivers,
+    [switch]$KeepBasicApps,
+    [switch]$KeepSearchIndex,
     
     # 1. Windows Defender
     [switch]$KeepDefender,
@@ -390,6 +393,10 @@ function Set-OfflineReg {
     & reg.exe add $Key /v $Name /t $Type /d $Data /f > $null 2>&1
     if ($LASTEXITCODE -eq 0) {
         $script:RegSuccessCount++
+        if ($script:RegJournalPath) {
+            $csvLine = '"{0}","{1}","{2}","{3}"' -f ($Key -replace '"','""'), ($Name -replace '"','""'), $Type, ($Data -replace '"','""')
+            Add-Content -LiteralPath $script:RegJournalPath -Value $csvLine -Encoding utf8 -ErrorAction SilentlyContinue
+        }
     } else {
         $script:RegFailureCount++
         Write-Host "Warning: Failed to set registry value: $Key\$Name" -ForegroundColor Yellow
@@ -747,6 +754,8 @@ function Apply-ProfileSettings {
         if ($p.PSObject.Properties['AtlasReviOSMode'])           { $GuiControls.chkAtlas.Checked = [bool]$p.AtlasReviOSMode }
         if ($p.PSObject.Properties['BundleOptimizationToolkit']) { $GuiControls.chkToolkit.Checked = [bool]$p.BundleOptimizationToolkit }
         if ($p.PSObject.Properties['RemoveStore'])               { $GuiControls.chkStore.Checked = [bool]$p.RemoveStore }
+        if ($p.PSObject.Properties['KeepBasicApps'])            { if ($GuiControls.chkBasicApps) { $GuiControls.chkBasicApps.Checked = [bool]$p.KeepBasicApps } }
+        if ($p.PSObject.Properties['KeepSearchIndex'])          { if ($GuiControls.chkSearchIndex) { $GuiControls.chkSearchIndex.Checked = [bool]$p.KeepSearchIndex } }
         if ($p.PSObject.Properties['UseVHDX'])                   { if ($GuiControls.chkVhdx) { $GuiControls.chkVhdx.Checked = [bool]$p.UseVHDX } }
         if ($p.PSObject.Properties['SkipEiCfg'])                 { if ($GuiControls.chkSkipEiCfg) { $GuiControls.chkSkipEiCfg.Checked = [bool]$p.SkipEiCfg } }
         if ($p.PSObject.Properties['NoPostInstallAssets'])       { if ($GuiControls.chkNoPostInstall) { $GuiControls.chkNoPostInstall.Checked = [bool]$p.NoPostInstallAssets } }
@@ -774,6 +783,8 @@ function Apply-ProfileSettings {
             $script:bundleRevTool = $script:bundleOptimizationToolkit
         }
         if ($p.PSObject.Properties['RemoveStore'])               { $script:removeStore = [bool]$p.RemoveStore }
+        if ($p.PSObject.Properties['KeepBasicApps'])            { $script:keepBasicApps = [bool]$p.KeepBasicApps }
+        if ($p.PSObject.Properties['KeepSearchIndex'])          { $script:keepSearchIndex = [bool]$p.KeepSearchIndex }
         if ($p.PSObject.Properties['KeepXboxServices'])          { $script:keepXboxServices = [bool]$p.KeepXboxServices }
         if ($p.PSObject.Properties['KeepAudioTweaks'])           { $script:keepAudioTweaks = [bool]$p.KeepAudioTweaks }
         if ($p.PSObject.Properties['UseVHDX'])                   { $script:useVHDX = [bool]$p.UseVHDX }
@@ -818,7 +829,7 @@ function Import-Nano11Profile {
             'UltraSlimMode', 'SetJapaneseKeyboard', 'AtlasReviOSMode',
             'BundleOptimizationToolkit', 'BundleRevTool', 'RemoveStore', 'KeepStore',
             'PayloadFormat', 'SplitWim', 'Fat32Compatible', 'EnableCompactOS',
-            'CleanWinSxS', 'SkipEdge', 'KeepXboxServices', 'KeepAudioTweaks',
+            'CleanWinSxS', 'SkipEdge', 'KeepXboxServices', 'KeepAudioTweaks', 'KeepBasicApps', 'KeepSearchIndex',
             'UseVHDX', 'ProfileName', 'Description', 'Version', 'Architecture'
         )
         $unknownKeys = @()
@@ -951,7 +962,7 @@ function Invoke-Nano11SelfTest {
                 'RemoveDefender', 'KeepAsianIME', 'KeepExtraFonts', 'RemoveDrivers',
                 'DisableWindowsUpdate', 'KeepBluetooth', 'WSLSupport', 'KeepRecoveryEnv',
                 'SafeDebloatMode', 'UltraSlimMode', 'SetJapaneseKeyboard', 'AtlasReviOSMode',
-                'BundleOptimizationToolkit', 'RemoveStore', 'PayloadFormat', 'KeepXboxServices',
+                'BundleOptimizationToolkit', 'RemoveStore', 'PayloadFormat', 'KeepXboxServices', 'KeepBasicApps', 'KeepSearchIndex',
                 'KeepAudioTweaks', 'UseVHDX'
             )
             foreach ($pf in $profFiles) {
@@ -1061,6 +1072,36 @@ function Invoke-Nano11SelfTest {
         $unattendSingularMsg = "autounattend.xml missing"
     }
     $results += [PSCustomObject]@{ Test = "7. Unattend Singularity & Scripts"; Passed = $unattendSingularPass; Details = $unattendSingularMsg }
+
+    # 8. AppX Pattern Matching & Syntax Verification
+    $appxTestPass = $false
+    $appxTestMsg = ""
+    $samplePackages = @(
+        'Microsoft.BingWeather_4.25.7081.0_neutral_~_8wekyb3d8bbwe',
+        'Microsoft.WindowsNotepad_11.2409.3.0_neutral_~_8wekyb3d8bbwe',
+        'Microsoft.Paint_11.2408.30.0_neutral_~_8wekyb3d8bbwe',
+        'Microsoft.WindowsCalculator_11.2405.0.0_neutral_~_8wekyb3d8bbwe',
+        'Microsoft.549981C3F5F10_4.2204.13303.0_neutral_~_8wekyb3d8bbwe',
+        'Microsoft.ZuneVideo_2019.22091.10041.0_neutral_~_8wekyb3d8bbwe',
+        'Microsoft.GamingApp_2309.1001.4.0_neutral_~_8wekyb3d8bbwe',
+        'Microsoft.Getstarted_10.2209.1.0_neutral_~_8wekyb3d8bbwe'
+    )
+    $testPatterns = @('*Bing*', '*Notepad*', '*Paint*', '*Calculator*', '*549981C3F5F10*', '*Zune*', '*GamingApp*', '*Getstarted*')
+    $unmatched = @()
+    foreach ($tp in $testPatterns) {
+        $matched = $false
+        foreach ($sp in $samplePackages) {
+            if ($sp -like $tp) { $matched = $true; break }
+        }
+        if (-not $matched) { $unmatched += $tp }
+    }
+    if ($unmatched.Count -eq 0) {
+        $appxTestPass = $true
+        $appxTestMsg = "All core AppX bloatware wildcard patterns match realistic package signatures"
+    } else {
+        $appxTestMsg = "Dead pattern(s): $($unmatched -join ', ')"
+    }
+    $results += [PSCustomObject]@{ Test = "8. AppX Pattern Match Safety"; Passed = $appxTestPass; Details = $appxTestMsg }
 
     # Display Results
     Write-Host ""
@@ -1319,7 +1360,7 @@ function Show-Nano11GUI {
     $grpMedia = New-Object System.Windows.Forms.GroupBox
     $grpMedia.Text = " 1. Windows 11 メディア & 作業フォルダー (Media & Workspace) "
     $grpMedia.Location = New-Object System.Drawing.Point(15, 10)
-    $grpMedia.Size = New-Object System.Drawing.Size(670, 138)
+    $grpMedia.Size = New-Object System.Drawing.Size(670, 142)
     $grpMedia.ForeColor = [System.Drawing.Color]::FromArgb(0, 190, 255)
     $mainPanel.Controls.Add($grpMedia)
 
@@ -1472,7 +1513,7 @@ function Show-Nano11GUI {
     # Hint Label
     $lblHint = New-Object System.Windows.Forms.Label
     $lblHint.Text = "※ マウント済み仮想DVDドライブ（例: D:\）、USBメモリ、または .iso ファイルを指定してください"
-    $lblHint.Location = New-Object System.Drawing.Point(145, 51)
+    $lblHint.Location = New-Object System.Drawing.Point(145, 114)
     $lblHint.Size = New-Object System.Drawing.Size(510, 16)
     $lblHint.ForeColor = [System.Drawing.Color]::FromArgb(150, 155, 165)
     $lblHint.Font = New-Object System.Drawing.Font($uiFontName, 8)
@@ -1480,13 +1521,13 @@ function Show-Nano11GUI {
 
     $lblWork = New-Object System.Windows.Forms.Label
     $lblWork.Text = "作業フォルダー:"
-    $lblWork.Location = New-Object System.Drawing.Point(15, 80)
+    $lblWork.Location = New-Object System.Drawing.Point(15, 54)
     $lblWork.Size = New-Object System.Drawing.Size(125, 20)
     $lblWork.ForeColor = [System.Drawing.Color]::FromArgb(235, 238, 245)
     $grpMedia.Controls.Add($lblWork)
 
     $txtWork = New-Object System.Windows.Forms.TextBox
-    $txtWork.Location = New-Object System.Drawing.Point(145, 77)
+    $txtWork.Location = New-Object System.Drawing.Point(145, 51)
     $txtWork.Size = New-Object System.Drawing.Size(370, 24)
     $txtWork.BackColor = [System.Drawing.Color]::FromArgb(35, 38, 46)
     $txtWork.ForeColor = [System.Drawing.Color]::White
@@ -1500,7 +1541,7 @@ function Show-Nano11GUI {
 
     $btnBrowseWork = New-Object System.Windows.Forms.Button
     $btnBrowseWork.Text = "フォルダー参照..."
-    $btnBrowseWork.Location = New-Object System.Drawing.Point(520, 76)
+    $btnBrowseWork.Location = New-Object System.Drawing.Point(520, 50)
     $btnBrowseWork.Size = New-Object System.Drawing.Size(135, 26)
     $btnBrowseWork.BackColor = [System.Drawing.Color]::FromArgb(45, 50, 60)
     $btnBrowseWork.ForeColor = [System.Drawing.Color]::White
@@ -1513,6 +1554,55 @@ function Show-Nano11GUI {
         }
     })
     $grpMedia.Controls.Add($btnBrowseWork)
+
+    # Image Index & Driver Injection Controls
+    $lblIndex = New-Object System.Windows.Forms.Label
+    $lblIndex.Text = "イメージ Index:"
+    $lblIndex.Location = New-Object System.Drawing.Point(15, 83)
+    $lblIndex.Size = New-Object System.Drawing.Size(125, 20)
+    $lblIndex.ForeColor = [System.Drawing.Color]::FromArgb(235, 238, 245)
+    $grpMedia.Controls.Add($lblIndex)
+
+    $txtIndex = New-Object System.Windows.Forms.TextBox
+    $txtIndex.Location = New-Object System.Drawing.Point(145, 80)
+    $txtIndex.Size = New-Object System.Drawing.Size(65, 24)
+    $txtIndex.BackColor = [System.Drawing.Color]::FromArgb(35, 38, 46)
+    $txtIndex.ForeColor = [System.Drawing.Color]::White
+    if ($InitialSettings.Index) { $txtIndex.Text = "$($InitialSettings.Index)" }
+    $toolTip.SetToolTip($txtIndex, "対象イメージのインデックス番号 (例: 1)。空欄の場合は自動検出または対話選択されます")
+    $grpMedia.Controls.Add($txtIndex)
+
+    $lblDrivers = New-Object System.Windows.Forms.Label
+    $lblDrivers.Text = "ドライバー ($OEM$):"
+    $lblDrivers.Location = New-Object System.Drawing.Point(220, 83)
+    $lblDrivers.Size = New-Object System.Drawing.Size(115, 20)
+    $lblDrivers.ForeColor = [System.Drawing.Color]::FromArgb(235, 238, 245)
+    $grpMedia.Controls.Add($lblDrivers)
+
+    $txtDrivers = New-Object System.Windows.Forms.TextBox
+    $txtDrivers.Location = New-Object System.Drawing.Point(340, 80)
+    $txtDrivers.Size = New-Object System.Drawing.Size(200, 24)
+    $txtDrivers.BackColor = [System.Drawing.Color]::FromArgb(35, 38, 46)
+    $txtDrivers.ForeColor = [System.Drawing.Color]::White
+    if ($InitialSettings.InjectDrivers) { $txtDrivers.Text = "$($InitialSettings.InjectDrivers)" }
+    $toolTip.SetToolTip($txtDrivers, "OSセットアップ時に自動注入するハードウェアドライバーフォルダー (.inf) を指定します")
+    $grpMedia.Controls.Add($txtDrivers)
+
+    $btnBrowseDrivers = New-Object System.Windows.Forms.Button
+    $btnBrowseDrivers.Text = "参照..."
+    $btnBrowseDrivers.Location = New-Object System.Drawing.Point(545, 79)
+    $btnBrowseDrivers.Size = New-Object System.Drawing.Size(110, 26)
+    $btnBrowseDrivers.BackColor = [System.Drawing.Color]::FromArgb(45, 50, 60)
+    $btnBrowseDrivers.ForeColor = [System.Drawing.Color]::White
+    $btnBrowseDrivers.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $btnBrowseDrivers.Add_Click({
+        $fbd = New-Object System.Windows.Forms.FolderBrowserDialog
+        $fbd.Description = "注入するドライバー群 (.inf) が格納されたフォルダーを選択してください"
+        if ($fbd.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+            $txtDrivers.Text = $fbd.SelectedPath
+        }
+    })
+    $grpMedia.Controls.Add($btnBrowseDrivers)
 
     # 2. Configuration Profiles GroupBox
     $grpProfile = New-Object System.Windows.Forms.GroupBox
@@ -1569,7 +1659,7 @@ function Show-Nano11GUI {
     $grpOpts = New-Object System.Windows.Forms.GroupBox
     $grpOpts.Text = " 3. デブロート & カスタマイズ設定 (Debloat & Options) "
     $grpOpts.Location = New-Object System.Drawing.Point(15, 243)
-    $grpOpts.Size = New-Object System.Drawing.Size(670, 275)
+    $grpOpts.Size = New-Object System.Drawing.Size(670, 305)
     $grpOpts.ForeColor = [System.Drawing.Color]::FromArgb(0, 190, 255)
     $mainPanel.Controls.Add($grpOpts)
 
@@ -1608,12 +1698,14 @@ function Show-Nano11GUI {
     $chkAtlas       = & $createChk "AtlasOS & ReviOS 超低遅延・レスポンス最適化" 345 115 (& $getInitVal 'AtlasReviOSMode' $true)
     $chkToolkit     = & $createChk "最適化ツールキットをデスクトップに配置" 345 145 (& $getInitVal 'BundleOptimizationToolkit' $true)
     $chkStore       = & $createChk "Microsoft Store と購入アプリの完全削除" 345 175 (& $getInitVal 'RemoveStore' $false)
-    $chkVHDX        = & $createChk "超高速 VHDX スクラッチディスクを使用" 345 205 (& $getInitVal 'UseVHDX' $false)
+    $chkBasicApps   = & $createChk "基本アプリ (メモ帳/ペイント/電卓) を残す" 345 205 (& $getInitVal 'KeepBasicApps' $false)
+    $chkSearchIndex = & $createChk "Windows Search インデックスを有効化" 345 235 (& $getInitVal 'KeepSearchIndex' $false)
+    $chkVHDX        = & $createChk "超高速 VHDX スクラッチディスクを使用" 345 265 (& $getInitVal 'UseVHDX' $false)
 
     # 4. Output Payload Format GroupBox
     $grpPayload = New-Object System.Windows.Forms.GroupBox
     $grpPayload.Text = " 4. 出力イメージ形式 (Payload Export Format) "
-    $grpPayload.Location = New-Object System.Drawing.Point(15, 528)
+    $grpPayload.Location = New-Object System.Drawing.Point(15, 558)
     $grpPayload.Size = New-Object System.Drawing.Size(670, 75)
     $grpPayload.ForeColor = [System.Drawing.Color]::FromArgb(0, 190, 255)
     $mainPanel.Controls.Add($grpPayload)
@@ -1667,6 +1759,8 @@ function Show-Nano11GUI {
                 $chkAtlas.Checked = $true
                 $chkToolkit.Checked = $true
                 $chkStore.Checked = $false
+                $chkBasicApps.Checked = $false
+                $chkSearchIndex.Checked = $false
                 $radWIM.Checked = $true
             }
             1 { # Balanced Pro
@@ -1684,6 +1778,8 @@ function Show-Nano11GUI {
                 $chkAtlas.Checked = $true
                 $chkToolkit.Checked = $true
                 $chkStore.Checked = $false
+                $chkBasicApps.Checked = $true
+                $chkSearchIndex.Checked = $true
                 $radWIM.Checked = $true
             }
             2 { # FAT32 Split-WIM
@@ -1701,6 +1797,8 @@ function Show-Nano11GUI {
                 $chkAtlas.Checked = $true
                 $chkToolkit.Checked = $true
                 $chkStore.Checked = $false
+                $chkBasicApps.Checked = $false
+                $chkSearchIndex.Checked = $false
                 $radSWM.Checked = $true
             }
             3 { # Handheld Gaming
@@ -1718,6 +1816,8 @@ function Show-Nano11GUI {
                 $chkAtlas.Checked = $true
                 $chkToolkit.Checked = $true
                 $chkStore.Checked = $false
+                $chkBasicApps.Checked = $false
+                $chkSearchIndex.Checked = $false
                 $radWIM.Checked = $true
             }
             4 { # VM & Developer Workstation
@@ -1735,23 +1835,27 @@ function Show-Nano11GUI {
                 $chkAtlas.Checked = $false
                 $chkToolkit.Checked = $false
                 $chkStore.Checked = $false
+                $chkBasicApps.Checked = $true
+                $chkSearchIndex.Checked = $true
                 $radWIM.Checked = $true
             }
             5 { # Audio & DAW Production
                 $chkDefender.Checked = $true
                 $chkIME.Checked = $true
-                $chkFonts.Checked = $true
+                $chkFonts.Checked = $false
                 $chkDrivers.Checked = $false
                 $chkWU.Checked = $true
-                $chkBT.Checked = $true
+                $chkBT.Checked = $false
                 $chkWSL.Checked = $false
                 $chkRecovery.Checked = $false
                 $chkSafeDebloat.Checked = $true
-                $chkUltraSlim.Checked = $true
+                $chkUltraSlim.Checked = $false
                 $chkJPKey.Checked = $true
                 $chkAtlas.Checked = $true
                 $chkToolkit.Checked = $true
                 $chkStore.Checked = $false
+                $chkBasicApps.Checked = $true
+                $chkSearchIndex.Checked = $false
                 $radWIM.Checked = $true
             }
         }
@@ -1765,7 +1869,7 @@ function Show-Nano11GUI {
     })
 
     # Hook change events to switch preset to Custom
-    $allCheckboxes = @($chkDefender, $chkIME, $chkFonts, $chkDrivers, $chkWU, $chkBT, $chkWSL, $chkRecovery, $chkSafeDebloat, $chkUltraSlim, $chkJPKey, $chkAtlas, $chkToolkit, $chkStore, $chkVHDX)
+    $allCheckboxes = @($chkDefender, $chkIME, $chkFonts, $chkDrivers, $chkWU, $chkBT, $chkWSL, $chkRecovery, $chkSafeDebloat, $chkUltraSlim, $chkJPKey, $chkAtlas, $chkToolkit, $chkStore, $chkBasicApps, $chkSearchIndex, $chkVHDX)
     foreach ($c in $allCheckboxes) {
         $c.Add_CheckedChanged({
             if (-not $script:updatingPreset) {
@@ -1792,6 +1896,8 @@ function Show-Nano11GUI {
         chkAtlas       = $chkAtlas
         chkToolkit     = $chkToolkit
         chkStore       = $chkStore
+        chkBasicApps   = $chkBasicApps
+        chkSearchIndex = $chkSearchIndex
         chkVhdx        = $chkVHDX
         radESD         = $radESD
         radSWM         = $radSWM
@@ -1838,6 +1944,8 @@ function Show-Nano11GUI {
                 AtlasReviOSMode           = $chkAtlas.Checked
                 BundleOptimizationToolkit = $chkToolkit.Checked
                 RemoveStore               = $chkStore.Checked
+                KeepBasicApps             = $chkBasicApps.Checked
+                KeepSearchIndex           = $chkSearchIndex.Checked
                 UseVHDX                   = $chkVHDX.Checked
                 PayloadFormat             = if ($radESD.Checked) { "ESD" } elseif ($radSWM.Checked) { "SWM" } else { "WIM" }
             }
@@ -1852,6 +1960,13 @@ function Show-Nano11GUI {
     $bottomPanel.Height = 65
     $bottomPanel.BackColor = [System.Drawing.Color]::FromArgb(18, 20, 24)
     $form.Controls.Add($bottomPanel)
+
+    $chkDryRun = New-Object System.Windows.Forms.CheckBox
+    $chkDryRun.Text = "DryRun (シミュレーション)"
+    $chkDryRun.Location = New-Object System.Drawing.Point(20, 22)
+    $chkDryRun.Size = New-Object System.Drawing.Size(180, 24)
+    $chkDryRun.ForeColor = [System.Drawing.Color]::FromArgb(235, 238, 245)
+    $bottomPanel.Controls.Add($chkDryRun)
 
     $btnBuild = New-Object System.Windows.Forms.Button
     $btnBuild.Text = "🚀 nano11 ビルド開始"
@@ -1924,6 +2039,11 @@ function Show-Nano11GUI {
         $formResult.AtlasReviOSMode           = $chkAtlas.Checked
         $formResult.BundleOptimizationToolkit = $chkToolkit.Checked
         $formResult.RemoveStore               = $chkStore.Checked
+        $formResult.KeepBasicApps             = $chkBasicApps.Checked
+        $formResult.KeepSearchIndex           = $chkSearchIndex.Checked
+        $formResult.Index                     = $txtIndex.Text.Trim()
+        $formResult.InjectDrivers             = $txtDrivers.Text.Trim()
+        $formResult.DryRun                    = $chkDryRun.Checked
         $formResult.UseVHDX                   = $chkVHDX.Checked
         $formResult.ExportESDMode             = $radESD.Checked
         $formResult.SplitWIMMode              = $radSWM.Checked
@@ -1968,6 +2088,8 @@ try {
     }
     $transcriptPath = Join-Path -Path $logDir -ChildPath "nano11_$timestampStr.log"
     $script:DismLogPath = Join-Path -Path $logDir -ChildPath "dism_$timestampStr.log"
+    $script:RegJournalPath = Join-Path -Path $logDir -ChildPath "registry-applied.csv"
+    Set-Content -LiteralPath $script:RegJournalPath -Value '"Key","Name","Type","Data"' -Encoding utf8 -ErrorAction SilentlyContinue
     Start-Transcript -Path $transcriptPath -Force
     # Prune logs beyond parameter -KeepLogs (Default: 10)
     Get-ChildItem -Path $logDir -Filter "nano11_*.log" -File -ErrorAction SilentlyContinue |
@@ -1992,6 +2114,43 @@ try {
     }
 }
 $buildStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+
+# Queue Mode for multiple comma-separated profiles (-Profile extreme,balanced-pro,vm-developer)
+if ($Profile -and $Profile.Contains(',')) {
+    $profileQueue = $Profile -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+    if ($profileQueue.Count -gt 1) {
+        Write-Host "=========================================================" -ForegroundColor Cyan
+        Write-Host "   nano11 Batch Queue Mode: $($profileQueue.Count) Profiles to Build    " -ForegroundColor Cyan
+        Write-Host "=========================================================" -ForegroundColor Cyan
+        $queueSuccess = 0
+        foreach ($qProf in $profileQueue) {
+            Write-Host "`n>>> Starting Batch Build for Profile: $qProf <<<" -ForegroundColor Yellow
+            $argsToPass = [System.Collections.Generic.List[string]]::new()
+            foreach ($k in $PSBoundParameters.Keys) {
+                if ($k -in @('Profile', 'TestSelf')) { continue }
+                $val = $PSBoundParameters[$k]
+                if ($val -is [switch]) {
+                    if ($val) { $argsToPass.Add("-$k") }
+                } else {
+                    $argsToPass.Add("-$k `"$val`"")
+                }
+            }
+            $argsToPass.Add("-Profile `"$qProf`"")
+            $argsToPass.Add("-NonInteractive")
+            $subProc = Start-Process -FilePath "powershell.exe" -ArgumentList ("-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" " + ($argsToPass -join " ")) -Wait -PassThru -NoNewWindow
+            if ($subProc.ExitCode -eq 0) {
+                $queueSuccess++
+                Write-Host "Profile $qProf built successfully!" -ForegroundColor Green
+            } else {
+                Write-Host "Profile $qProf failed with exit code $($subProc.ExitCode)" -ForegroundColor Red
+            }
+        }
+        Write-Host "`n=========================================================" -ForegroundColor Cyan
+        Write-Host "   Batch Queue Completed: $queueSuccess/$($profileQueue.Count) profiles succeeded." -ForegroundColor $(if ($queueSuccess -eq $profileQueue.Count) { "Green" } else { "Yellow" })
+        Write-Host "=========================================================" -ForegroundColor Cyan
+        exit $(if ($queueSuccess -eq $profileQueue.Count) { 0 } else { 1 })
+    }
+}
 
 Write-Host "=========================================================" -ForegroundColor Cyan
 Write-Host "               Welcome to nano11 builder!                " -ForegroundColor Cyan
@@ -2167,6 +2326,10 @@ if ($GUI) {
         $bundleOptimizationToolkit = $guiResult.BundleOptimizationToolkit
         $bundleRevTool             = $bundleOptimizationToolkit
         $removeStore               = $guiResult.RemoveStore
+        if ($guiResult.ContainsKey('KeepBasicApps'))   { $keepBasicApps = [bool]$guiResult.KeepBasicApps }
+        if ($guiResult.ContainsKey('KeepSearchIndex')) { $keepSearchIndex = [bool]$guiResult.KeepSearchIndex }
+        if ($guiResult.Index)                         { $Index = $guiResult.Index }
+        if ($guiResult.InjectDrivers)                 { $InjectDrivers = $guiResult.InjectDrivers }
         $exportESDMode             = $guiResult.ExportESDMode
         $splitWIMMode              = $guiResult.SplitWIMMode
         if ($guiResult.ContainsKey('UseVHDX')) { $useVHDX = [bool]$guiResult.UseVHDX }
@@ -2524,6 +2687,10 @@ if ($isAutomated) {
             $bundleOptimizationToolkit = $guiResult.BundleOptimizationToolkit
             $bundleRevTool             = $bundleOptimizationToolkit
             $removeStore               = $guiResult.RemoveStore
+            if ($guiResult.ContainsKey('KeepBasicApps'))   { $keepBasicApps = [bool]$guiResult.KeepBasicApps }
+            if ($guiResult.ContainsKey('KeepSearchIndex')) { $keepSearchIndex = [bool]$guiResult.KeepSearchIndex }
+            if ($guiResult.Index)                         { $Index = $guiResult.Index }
+            if ($guiResult.InjectDrivers)                 { $InjectDrivers = $guiResult.InjectDrivers }
             if ($guiResult.ContainsKey('UseVHDX')) { $useVHDX = [bool]$guiResult.UseVHDX }
             $exportESDMode             = $guiResult.ExportESDMode
             $splitWIMMode              = $guiResult.SplitWIMMode
@@ -2646,7 +2813,8 @@ if ($isAutomated) {
         }
     }
 
-    Enter-Phase 9 "Component Store (WinSxS) Optimization"
+    Enter-Phase 9 "Component Store (WinSxS) Optimization"
+
 # 9. Component Store (WinSxS) Optimization Mode
     if ($cliBound.Contains('WinSxS') -and (-not $Interactive)) {
         Write-Host "9. Component Store mode: $(if ($safeDebloatMode) { '1 (Safe Cleanup)' } else { '2 (Aggressive Pruning)' }) [CLI: Specified]" -ForegroundColor DarkCyan
@@ -3420,6 +3588,18 @@ if (-not $mountSuccess) {
 }
 
 $sourceWimSize = if (Test-Path -LiteralPath $destWim) { (Get-Item -LiteralPath $destWim).Length } else { 0 }
+
+# Capture pre-debloat package and WinSxS baseline metrics for before/after comparison
+Write-Host "Capturing pre-debloat image baseline metrics..." -ForegroundColor Cyan
+$pkgBeforePath = Join-Path -Path $logDir -ChildPath "packages-before.txt"
+$featBeforePath = Join-Path -Path $logDir -ChildPath "features-before.txt"
+$winsxsBeforePath = Join-Path -Path $logDir -ChildPath "winsxs-before.txt"
+
+Invoke-Dism -DismArgs @("/image:$scratchDir", "/Get-Packages", "/Format:Table") -CaptureOutput | Set-Content -LiteralPath $pkgBeforePath -Encoding utf8
+Invoke-Dism -DismArgs @("/image:$scratchDir", "/Get-Features", "/Format:Table") -CaptureOutput | Set-Content -LiteralPath $featBeforePath -Encoding utf8
+$script:WinsxsBeforeRaw = Invoke-Dism -DismArgs @("/image:$scratchDir", "/Cleanup-Image", "/AnalyzeComponentStore") -CaptureOutput
+$script:WinsxsBeforeRaw | Set-Content -LiteralPath $winsxsBeforePath -Encoding utf8
+
 if ($CheckHealth) {
     Write-Host "Verifying image component store health (-CheckHealth)..." -ForegroundColor Cyan
     & dism.exe /English /Image:"$scratchDir" /Cleanup-Image /CheckHealth
@@ -3469,7 +3649,8 @@ if ($wslSupport) {
     Write-Host "  - WSL2 and VirtualMachinePlatform enabled." -ForegroundColor Green
 }
 
-Enter-Phase 5 "Removing provisioned AppX packages (Bloatware)"
+Enter-Phase 5 "Removing provisioned AppX packages (Bloatware)"
+
 # 5. Removing provisioned AppX packages (Bloatware)
 Write-Host "Removing provisioned AppX packages (bloatware)..." -ForegroundColor Cyan
 $appxPatterns = @(
@@ -3506,6 +3687,14 @@ $appxPatterns = @(
 if ($removeStore) {
     Write-Host "  [Store] Microsoft Store will be removed (Microsoft.WindowsStore, Microsoft.StorePurchaseApp)." -ForegroundColor Yellow
     $appxPatterns += @('Microsoft.WindowsStore_*', 'Microsoft.StorePurchaseApp_*')
+}
+if ($keepBasicApps) {
+    Write-Host "  [Apps] Preserving essential productivity apps: Notepad, Paint, Calculator (-KeepBasicApps)." -ForegroundColor Green
+    $appxPatterns = @($appxPatterns | Where-Object {
+        $_ -notlike '*Notepad*' -and
+        $_ -notlike '*Paint*' -and
+        $_ -notlike '*Calculator*'
+    })
 }
 if ($keepXboxServices) {
     Write-Host "  [Xbox] Preserving Xbox Game Bar and Gaming subsystem (-KeepXboxServices)." -ForegroundColor Green
@@ -3544,7 +3733,8 @@ Write-Host "Disabling Recall and modern AI optional features..." -ForegroundColo
 & dism.exe /English "/image:$scratchDir" /Disable-Feature /FeatureName:Recall /Remove > $null 2>&1
 & dism.exe /English "/image:$scratchDir" /Disable-Feature /FeatureName:Windows-Recall-Optional-Package /Remove > $null 2>&1
 
-Enter-Phase 6 "Removing system packages (FoD / Optional features)"
+Enter-Phase 6 "Removing system packages (FoD / Optional features)"
+
 # 6. Removing system packages (FoD / Optional features)
 Write-Host "Removing unnecessary system packages..." -ForegroundColor Cyan
 $packagePatterns = @(
@@ -3674,12 +3864,14 @@ foreach ($packageIdentity in $packagesToRemove) {
     & dism.exe /English "/image:$scratchDir" /Remove-Package "/PackageName:$packageIdentity" > $null 2>&1
 }
 
-Enter-Phase 7 "Removing NativeImages (.NET)"
+Enter-Phase 7 "Removing NativeImages (.NET)"
+
 # 7. Removing NativeImages (.NET)
 Write-Host "Removing pre-compiled .NET Native Images..." -ForegroundColor Cyan
 Remove-Item -Path "$scratchDir\Windows\assembly\NativeImages_*" -Recurse -Force -ErrorAction SilentlyContinue
 
-Enter-Phase 8 "File system slimming (Drivers, WinRE, Fonts)"
+Enter-Phase 8 "File system slimming (Drivers, WinRE, Fonts)"
+
 # 8. File system slimming
 $winDir = "$scratchDir\Windows"
 
@@ -3995,7 +4187,8 @@ if ($safeDebloatMode) {
     Rename-Item -LiteralPath $tempWinSxS -NewName "WinSxS" -Force
 }
 
-Enter-Phase 10 "Load Registry Hives and Apply Optimizations"
+Enter-Phase 10 "Load Registry Hives and Apply Optimizations"
+
 # 10. Load Registry Hives and Apply Optimizations
 Write-Host "Loading offline registry hives..." -ForegroundColor Cyan
 $systemHive    = "$scratchDir\Windows\System32\config\SYSTEM"
@@ -4098,9 +4291,9 @@ reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" /v "De
 reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" /v "ForceAutoLogon" /t REG_SZ /d "1" /f > $null 2>&1
 reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\System" /v "AllowDomainDelayLock" /t REG_DWORD /d 1 /f > $null 2>&1
 reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" /v "FilterAdministratorToken" /t REG_DWORD /d 0 /f > $null 2>&1
-reg.exe add "HKLM\zSOFTWARE\Microsoft\PowerShell\1\ShellIds\Microsoft.PowerShell" /v "ExecutionPolicy" /t REG_SZ /d "Unrestricted" /f > $null 2>&1
+reg.exe add "HKLM\zSOFTWARE\Microsoft\PowerShell\1\ShellIds\Microsoft.PowerShell" /v "ExecutionPolicy" /t REG_SZ /d "RemoteSigned" /f > $null 2>&1
 reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\PowerShell" /v "EnableScripts" /t REG_DWORD /d 1 /f > $null 2>&1
-reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\PowerShell" /v "ExecutionPolicy" /t REG_SZ /d "Unrestricted" /f > $null 2>&1
+reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\PowerShell" /v "ExecutionPolicy" /t REG_SZ /d "RemoteSigned" /f > $null 2>&1
 
 # Edge Uninstall Registry cleanup
 reg.exe delete "HKEY_LOCAL_MACHINE\zSOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft Edge" /f > $null 2>&1
@@ -4432,7 +4625,7 @@ $serviceConfigs = [ordered]@{
     "WMPNetworkSvc"                            = 4  # Windows Media Player Network Sharing
     "WpcMonSvc"                                = 4  # Parental Controls
     "WSAIFabricSvc"                            = 4  # Windows Subsystem for Android Fabric Service
-    "WSearch"                                  = 4  # Windows Search Indexer
+    "WSearch"                                  = $(if ($keepSearchIndex) { 2 } else { 4 })  # Windows Search Indexer (2=Auto, 4=Disabled)
     "XblAuthManager"                           = if ($keepXboxServices) { 3 } else { 4 }  # Xbox Live Auth Manager
     "XblGameSave"                              = if ($keepXboxServices) { 3 } else { 4 }  # Xbox Live Game Save
     "XboxGipSvc"                               = if ($keepXboxServices) { 3 } else { 4 }  # Xbox Accessory Management Service
@@ -4973,14 +5166,23 @@ reg.exe add $eppGuid /v "ValueMin" /t REG_DWORD /d 0 /f > $null 2>&1
 # Exclude display/chipset driver overwrites in Windows Update (prevents GPU driver rollback)
 reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate" /v "ExcludeWUDriversInQualityUpdate" /t REG_DWORD /d 1 /f > $null 2>&1
 
-# Offline Message Signaled Interrupts (MSI) enablement across discovered PCI devices
+# Offline Message Signaled Interrupts (MSI) enablement across target PCI device classes (GPU, NVMe, NIC)
 try {
+    $targetClasses = @(
+        '{4d36e968-e325-11ce-bfc1-08002be10318}', # Display / GPU
+        '{4d36e972-e325-11ce-bfc1-08002be10318}', # Network Adapters (NIC)
+        '{4d36e97b-e325-11ce-bfc1-08002be10318}'  # SCSIAdapter / NVMe Storage Controllers
+    )
     Get-ChildItem -Path "HKLM:\zSYSTEM\ControlSet001\Enum\PCI" -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.PSChildName -eq "Device Parameters" } | ForEach-Object {
-        $msiKey = Join-Path -Path $_.PSPath -ChildPath "Interrupt Management\MessageSignaledInterruptProperties"
-        if (-not (Test-Path -LiteralPath $msiKey)) {
-            New-Item -Path $msiKey -Force -ErrorAction SilentlyContinue | Out-Null
+        $parentPath = Split-Path -Path $_.PSPath -Parent
+        $classGuid = (Get-ItemProperty -Path $parentPath -Name "ClassGUID" -ErrorAction SilentlyContinue).ClassGUID
+        if (-not $classGuid -or ($targetClasses -contains $classGuid)) {
+            $msiKey = Join-Path -Path $_.PSPath -ChildPath "Interrupt Management\MessageSignaledInterruptProperties"
+            if (-not (Test-Path -LiteralPath $msiKey)) {
+                New-Item -Path $msiKey -Force -ErrorAction SilentlyContinue | Out-Null
+            }
+            Set-ItemProperty -Path $msiKey -Name "MSISupported" -Value 1 -Type DWord -Force -ErrorAction SilentlyContinue
         }
-        Set-ItemProperty -Path $msiKey -Name "MSISupported" -Value 1 -Type DWord -Force -ErrorAction SilentlyContinue
     }
 } catch {}
 
@@ -5037,7 +5239,8 @@ reg.exe add "HKLM\zSYSTEM\Setup\Status\ChildCompletion" /v "setup.exe" /t REG_DW
 reg.exe add "HKLM\zSYSTEM\Setup\Status\ChildCompletion" /v "audit.exe" /t REG_DWORD /d 3 /f > $null 2>&1
 reg.exe add "HKLM\zSYSTEM\Setup\Status\ChildCompletion" /v "oobe.exe" /t REG_DWORD /d 3 /f > $null 2>&1
 
-Enter-Phase 11 "Configure autounattend.xml & Pre-extract Setup Scripts"
+Enter-Phase 11 "Configure autounattend.xml & Pre-extract Setup Scripts"
+
 # 11. Copy autounattend.xml with Architecture Support & Self-healing (Resolves Issues #3, #18, #21, #2, #8, #20)
 Write-Host "Configuring autounattend.xml for target architecture ($architecture)..." -ForegroundColor Green
 $unattendSource = Join-Path -Path $scriptDir -ChildPath "autounattend.xml"
@@ -5108,6 +5311,34 @@ if (Test-Path -LiteralPath $unattendSource) {
     # even if dynamic XML extraction during Specialize pass is blocked or delayed.
     $setupScriptsDir = Join-Path -Path $scratchDir -ChildPath "Windows\Setup\Scripts"
     New-Item -Path $setupScriptsDir -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null
+
+    # SetupComplete.cmd two-stage verification marker creation
+    $setupCompleteCmd = @"
+@echo off
+if not exist "%SystemDrive%\ProgramData\nano11" mkdir "%SystemDrive%\ProgramData\nano11"
+echo %DATE% %TIME% SetupComplete > "%SystemDrive%\ProgramData\nano11\setupcomplete.stamp"
+"@
+    $setupCompleteCmd | Set-Content -LiteralPath (Join-Path -Path $setupScriptsDir -ChildPath "SetupComplete.cmd") -Encoding ascii
+    $oemScriptsDir = Join-Path -Path $nano11Dir -ChildPath "sources\`$OEM\`$\Setup\Scripts"
+    New-Item -Path $oemScriptsDir -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null
+    $setupCompleteCmd | Set-Content -LiteralPath (Join-Path -Path $oemScriptsDir -ChildPath "SetupComplete.cmd") -Encoding ascii
+
+    # Bundle winget-packages.json for post-setup automated app installation if present
+    $repoWingetJson = Join-Path -Path $scriptDir -ChildPath "tools\winget-packages.json"
+    if (Test-Path -LiteralPath $repoWingetJson) {
+        Copy-Item -LiteralPath $repoWingetJson -Destination (Join-Path -Path $setupScriptsDir -ChildPath "winget-packages.json") -Force -ErrorAction SilentlyContinue
+        Copy-Item -LiteralPath $repoWingetJson -Destination (Join-Path -Path $nano11Dir -ChildPath "sources\winget-packages.json") -Force -ErrorAction SilentlyContinue
+        Write-Host "  - Bundled winget-packages.json for post-setup automated app installation" -ForegroundColor Green
+    }
+
+    # $OEM$ Custom Hardware Driver Injection (-InjectDrivers)
+    if ($InjectDrivers -and (Test-Path -LiteralPath $InjectDrivers)) {
+        Write-Host "Injecting custom hardware drivers from $InjectDrivers..." -ForegroundColor Cyan
+        $destDriversDir = Join-Path -Path $nano11Dir -ChildPath "sources\`$OEM\`$1\Drivers"
+        New-Item -ItemType Directory -Force -Path $destDriversDir | Out-Null
+        Copy-Item -Path "$InjectDrivers\*" -Destination $destDriversDir -Recurse -Force -ErrorAction SilentlyContinue
+        Write-Host "  - Drivers staged in sources\`$OEM\`$1\Drivers" -ForegroundColor Green
+    }
     
     # Save build traceability manifest (nano11-build-info.json)
     $buildInfoObj = [ordered]@{
@@ -5118,6 +5349,8 @@ if (Test-Path -LiteralPath $unattendSource) {
         ComputerName    = $ComputerName
         UserName        = $UserName
         JapaneseKeyboard= $setJapaneseKeyboard
+        KeepBasicApps   = $keepBasicApps
+        KeepSearchIndex = $keepSearchIndex
         SourceDrive     = $DriveLetter
         PayloadFormat   = if ($exportESDMode) { "ESD" } elseif ($splitWIMMode) { "SWM" } else { "WIM" }
     }
@@ -5494,7 +5727,44 @@ Write-Host "Unmounting offline registry hives..." -ForegroundColor Cyan
 }
 $script:HivesLoaded = $false
 
-Enter-Phase 12 "Unmount and Commit install.wim Image"
+# Capture post-debloat metrics and calculate component savings
+Write-Host "Capturing post-debloat image metrics and calculating savings..." -ForegroundColor Cyan
+$pkgAfterPath = Join-Path -Path $logDir -ChildPath "packages-after.txt"
+$featAfterPath = Join-Path -Path $logDir -ChildPath "features-after.txt"
+$winsxsAfterPath = Join-Path -Path $logDir -ChildPath "winsxs-after.txt"
+
+Invoke-Dism -DismArgs @("/image:$scratchDir", "/Get-Packages", "/Format:Table") -CaptureOutput | Set-Content -LiteralPath $pkgAfterPath -Encoding utf8
+Invoke-Dism -DismArgs @("/image:$scratchDir", "/Get-Features", "/Format:Table") -CaptureOutput | Set-Content -LiteralPath $featAfterPath -Encoding utf8
+$script:WinsxsAfterRaw = Invoke-Dism -DismArgs @("/image:$scratchDir", "/Cleanup-Image", "/AnalyzeComponentStore") -CaptureOutput
+$script:WinsxsAfterRaw | Set-Content -LiteralPath $winsxsAfterPath -Encoding utf8
+
+$pkgsBefore = Get-Content -LiteralPath $pkgBeforePath -ErrorAction SilentlyContinue | Where-Object { $_ -match 'Package_' }
+$pkgsAfter  = Get-Content -LiteralPath $pkgAfterPath -ErrorAction SilentlyContinue | Where-Object { $_ -match 'Package_' }
+$script:RemovedPackages = @()
+if ($pkgsBefore -and $pkgsAfter) {
+    $diff = Compare-Object -ReferenceObject $pkgsBefore -DifferenceObject $pkgsAfter -ErrorAction SilentlyContinue
+    $script:RemovedPackages = @($diff | Where-Object SideIndicator -eq '<=' | ForEach-Object { $_.InputObject.Trim() })
+}
+$script:RemovedPackages | Set-Content -LiteralPath (Join-Path -Path $logDir -ChildPath "removed-packages.txt") -Encoding utf8
+Write-Host "Component Store Diff: $($script:RemovedPackages.Count) package(s) removed from image." -ForegroundColor Green
+
+$parseSizeHelper = {
+    param($lines)
+    foreach ($l in $lines) {
+        if ($l -match 'Actual Size of Component Store\s*:\s*([\d\.]+)\s*(GB|MB)') {
+            $val = [double]$matches[1]
+            if ($matches[2] -ieq 'GB') { return [math]::Round($val * 1024, 1) }
+            return $val
+        }
+    }
+    return 0
+}
+$script:WinSxsBeforeMB = & $parseSizeHelper $script:WinsxsBeforeRaw
+$script:WinSxsAfterMB  = & $parseSizeHelper $script:WinsxsAfterRaw
+$script:WinSxsSavedMB  = if ($script:WinSxsBeforeMB -gt 0 -and $script:WinSxsAfterMB -gt 0) { [math]::Max(0, [math]::Round($script:WinSxsBeforeMB - $script:WinSxsAfterMB, 1)) } else { 0 }
+
+Enter-Phase 12 "Unmount and Commit install.wim Image"
+
 # 12. Unmount and export install image
 Write-Host "Unmounting install image and committing changes..." -ForegroundColor Green
 Write-Host "  -> Saving WIM image changes. Progress will display below..." -ForegroundColor Cyan
@@ -5533,7 +5803,8 @@ if (-not $unmountSuccess) {
     }
 }
 
-Enter-Phase 13 "Export Modified Image (WIM / ESD / SWM)"
+Enter-Phase 13 "Export Modified Image (WIM / ESD / SWM)"
+
 # 13. Export modified image
 # Note: On Windows 11 24H2 (build 26100+), DISM /Compress:recovery (LZMS) has a known crash bug (0xc0000005 in WIMGAPI.DLL).
 # Exporting to install.wim via /Compress:max (LZX) completes in ~20 seconds, never crashes, and produces a 100% compliant Windows Setup payload.
@@ -5587,7 +5858,8 @@ if (-not $esdSuccess) {
     }
 }
 
-Enter-Phase 14 "Patch boot.wim (LabConfig & Bypasses)"
+Enter-Phase 14 "Patch boot.wim (LabConfig & Bypasses)"
+
 # 14. Shrink and modify boot.wim (Setup bypasses & dynamic index handling)
 $bootWimPath = Join-Path -Path "$nano11Dir\sources" -ChildPath "boot.wim"
 if (-not (Test-Path -LiteralPath $bootWimPath)) {
@@ -5651,7 +5923,8 @@ if (Test-Path -LiteralPath $bootWimPath) {
     }
 }
 
-Enter-Phase 15 "Verify Final Installation Payload"
+Enter-Phase 15 "Verify Final Installation Payload"
+
 # 15. Verify final installation payload
 $esdCheck = Join-Path -Path "$nano11Dir\sources" -ChildPath "install.esd"
 $wimCheck = Join-Path -Path "$nano11Dir\sources" -ChildPath "install.wim"
@@ -5699,7 +5972,8 @@ if ($validWim) {
     exit 1
 }
 
-Enter-Phase 16 "ISO Root Cleanup & Traceability Embedding"
+Enter-Phase 16 "ISO Root Cleanup & Traceability Embedding"
+
 # 16. Final cleanup of ISO root and sources
 Write-Host "Performing final cleanup of ISO root..." -ForegroundColor Cyan
 $keepList = @("boot", "efi", "sources", "bootmgr", "bootmgr.efi", "bootmgfw.efi", "setup.exe", "autounattend.xml", "nano11-build-info.json")
@@ -5715,7 +5989,8 @@ if (Test-Path -LiteralPath $sourcesDir) {
     Remove-Item -Path "$sourcesDir\*.diagxml" -Force -ErrorAction SilentlyContinue
 }
 
-Enter-Phase 17 "Locate or Verify oscdimg.exe"
+Enter-Phase 17 "Locate or Verify oscdimg.exe"
+
 # 17. Locate or download oscdimg.exe (checks local dirs, PATH, ADK, and multi-mirror fallback)
 $oscdimgCandidates = @(
     (Join-Path -Path $scriptDir -ChildPath "oscdimg.exe"),
@@ -5795,7 +6070,8 @@ if (-not $oscdimgExe) {
     }
 }
 
-Enter-Phase 18 "Create Bootable ISO Image"
+Enter-Phase 18 "Create Bootable ISO Image"
+
 # 18. Create bootable ISO (oscdimg) with Architecture-aware bootdata and Volume Label
 Write-Host "Creating bootable ISO image..." -ForegroundColor Green
 $profSlug = if ($selectedProfile) { ($selectedProfile -replace '[^\w\-]', '_').Trim('_') } else { "custom" }
@@ -5946,8 +6222,40 @@ if ($oscdimgExe -and (Test-Path -LiteralPath $oscdimgExe)) {
                 RegSuccessCount   = $script:regSuccessCount
                 Settings          = $resolvedConfig
             }
+            $reportData['RemovedPackagesCount'] = if ($script:RemovedPackages) { $script:RemovedPackages.Count } else { 0 }
+            $reportData['WinSxSSavedMB']        = if ($script:WinSxSSavedMB) { $script:WinSxSSavedMB } else { 0 }
+            $reportData['WinSxSBeforeMB']       = if ($script:WinSxsBeforeMB) { $script:WinSxsBeforeMB } else { 0 }
+            $reportData['WinSxSAfterMB']        = if ($script:WinSxsAfterMB) { $script:WinSxsAfterMB } else { 0 }
             Export-Nano11HtmlReport -OutputPath $reportPath -BuildInfo $reportData
             Write-Host "Visual Build Report generated: $reportPath" -ForegroundColor Cyan
+
+            # Post-build hook execution (tools\post-build.ps1)
+            $postBuildScript = Join-Path -Path $scriptDir -ChildPath "tools\post-build.ps1"
+            if (Test-Path -LiteralPath $postBuildScript) {
+                Write-Host "Executing post-build hook: $postBuildScript..." -ForegroundColor Cyan
+                try {
+                    $isoSha256 = (Get-FileHash -LiteralPath $outputIso -Algorithm SHA256).Hash
+                    & $postBuildScript -IsoPath $outputIso -IsoHash $isoSha256 -Profile $selectedProfile -LogDir $logDir
+                } catch {
+                    Write-Warning "Post-build hook exited with warning: $_"
+                }
+            }
+
+            # GUI completion dialog
+            if ($GUI -and $isoCreatedSuccessfully -and (Test-Path -LiteralPath $outputIso)) {
+                $isoLenGB = [math]::Round((Get-Item -LiteralPath $outputIso).Length / 1GB, 2)
+                $isoHashVal = (Get-FileHash -LiteralPath $outputIso -Algorithm SHA256).Hash
+                $dialogMsg = "nano11 ISO ビルドが正常に完了しました！`n`n" +
+                             "■ 出力先: $outputIso`n" +
+                             "■ サイズ: $isoLenGB GB`n" +
+                             "■ SHA256: $isoHashVal`n" +
+                             "■ 所要時間: $(if ($elapsedSec) { $elapsedSec } else { '完了' }) 秒`n`n" +
+                             "ISO が保存されたフォルダーを開きますか？"
+                $res = [System.Windows.Forms.MessageBox]::Show($dialogMsg, "nano11 ビルド完了", [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Information)
+                if ($res -eq [System.Windows.Forms.DialogResult]::Yes) {
+                    Invoke-Item -LiteralPath (Split-Path -Path $outputIso -Parent)
+                }
+            }
         } catch {
             Write-Warning "Could not export visual build report: $_"
         }

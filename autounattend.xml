@@ -514,6 +514,12 @@ function Set-RegistryValue {
             New-Item -Path $Path -Force | Out-Null
         }
         Set-ItemProperty -Path $Path -Name $Name -Value $Value -Type $Type -Force
+        $firstLogonJournal = 'C:\Windows\Setup\Scripts\firstlogon-registry-applied.csv'
+        if (-not (Test-Path $firstLogonJournal)) {
+            Set-Content -LiteralPath $firstLogonJournal -Value '"Path","Name","Type","Value"' -Encoding utf8 -ErrorAction SilentlyContinue
+        }
+        $csvLine = '"{0}","{1}","{2}","{3}"' -f ($Path -replace '"','""'), ($Name -replace '"','""'), $Type, ($Value -replace '"','""')
+        Add-Content -LiteralPath $firstLogonJournal -Value $csvLine -Encoding utf8 -ErrorAction SilentlyContinue
         Write-Log "$Description | $Path\$Name = $Value" "SUCCESS"
     }
     catch {
@@ -1019,7 +1025,20 @@ if (-not $UserCustomizations) {
     Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Control' -Name 'ServicesPipeTimeout' -Type 'DWord' -Value 30000 -Description 'Reduce the startup timeout for Windows services from 60 to 30 seconds. This can speed up boot time slightly'
     Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\SysMain' -Name 'Start' -Type 'DWord' -Value 4 -Description 'Preload frequently used applications into RAM for faster launch times. Automatic is recommended for HDD or mixed-storage systems; Manual or Disabled is only suitable for SSD-only systems'
     Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management\PrefetchParameters' -Name 'EnablePrefetcher' -Type 'DWord' -Value 0 -Description 'Preload frequently used applications and boot files into memory to speed up launches. Generally recommended for HDDs not SSDs'
-    Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\WSearch' -Name 'Start' -Type 'DWord' -Value 4 -Description 'Indexes files and folders for faster search results. Disabled for radical RAM optimization'
+    # Check if WSearch should be preserved via build manifest
+    $buildInfoFile = 'C:\Windows\Setup\Scripts\nano11-build-info.json'
+    $keepSearch = $false
+    if (Test-Path $buildInfoFile) {
+        try {
+            $bi = Get-Content -LiteralPath $buildInfoFile -Raw | ConvertFrom-Json
+            if ($bi.KeepSearchIndex) { $keepSearch = $true }
+        } catch {}
+    }
+    if (-not $keepSearch) {
+        Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\WSearch' -Name 'Start' -Type 'DWord' -Value 4 -Description 'Indexes files and folders for faster search results. Disabled for radical RAM optimization'
+    } else {
+        Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\WSearch' -Name 'Start' -Type 'DWord' -Value 2 -Description 'Windows Search Indexer set to Automatic (Delayed Start)'
+    }
     Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\FontCache' -Name 'Start' -Type 'DWord' -Value 3 -Description 'Windows Font Cache Service set to Manual to prevent DirectWrite LogonUI hang'
     Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\FontCache3.0.0.0' -Name 'Start' -Type 'DWord' -Value 3 -Description 'Windows Presentation Foundation Font Cache set to Manual to prevent XAML hang'
     Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\DoSvc' -Name 'Start' -Type 'DWord' -Value 4 -Description 'Delivery Optimization Service disabled to eliminate background RAM usage'
@@ -2072,9 +2091,35 @@ if ($UserCustomizations) {
 }
 
 
+# 1. Two-Stage SetupComplete Marker Verification
+$setupStamp = 'C:\ProgramData\nano11\setupcomplete.stamp'
+if (Test-Path $setupStamp) {
+    $stampTime = Get-Content -LiteralPath $setupStamp -Raw -ErrorAction SilentlyContinue
+    Write-Log "SetupComplete stage verified: $($stampTime.Trim())" "INFO"
+} else {
+    Write-Log "SetupComplete marker missing (Setup did not run SetupComplete.cmd)" "WARN"
+}
+if (-not (Test-Path 'C:\ProgramData\nano11')) {
+    New-Item -ItemType Directory -Force -Path 'C:\ProgramData\nano11' -ErrorAction SilentlyContinue | Out-Null
+}
+Set-Content -LiteralPath 'C:\ProgramData\nano11\firstlogon.stamp' -Value "$([DateTime]::UtcNow.ToString('o')) FirstLogon" -Force -ErrorAction SilentlyContinue
+
+# 2. Automated winget Package Import (if winget-packages.json is present)
+$pkgList = 'C:\Windows\Setup\Scripts\winget-packages.json'
+if (Test-Path $pkgList) {
+    Write-Log "winget automated package import starting from $pkgList..." "INFO"
+    try {
+        &amp; winget.exe import --import-file $pkgList --accept-package-agreements --accept-source-agreements --disable-interactivity 2&gt;&amp;1 |
+            ForEach-Object { Write-Log "winget: $_" "INFO" }
+        Write-Log "winget package import completed." "SUCCESS"
+    } catch {
+        Write-Log "winget package import encountered an error: $_" "WARN"
+    }
+}
+
 Write-Log "================================================================================" "INFO"
 Write-Log "Winhance Windows Optimization &amp; Customization Script Completed" "SUCCESS"
-Write-Log "================================================================================" "INFO"
+Write-Log "================================================================================" "INFO" 
 </File>
     <File path="C:\Windows\Setup\Scripts\Specialize.ps1">$scripts = @(
 	{
@@ -2235,12 +2280,21 @@ Write-Log "=====================================================================
 		reg.exe add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\OEMInformation" /v "SupportURL" /t REG_SZ /d "https://github.com/gh459/nano11" /f;
 	};
 	{
-		# Enable MSI (Message Signaled Interrupts) across all PCI devices (GPU, NVMe, NIC)
+		# Enable MSI (Message Signaled Interrupts) across target high-performance PCI device classes (GPU, NVMe, NIC)
 		try {
+			$targetClasses = @(
+				'{4d36e968-e325-11ce-bfc1-08002be10318}', # Display / GPU
+				'{4d36e972-e325-11ce-bfc1-08002be10318}', # Network Adapters (NIC)
+				'{4d36e97b-e325-11ce-bfc1-08002be10318}'  # SCSIAdapter / NVMe Storage Controllers
+			);
 			Get-ChildItem -Path "HKLM:\SYSTEM\CurrentControlSet\Enum\PCI" -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.PSChildName -eq "Device Parameters" } | ForEach-Object {
-				$msiPath = Join-Path -Path $_.PSPath -ChildPath "Interrupt Management\MessageSignaledInterruptProperties";
-				New-Item -Path $msiPath -Force -ErrorAction SilentlyContinue | Out-Null;
-				Set-ItemProperty -Path $msiPath -Name "MSISupported" -Value 1 -Type DWord -Force -ErrorAction SilentlyContinue;
+				$parentPath = Split-Path -Path $_.PSPath -Parent;
+				$classGuid = (Get-ItemProperty -Path $parentPath -Name "ClassGUID" -ErrorAction SilentlyContinue).ClassGUID;
+				if (-not $classGuid -or ($targetClasses -contains $classGuid)) {
+					$msiPath = Join-Path -Path $_.PSPath -ChildPath "Interrupt Management\MessageSignaledInterruptProperties";
+					New-Item -Path $msiPath -Force -ErrorAction SilentlyContinue | Out-Null;
+					Set-ItemProperty -Path $msiPath -Name "MSISupported" -Value 1 -Type DWord -Force -ErrorAction SilentlyContinue;
+				}
 			}
 		} catch {}
 	};

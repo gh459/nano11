@@ -17,6 +17,8 @@
     "AtlasReviOSMode": true,
     "BundleOptimizationToolkit": true,
     "RemoveStore": false,
-    "PayloadFormat": "SWM"
+    "PayloadFormat": "SWM",
+    "KeepBasicApps": false,
+    "KeepSearchIndex": false
   }
 }

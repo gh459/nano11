@@ -17,6 +17,8 @@
     "AtlasReviOSMode": true,
     "BundleOptimizationToolkit": true,
     "RemoveStore": false,
-    "PayloadFormat": "WIM"
+    "PayloadFormat": "WIM",
+    "KeepBasicApps": true,
+    "KeepSearchIndex": true
   }
 }

@@ -18,6 +18,8 @@
     "BundleOptimizationToolkit": true,
     "RemoveStore": false,
     "PayloadFormat": "WIM",
-    "KeepAudioTweaks": true
+    "KeepAudioTweaks": true,
+    "KeepBasicApps": true,
+    "KeepSearchIndex": false
   }
 }

@@ -18,6 +18,8 @@
     "BundleOptimizationToolkit": true,
     "RemoveStore": false,
     "PayloadFormat": "WIM",
-    "KeepXboxServices": true
+    "KeepXboxServices": true,
+    "KeepBasicApps": false,
+    "KeepSearchIndex": false
   }
 }
