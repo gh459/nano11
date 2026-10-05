@@ -133,7 +133,15 @@ param(
     [switch]$CheckHealth,
     
     # 18. Multi-Index Processing
-    [switch]$AllIndices
+    [switch]$AllIndices,
+
+    # 19. Xbox Services & Gaming Features
+    [switch]$KeepXboxServices,
+    [alias("NoXboxServices")]
+    [switch]$RemoveXboxServices,
+
+    # 20. Audio Tweaks & Latency Protection
+    [switch]$KeepAudioTweaks
 )
 
 # PowerShell 7+ Compatibility Notice
@@ -151,18 +159,15 @@ try {
 } catch {}
 
 # ==============================================================================
-# Critical Warning: MediaCreationTool.exe ISO is NOT supported
+# Windows 11 Installation Media Notice (install.wim & install.esd)
 # ==============================================================================
 Write-Host ""
-Write-Host "==============================================================================" -ForegroundColor Red
-Write-Host " [CRITICAL NOTICE / WARNING]" -ForegroundColor Red
-Write-Host " DO NOT USE MediaCreationTool.exe TO DOWNLOAD THE WINDOWS 11 ISO!" -ForegroundColor Red
-Write-Host " MediaCreationTool.exe creates an ISO with compressed 'install.esd' instead of" -ForegroundColor Yellow
-Write-Host " 'install.wim', which causes DISM stream corruption (Error 1392 / 0x80070570)." -ForegroundColor Yellow
-Write-Host "------------------------------------------------------------------------------" -ForegroundColor Red
-Write-Host " Please download the official ISO directly from Microsoft containing 'install.wim':" -ForegroundColor Cyan
-Write-Host "  https://www.microsoft.com/software-download/windows11" -ForegroundColor Green
-Write-Host "==============================================================================" -ForegroundColor Red
+Write-Host "==============================================================================" -ForegroundColor Cyan
+Write-Host " [WINDOWS 11 SOURCE MEDIA ADVISORY]" -ForegroundColor Cyan
+Write-Host " Official ISOs containing 'install.wim' provide maximum build speed and stability." -ForegroundColor Green
+Write-Host " MediaCreationTool ISOs containing compressed 'install.esd' will be automatically" -ForegroundColor Yellow
+Write-Host " decompressed and converted to 'install.wim' via DISM during image servicing." -ForegroundColor Yellow
+Write-Host "==============================================================================" -ForegroundColor Cyan
 Write-Host ""
 
 # 1. Check and adjust Execution Policy
@@ -245,7 +250,8 @@ $conflicts = @(
     @('BundleOptimizationToolkit', 'NoBundleOptimizationToolkit'),
     @('ExportESD', 'ExportWIM'),
     @('SplitWIM', 'NoSplitWIM'),
-    @('KeepStore', 'RemoveStore')
+    @('KeepStore', 'RemoveStore'),
+    @('KeepXboxServices', 'RemoveXboxServices')
 )
 foreach ($pair in $conflicts) {
     $paramA = $pair[0]; $paramB = $pair[1]
@@ -254,6 +260,50 @@ foreach ($pair in $conflicts) {
     if ($isA -and $isB) {
         throw "Conflicting parameters specified: -$paramA and -$paramB cannot be used together."
     }
+}
+
+# Helper functions for state-tracked build resumption (-Resume)
+$script:BuildStateFile = $null
+
+function Initialize-Nano11BuildState {
+    param([string]$Dir)
+    if ($Dir) {
+        $script:BuildStateFile = Join-Path -Path $Dir -ChildPath "build-state.json"
+    }
+}
+
+function Get-Nano11BuildState {
+    if ($script:BuildStateFile -and (Test-Path -LiteralPath $script:BuildStateFile)) {
+        try {
+            $rawContent = [System.IO.File]::ReadAllText($script:BuildStateFile, [System.Text.Encoding]::UTF8)
+            return ($rawContent | ConvertFrom-Json)
+        } catch {}
+    }
+    return [PSCustomObject]@{ Phases = (New-Object PSObject) }
+}
+
+function Set-Nano11BuildState {
+    param([string]$Phase, [string]$Status = "Completed")
+    if (-not $script:BuildStateFile) { return }
+    try {
+        $st = Get-Nano11BuildState
+        if (-not $st.Phases) {
+            $st | Add-Member -MemberType NoteProperty -Name Phases -Value (New-Object PSObject) -Force
+        }
+        $st.Phases | Add-Member -MemberType NoteProperty -Name $Phase -Value $Status -Force
+        $json = $st | ConvertTo-Json -Depth 5
+        [System.IO.File]::WriteAllText($script:BuildStateFile, $json, (New-Object System.Text.UTF8Encoding($false)))
+    } catch {}
+}
+
+function Test-Nano11PhaseCompleted {
+    param([string]$Phase)
+    if (-not $Resume) { return $false }
+    $st = Get-Nano11BuildState
+    if ($st -and $st.Phases -and $st.Phases.PSObject.Properties[$Phase] -and ($st.Phases.$Phase -eq "Completed")) {
+        return $true
+    }
+    return $false
 }
 
 # Helper function: Standardized DISM wrapper with retries and exit code diagnostics
@@ -570,6 +620,36 @@ function Export-Nano11Profile {
     Write-Host "Profile saved to: $FilePath" -ForegroundColor Green
 }
 
+# Helper function: Verify oscdimg.exe Authenticode signature or pinned SHA256 hashes
+function Test-OscdimgIntegrity {
+    param([string]$OscdimgPath)
+    if (-not $OscdimgPath -or -not (Test-Path -LiteralPath $OscdimgPath)) { return $false }
+    
+    # 1. Check Authenticode Signature (Official Microsoft Windows ADK binary)
+    try {
+        $sig = Get-AuthenticodeSignature -FilePath $OscdimgPath -ErrorAction SilentlyContinue
+        if ($sig -and $sig.Status -eq 'Valid' -and ($sig.SignerCertificate.Subject -match 'Microsoft')) {
+            return $true
+        }
+    } catch {}
+
+    # 2. Known Official & Pinned SHA256 Hashes
+    $knownHashes = @(
+        'F5129F313ED7EB46F2677CF522E64264A225F226307ED0DDB52BB14C46E7CFDD', # Bundled repo version (2.56)
+        '8DC3FB38E75C42127BE0A29D64CA6D79DFDDFDCBEE4A3BA8B36CFEBDCC1689E2', # Windows 11 ADK x64
+        'CE53D1C8C08FF54B4B91D2DFDE80F9D86427BC8C78FA6BBDE278456CDD2E2B85', # Windows 11 ADK x86
+        'B27E36C95A7490A175B5F17781C5C7A7C0B0C4670ACBF5B0BA0E0556BCDE0F46'  # Windows 11 ADK ARM64
+    )
+    try {
+        $fileHash = (Get-FileHash -LiteralPath $OscdimgPath -Algorithm SHA256 -ErrorAction SilentlyContinue).Hash
+        if ($fileHash -and ($knownHashes -contains $fileHash.ToUpperInvariant())) {
+            return $true
+        }
+    } catch {}
+
+    return $false
+}
+
 # Helper function: Import configuration settings from a JSON profile
 function Import-Nano11Profile {
     param(
@@ -587,10 +667,32 @@ function Import-Nano11Profile {
     try {
         $rawJson = [System.IO.File]::ReadAllText($FilePath, [System.Text.Encoding]::UTF8)
         $data = $rawJson | ConvertFrom-Json
-        if ($data.Version -and $data.Version -ne "2.0" -and $data.Version -ne $script:Nano11Version) {
+        if ($data.Version -and $data.Version -ne "2.0" -and $data.Version -ne "2.1" -and $data.Version -ne $script:Nano11Version) {
             Write-Warning "Profile version ($($data.Version)) differs from current ($script:Nano11Version)."
         }
         $settings = if ($data.Settings) { $data.Settings } else { $data }
+
+        # Profile Schema Linter & Unknown Key Typo Detection
+        $knownKeys = @(
+            'RemoveDefender', 'SkipDefender', 'KeepAsianIME', 'KeepExtraFonts',
+            'RemoveDrivers', 'DisableWindowsUpdate', 'SkipSecurityUpdates', 'KeepBluetooth',
+            'WSLSupport', 'KeepRecoveryEnv', 'KeepWinRE', 'SafeDebloatMode',
+            'UltraSlimMode', 'SetJapaneseKeyboard', 'AtlasReviOSMode',
+            'BundleOptimizationToolkit', 'BundleRevTool', 'RemoveStore', 'KeepStore',
+            'PayloadFormat', 'SplitWim', 'Fat32Compatible', 'EnableCompactOS',
+            'CleanWinSxS', 'SkipEdge', 'KeepXboxServices', 'KeepAudioTweaks',
+            'UseVHDX', 'ProfileName', 'Description', 'Version', 'Architecture'
+        )
+        $unknownKeys = @()
+        foreach ($prop in $settings.PSObject.Properties) {
+            if ($knownKeys -notcontains $prop.Name) {
+                $unknownKeys += $prop.Name
+            }
+        }
+        if ($unknownKeys.Count -gt 0) {
+            Write-Warning "Profile '$([System.IO.Path]::GetFileName($FilePath))' contains unrecognized setting(s): $($unknownKeys -join ', '). Please check for typos."
+        }
+
         return $settings
     } catch {
         if ($NonInteractive) {
@@ -606,9 +708,18 @@ function Import-Nano11Profile {
 function Invoke-Nano11SelfTest {
     [CmdletBinding()]
     param(
-        [string]$ScriptRoot = $PSScriptRoot
+        [string]$ScriptRoot = $PSScriptRoot,
+        [string]$BuilderPath,
+        [string]$UnattendPath
     )
     if (-not $ScriptRoot) { $ScriptRoot = (Get-Location).Path }
+    if (-not $BuilderPath) {
+        $BuilderPath = if ($PSCommandPath) { $PSCommandPath } else { (Get-ChildItem -Path $ScriptRoot -Filter 'nano11builder*.ps1' -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName) }
+        if (-not $BuilderPath) { $BuilderPath = Join-Path -Path $ScriptRoot -ChildPath "nano11builder.ps1" }
+    }
+    if (-not $UnattendPath) {
+        $UnattendPath = Join-Path -Path $ScriptRoot -ChildPath "autounattend.xml"
+    }
     
     Write-Host "=========================================================" -ForegroundColor Cyan
     Write-Host "   nano11 Self-Test & Diagnostic Verification Suite     " -ForegroundColor Cyan
@@ -617,11 +728,10 @@ function Invoke-Nano11SelfTest {
     $results = @()
     
     # 1. AST Syntax Check
-    $builderPath = Join-Path -Path $ScriptRoot -ChildPath "nano11builder.ps1"
     $astPass = $false
     $astMsg = ""
-    if (Test-Path -LiteralPath $builderPath) {
-        $content = [System.IO.File]::ReadAllText($builderPath, [System.Text.Encoding]::UTF8)
+    if (Test-Path -LiteralPath $BuilderPath) {
+        $content = [System.IO.File]::ReadAllText($BuilderPath, [System.Text.Encoding]::UTF8)
         $tokens = $null
         $errors = $null
         $ast = [System.Management.Automation.Language.Parser]::ParseInput($content, [ref]$tokens, [ref]$errors)
@@ -632,15 +742,15 @@ function Invoke-Nano11SelfTest {
             $astMsg = "$($errors.Count) syntax errors: " + ($errors | ForEach-Object { $_.Message } | Select-Object -First 3 -Join "; ")
         }
     } else {
-        $astMsg = "nano11builder.ps1 not found"
+        $astMsg = "$([System.IO.Path]::GetFileName($BuilderPath)) not found"
     }
     $results += [PSCustomObject]@{ Test = "1. Builder Script AST Syntax"; Passed = $astPass; Details = $astMsg }
 
     # 2. Registry Safety Validation (zSYSTEM\CurrentControlSet check)
     $regSafePass = $true
     $regMsg = "Safe: No illegal offline CurrentControlSet keys created"
-    if (Test-Path -LiteralPath $builderPath) {
-        $lines = Get-Content -LiteralPath $builderPath
+    if (Test-Path -LiteralPath $BuilderPath) {
+        $lines = Get-Content -LiteralPath $BuilderPath
         $illegal = @()
         for ($i = 0; $i -lt $lines.Count; $i++) {
             $line = $lines[$i]
@@ -655,17 +765,31 @@ function Invoke-Nano11SelfTest {
     }
     $results += [PSCustomObject]@{ Test = "2. Offline Registry Safety Rule"; Passed = $regSafePass; Details = $regMsg }
 
-    # 3. autounattend.xml XML Schema
-    $unattendPath = Join-Path -Path $ScriptRoot -ChildPath "autounattend.xml"
+    # 3. autounattend.xml XML Schema & Duplicate Component Check
     $xmlPass = $false
     $xmlMsg = ""
-    if (Test-Path -LiteralPath $unattendPath) {
+    if (Test-Path -LiteralPath $UnattendPath) {
         try {
             $doc = [xml]::new()
-            $doc.Load($unattendPath)
+            $doc.Load($UnattendPath)
             if ($doc.DocumentElement.Name -eq 'unattend' -and $doc.unattend.settings) {
-                $xmlPass = $true
-                $xmlMsg = "Valid XML: $($doc.unattend.settings.component.Count) components configured"
+                # Check for duplicate components in the same pass
+                $duplicateComponents = @()
+                foreach ($pass in $doc.unattend.settings) {
+                    $passName = $pass.pass
+                    $compKeys = @($pass.component | ForEach-Object { "$($_.name) [$($_.processorArchitecture)]" })
+                    $dups = $compKeys | Group-Object | Where-Object { $_.Count -gt 1 }
+                    if ($dups) {
+                        $duplicateComponents += "Pass '$passName': $($dups.Name -join ', ')"
+                    }
+                }
+                if ($duplicateComponents.Count -gt 0) {
+                    $xmlPass = $false
+                    $xmlMsg = "Duplicate components found: $($duplicateComponents -join '; ')"
+                } else {
+                    $xmlPass = $true
+                    $xmlMsg = "Valid XML: $($doc.unattend.settings.component.Count) components configured, 0 duplicates"
+                }
             } else {
                 $xmlMsg = "Missing required unattend/settings structure"
             }
@@ -677,7 +801,7 @@ function Invoke-Nano11SelfTest {
     }
     $results += [PSCustomObject]@{ Test = "3. autounattend.xml Schema"; Passed = $xmlPass; Details = $xmlMsg }
 
-    # 4. JSON Profile Presets Check
+    # 4. JSON Profile Presets & Schema Linter
     $profDir = Join-Path -Path $ScriptRoot -ChildPath "profiles"
     $profPass = $false
     $profMsg = ""
@@ -685,19 +809,34 @@ function Invoke-Nano11SelfTest {
         $profFiles = Get-ChildItem -Path $profDir -Filter "*.json"
         if ($profFiles.Count -ge 3) {
             $badProfs = @()
+            $knownProfileKeys = @(
+                'RemoveDefender', 'KeepAsianIME', 'KeepExtraFonts', 'RemoveDrivers',
+                'DisableWindowsUpdate', 'KeepBluetooth', 'WSLSupport', 'KeepRecoveryEnv',
+                'SafeDebloatMode', 'UltraSlimMode', 'SetJapaneseKeyboard', 'AtlasReviOSMode',
+                'BundleOptimizationToolkit', 'RemoveStore', 'PayloadFormat', 'KeepXboxServices',
+                'KeepAudioTweaks', 'UseVHDX'
+            )
             foreach ($pf in $profFiles) {
                 try {
                     $json = Get-Content -LiteralPath $pf.FullName -Raw -Encoding UTF8 | ConvertFrom-Json
                     if (-not $json.ProfileName -or -not $json.Settings) {
                         $badProfs += "$($pf.Name) (missing ProfileName/Settings)"
+                    } elseif ($json.Version -ne "2.1") {
+                        $badProfs += "$($pf.Name) (Version $($json.Version) != 2.1)"
+                    } else {
+                        foreach ($prop in $json.Settings.PSObject.Properties) {
+                            if ($knownProfileKeys -notcontains $prop.Name) {
+                                $badProfs += "$($pf.Name) (unknown key: $($prop.Name))"
+                            }
+                        }
                     }
                 } catch {
-                    $badProfs += "$($pf.Name) (invalid JSON)"
+                    $badProfs += "$($pf.Name) (invalid JSON: $($_.Exception.Message))"
                 }
             }
             if ($badProfs.Count -eq 0) {
                 $profPass = $true
-                $profMsg = "$($profFiles.Count) profiles validated successfully ($($profFiles.BaseName -join ', '))"
+                $profMsg = "$($profFiles.Count) profiles validated successfully (v2.1 unified: $($profFiles.BaseName -join ', '))"
             } else {
                 $profMsg = "Errors in profiles: $($badProfs -join '; ')"
             }
@@ -709,18 +848,24 @@ function Invoke-Nano11SelfTest {
     }
     $results += [PSCustomObject]@{ Test = "4. Profile Presets Integrity"; Passed = $profPass; Details = $profMsg }
 
-    # 5. Tools Folder Check
+    # 5. Tools Folder & Binary Integrity Check
     $toolsDir = Join-Path -Path $ScriptRoot -ChildPath "tools"
     $toolsPass = $false
     $toolsMsg = ""
     if (Test-Path -LiteralPath $toolsDir) {
-        $hasRev = Test-Path -LiteralPath (Join-Path $toolsDir "RevisionTool-Setup.exe")
-        $hasOpt = Test-Path -LiteralPath (Join-Path $toolsDir "Optimizer.exe")
-        if ($hasRev -and $hasOpt) {
+        $revPath = Join-Path $toolsDir "RevisionTool-Setup.exe"
+        $optPath = Join-Path $toolsDir "Optimizer.exe"
+        $hasRev = (Test-Path -LiteralPath $revPath) -and ((Get-Item -LiteralPath $revPath).Length -gt 25MB)
+        $hasOpt = (Test-Path -LiteralPath $optPath) -and ((Get-Item -LiteralPath $optPath).Length -gt 2MB)
+        
+        $oscdPath = Join-Path $ScriptRoot "oscdimg.exe"
+        $oscdValid = Test-OscdimgIntegrity -OscdimgPath $oscdPath
+        
+        if ($hasRev -and $hasOpt -and $oscdValid) {
             $toolsPass = $true
-            $toolsMsg = "Both RevisionTool-Setup.exe and Optimizer.exe present"
+            $toolsMsg = "RevisionTool, Optimizer, and verified oscdimg present"
         } else {
-            $toolsMsg = "Missing tool binaries (RevisionTool: $hasRev, Optimizer: $hasOpt)"
+            $toolsMsg = "Binary issues (RevTool: $hasRev, Optimizer: $hasOpt, Oscdimg: $oscdValid)"
         }
     } else {
         $toolsMsg = "tools/ directory not found"
@@ -765,13 +910,21 @@ function Export-Nano11HtmlReport {
     $sourceDrive = if ($BuildInfo.ContainsKey('SourceDrive')) { $BuildInfo.SourceDrive } else { "N/A" }
     $outputIso = if ($BuildInfo.ContainsKey('OutputIso')) { $BuildInfo.OutputIso } else { "nano11.iso" }
     $payloadFormat = if ($BuildInfo.ContainsKey('PayloadFormat')) { $BuildInfo.PayloadFormat } else { "install.wim" }
-    $origSize = if ($BuildInfo.ContainsKey('OriginalSizeBytes')) { $BuildInfo.OriginalSizeBytes } else { 6871947673 }
-    $finalSize = if ($BuildInfo.ContainsKey('FinalSizeBytes')) { $BuildInfo.FinalSizeBytes } else { 3435973836 }
+    $origSize = if ($BuildInfo.ContainsKey('OriginalSizeBytes') -and $BuildInfo.OriginalSizeBytes) { [long]$BuildInfo.OriginalSizeBytes } else { 0 }
+    $finalSize = if ($BuildInfo.ContainsKey('FinalSizeBytes') -and $BuildInfo.FinalSizeBytes) { [long]$BuildInfo.FinalSizeBytes } else { 0 }
+    $isoSha256 = if ($BuildInfo.ContainsKey('IsoSha256')) { $BuildInfo.IsoSha256 } else { "N/A" }
+    $regCount = if ($BuildInfo.ContainsKey('RegSuccessCount')) { $BuildInfo.RegSuccessCount } else { 0 }
+    $settings = if ($BuildInfo.ContainsKey('Settings') -and $BuildInfo.Settings) { $BuildInfo.Settings } else { @{} }
 
-    $origGB = [math]::Round($origSize / 1GB, 2)
-    $finalGB = [math]::Round($finalSize / 1GB, 2)
-    $savedGB = [math]::Round(($origSize - $finalSize) / 1GB, 2)
-    $savedPct = if ($origSize -gt 0) { [math]::Round((($origSize - $finalSize) / $origSize) * 100, 1) } else { 0 }
+    $origGBText = if ($origSize -gt 0) { "$([math]::Round($origSize / 1GB, 2)) GB" } else { "N/A" }
+    $finalGBText = if ($finalSize -gt 0) { "$([math]::Round($finalSize / 1GB, 2)) GB" } else { "N/A" }
+    $diffText = if ($origSize -gt 0 -and $finalSize -gt 0) {
+        $saved = [math]::Round(($origSize - $finalSize) / 1GB, 2)
+        $pct = [math]::Round((($origSize - $finalSize) / $origSize) * 100, 1)
+        "&#9660; ${saved} GB Saved (-${pct}%)"
+    } else {
+        "Optimized Payload"
+    }
 
     $formatDesc = if ($payloadFormat -eq 'install.swm') { 'FAT32 USB Compatible' } elseif ($payloadFormat -eq 'install.esd') { 'Ultra-compressed LZMS' } else { 'Standard WIM' }
 
@@ -805,6 +958,9 @@ function Export-Nano11HtmlReport {
     [void]$sb.AppendLine('  th:last-child { text-align: right; }')
     [void]$sb.AppendLine('  .status-tag { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: 600; }')
     [void]$sb.AppendLine('  .status-enabled { background: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid #059669; }')
+    [void]$sb.AppendLine('  .status-disabled { background: rgba(239, 68, 68, 0.2); color: #f87171; border: 1px solid #dc2626; }')
+    [void]$sb.AppendLine('  .status-retained { background: rgba(59, 130, 246, 0.2); color: #60a5fa; border: 1px solid #2563eb; }')
+    [void]$sb.AppendLine('  code { font-family: Consolas, monospace; background: rgba(255,255,255,0.05); padding: 2px 6px; border-radius: 4px; font-size: 13px; color: #38bdf8; }')
     [void]$sb.AppendLine('  footer { text-align: center; color: var(--text-secondary); font-size: 13px; margin-top: 40px; }')
     [void]$sb.AppendLine('</style>')
     [void]$sb.AppendLine('</head>')
@@ -824,13 +980,13 @@ function Export-Nano11HtmlReport {
     [void]$sb.AppendLine('  <div class="grid">')
     [void]$sb.AppendLine('    <div class="stat-card">')
     [void]$sb.AppendLine('      <div class="label">Original WIM Size</div>')
-    [void]$sb.AppendLine("      <div class=`"value`">${origGB} GB</div>")
+    [void]$sb.AppendLine("      <div class=`"value`">$origGBText</div>")
     [void]$sb.AppendLine('      <div class="diff" style="color: var(--text-secondary);">Source Baseline</div>')
     [void]$sb.AppendLine('    </div>')
     [void]$sb.AppendLine('    <div class="stat-card">')
     [void]$sb.AppendLine('      <div class="label">Optimized Size</div>')
-    [void]$sb.AppendLine("      <div class=`"value`">${finalGB} GB</div>")
-    [void]$sb.AppendLine("      <div class=`"diff`">&#9660; ${savedGB} GB Saved (-${savedPct}%)</div>")
+    [void]$sb.AppendLine("      <div class=`"value`">$finalGBText</div>")
+    [void]$sb.AppendLine("      <div class=`"diff`">$diffText</div>")
     [void]$sb.AppendLine('    </div>')
     [void]$sb.AppendLine('    <div class="stat-card">')
     [void]$sb.AppendLine('      <div class="label">Active Profile</div>')
@@ -850,11 +1006,32 @@ function Export-Nano11HtmlReport {
     [void]$sb.AppendLine('      <thead><tr><th>Feature</th><th>Technical Specification</th><th>Status</th></tr></thead>')
     [void]$sb.AppendLine('      <tbody>')
     [void]$sb.AppendLine('        <tr><td><strong>Zero-Click Automated Setup</strong></td><td>ChildCompletion &amp; SetupType automated (Shift+F10 obsolete)</td><td><span class="status-tag status-enabled">Enabled (Zero-Click)</span></td></tr>')
-    [void]$sb.AppendLine('        <tr><td><strong>Hardware Checks Bypass</strong></td><td>TPM 2.0, SecureBoot, RAM, Storage, CPU bypass</td><td><span class="status-tag status-enabled">Enabled (LabConfig)</span></td></tr>')
-    [void]$sb.AppendLine('        <tr><td><strong>Gaming &amp; Low-Latency Tuning</strong></td><td>MSI interrupts, HAGS enabled, Core Parking disabled (EPP 0)</td><td><span class="status-tag status-enabled">Enabled (Atlas/ReviOS)</span></td></tr>')
+    [void]$sb.AppendLine('        <tr><td><strong>Hardware Checks Bypass</strong></td><td>TPM 2.0, SecureBoot, RAM, Storage, CPU bypass (LabConfig)</td><td><span class="status-tag status-enabled">Enabled (LabConfig)</span></td></tr>')
+
+    $defStatus = if ($settings.RemoveDefender) { '<span class="status-tag status-disabled">Removed (Disabled)</span>' } else { '<span class="status-tag status-retained">Retained (Active)</span>' }
+    [void]$sb.AppendLine("        <tr><td><strong>Windows Defender &amp; Security UI</strong></td><td>SmartScreen, Telemetry, and Defender service control</td><td>$defStatus</td></tr>")
+
+    $storeStatus = if ($settings.RemoveStore) { '<span class="status-tag status-disabled">Removed</span>' } else { '<span class="status-tag status-enabled">Retained (winget ready)</span>' }
+    [void]$sb.AppendLine("        <tr><td><strong>Microsoft Store Platform</strong></td><td>Desktop App Installer preserved for winget package management</td><td>$storeStatus</td></tr>")
+
+    $wuStatus = if ($settings.DisableWindowsUpdate) { '<span class="status-tag status-disabled">Disabled (Manual)</span>' } else { '<span class="status-tag status-enabled">Enabled (Standard)</span>' }
+    [void]$sb.AppendLine("        <tr><td><strong>Windows Update Service</strong></td><td>Automatic driver installation &amp; background patching</td><td>$wuStatus</td></tr>")
+
+    $drvStatus = if ($settings.RemoveDrivers) { '<span class="status-tag status-disabled">Debloated (Printers/Modems)</span>' } else { '<span class="status-tag status-retained">Preserved (VM/Hypervisor Safe)</span>' }
+    [void]$sb.AppendLine("        <tr><td><strong>Hardware Driver Packages</strong></td><td>Legacy modems, printers, scsi, storage controller drivers</td><td>$drvStatus</td></tr>")
+
+    $xboxStatus = if ($settings.KeepXboxServices) { '<span class="status-tag status-enabled">Preserved (Gaming / Handheld)</span>' } else { '<span class="status-tag status-disabled">Disabled (Debloated)</span>' }
+    [void]$sb.AppendLine("        <tr><td><strong>Xbox Live &amp; Game Bar Services</strong></td><td>Xbox identity, GameDVR, and gaming overlay subsystem</td><td>$xboxStatus</td></tr>")
+
+    $audioStatus = if ($settings.KeepAudioTweaks) { '<span class="status-tag status-enabled">Pro Audio MMCSS Priority</span>' } else { '<span class="status-tag status-retained">Standard Gaming Tuning</span>' }
+    [void]$sb.AppendLine("        <tr><td><strong>Low-Latency Audio &amp; Multimedia</strong></td><td>MMCSS thread scheduling, SystemResponsiveness, ASIO low-jitter</td><td>$audioStatus</td></tr>")
+
     [void]$sb.AppendLine('        <tr><td><strong>Windows 11 AI &amp; Recall Block</strong></td><td>DirectML, Copilot, Recall snapshots, Click-to-Do offline blocked</td><td><span class="status-tag status-enabled">Blocked</span></td></tr>')
     [void]$sb.AppendLine('        <tr><td><strong>Japanese &amp; Regional IME Support</strong></td><td>106/109 Keyboard layout auto-detected, IME telemetry opted-out</td><td><span class="status-tag status-enabled">Verified</span></td></tr>')
-    [void]$sb.AppendLine('        <tr><td><strong>Desktop Control Center</strong></td><td>Defender/Update toggle, RAM trimmer, Browser Grabber bundled</td><td><span class="status-tag status-enabled">Integrated</span></td></tr>')
+
+    $tkStatus = if ($settings.BundleOptimizationToolkit) { '<span class="status-tag status-enabled">Integrated</span>' } else { '<span class="status-tag status-disabled">Skipped</span>' }
+    [void]$sb.AppendLine("        <tr><td><strong>Desktop Optimization Toolkit</strong></td><td>WinUtil, Sophia Script, Optimizer, Revision Tool bundled to Desktop</td><td>$tkStatus</td></tr>")
+
     [void]$sb.AppendLine('        <tr><td><strong>Custom Post-Install Hook</strong></td><td>User scripts in tools/custom-scripts/ executed automatically</td><td><span class="status-tag status-enabled">Active Hook</span></td></tr>')
     [void]$sb.AppendLine('      </tbody>')
     [void]$sb.AppendLine('    </table>')
@@ -864,7 +1041,13 @@ function Export-Nano11HtmlReport {
     [void]$sb.AppendLine('    <h2>&#128190; Output ISO &amp; Flashing Guide</h2>')
     [void]$sb.AppendLine('    <table>')
     [void]$sb.AppendLine('      <tbody>')
-    [void]$sb.AppendLine("        <tr><td><strong>Generated ISO</strong></td><td><code>$outputIso</code></td></tr>")
+    [void]$sb.AppendLine("        <tr><td><strong>Generated ISO Path</strong></td><td><code>$outputIso</code></td></tr>")
+    if ($isoSha256 -and $isoSha256 -ne "N/A") {
+        [void]$sb.AppendLine("        <tr><td><strong>SHA256 Checksum</strong></td><td><code>$isoSha256</code></td></tr>")
+    }
+    if ($regCount -gt 0) {
+        [void]$sb.AppendLine("        <tr><td><strong>Applied Registry Optimizations</strong></td><td><span class=`"badge`" style=`"font-size: 12px;`">$regCount tweaks successfully committed</span></td></tr>")
+    }
     [void]$sb.AppendLine('        <tr><td><strong>Recommended Deployment</strong></td><td><strong>Ventoy</strong>: Copy ISO directly to USB drive<br><strong>Rufus</strong>: Write as Standard Windows Installation<br><strong>FAT32 USB</strong>: Split-WIM (install.swm) files supported natively</td></tr>')
     [void]$sb.AppendLine('      </tbody>')
     [void]$sb.AppendLine('    </table>')
@@ -906,6 +1089,8 @@ function Show-Nano11GUI {
     $form.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterScreen
     $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
     $form.MaximizeBox = $false
+    $form.AutoScaleMode = [System.Windows.Forms.AutoScaleMode]::Dpi
+    $form.AutoScaleDimensions = New-Object System.Drawing.SizeF(96, 96)
     $form.BackColor = [System.Drawing.Color]::FromArgb(26, 28, 34)
     $form.ForeColor = [System.Drawing.Color]::FromArgb(235, 238, 245)
     $form.Font = New-Object System.Drawing.Font($uiFontName, 9)
@@ -1349,7 +1534,7 @@ function Show-Nano11GUI {
                 $chkDefender.Checked = $false
                 $chkIME.Checked = $true
                 $chkFonts.Checked = $true
-                $chkDrivers.Checked = $true
+                $chkDrivers.Checked = $false
                 $chkWU.Checked = $false
                 $chkBT.Checked = $false
                 $chkWSL.Checked = $true
@@ -1573,7 +1758,9 @@ function Show-Nano11GUI {
 # Handle -TestSelf before transcript or prompts
 if ($TestSelf) {
     $scriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
-    $testResult = Invoke-Nano11SelfTest -ScriptRoot $scriptDir
+    $builderPath = if ($PSCommandPath) { $PSCommandPath } else { Join-Path -Path $scriptDir -ChildPath "nano11builder.ps1" }
+    $unattendPath = Join-Path -Path $scriptDir -ChildPath "autounattend.xml"
+    $testResult = Invoke-Nano11SelfTest -ScriptRoot $scriptDir -BuilderPath $builderPath -UnattendPath $unattendPath
     if ($testResult) { exit 0 } else { exit 1 }
 }
 
@@ -1645,6 +1832,8 @@ $bundleRevTool = $bundleOptimizationToolkit
 $exportESDMode = $false
 $splitWIMMode = $false
 $removeStore = $false
+$keepXboxServices = $false
+$keepAudioTweaks = $false
 $selectedProfile = $null
 
 # 2. Track explicitly supplied CLI parameters from bound parameters snapshot
@@ -1729,6 +1918,8 @@ if ($bound.ContainsKey('Profile') -or $bound.ContainsKey('Preset')) {
                     $bundleRevTool = $bundleOptimizationToolkit
                 }
                 if ($loaded.PSObject.Properties['RemoveStore'])          { $removeStore = [bool]$loaded.RemoveStore }
+                if ($loaded.PSObject.Properties['KeepXboxServices'])     { $keepXboxServices = [bool]$loaded.KeepXboxServices }
+                if ($loaded.PSObject.Properties['KeepAudioTweaks'])      { $keepAudioTweaks = [bool]$loaded.KeepAudioTweaks }
                 if ($loaded.PSObject.Properties['UseVHDX'])              { $useVHDX = [bool]$loaded.UseVHDX }
                 if ($loaded.PSObject.Properties['PayloadFormat']) {
                     $fmt = $loaded.PayloadFormat.ToString().ToUpper()
@@ -1770,6 +1961,8 @@ if ($bound.ContainsKey('LoadProfile') -and $bound['LoadProfile']) {
             $bundleRevTool = $bundleOptimizationToolkit
         }
         if ($loaded.PSObject.Properties['RemoveStore'])          { $removeStore = [bool]$loaded.RemoveStore }
+        if ($loaded.PSObject.Properties['KeepXboxServices'])     { $keepXboxServices = [bool]$loaded.KeepXboxServices }
+        if ($loaded.PSObject.Properties['KeepAudioTweaks'])      { $keepAudioTweaks = [bool]$loaded.KeepAudioTweaks }
         if ($loaded.PSObject.Properties['PayloadFormat']) {
             $fmt = $loaded.PayloadFormat.ToString().ToUpper()
             if ($fmt -eq 'ESD') { $exportESDMode = $true; $splitWIMMode = $false }
@@ -1847,6 +2040,22 @@ $getBoundVal = {
     $v = $bound[$Name]
     if ($v -is [System.Management.Automation.SwitchParameter]) { return $v.IsPresent }
     return [bool]$v
+}
+
+# 19. Xbox Services
+if (& $isAnyBound @('KeepXboxServices')) {
+    $keepXboxServices = & $getBoundVal 'KeepXboxServices'
+    [void]$cliBound.Add('Xbox')
+} elseif (& $isAnyBound @('RemoveXboxServices', 'NoXboxServices')) {
+    $remXbox = if ($bound.ContainsKey('RemoveXboxServices')) { & $getBoundVal 'RemoveXboxServices' } else { & $getBoundVal 'NoXboxServices' }
+    $keepXboxServices = -not $remXbox
+    [void]$cliBound.Add('Xbox')
+}
+
+# 20. Audio Tweaks
+if (& $isAnyBound @('KeepAudioTweaks')) {
+    $keepAudioTweaks = & $getBoundVal 'KeepAudioTweaks'
+    [void]$cliBound.Add('Audio')
 }
 
 # 1. Windows Defender
@@ -2506,6 +2715,39 @@ if ($SaveProfile) {
     Export-Nano11Profile -FilePath $SaveProfile -Config $currentCfg
 }
 
+# Save build configuration snapshot to logs/<timestamp>.config.json
+$logsDir = Join-Path -Path $scriptDir -ChildPath "logs"
+if (-not (Test-Path -LiteralPath $logsDir)) {
+    New-Item -ItemType Directory -Force -Path $logsDir -ErrorAction SilentlyContinue | Out-Null
+}
+$configSnapshotPath = Join-Path -Path $logsDir -ChildPath "$((Get-Date).ToString('yyyyMMdd_HHmmss')).config.json"
+$resolvedConfig = [PSCustomObject]@{
+    Timestamp                  = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+    Version                    = $script:Nano11Version
+    Profile                    = if ($selectedProfile) { $selectedProfile } else { 'Extreme (Default)' }
+    Architecture               = $architecture
+    RemoveDefender             = $removeDefender
+    KeepAsianIME               = $keepAsianIME
+    KeepExtraFonts             = $keepExtraFonts
+    RemoveDrivers              = $removeDrivers
+    DisableWindowsUpdate       = $disableWU
+    KeepBluetooth              = $keepBT
+    WSLSupport                 = $wslSupport
+    KeepRecoveryEnv            = $keepRecoveryEnv
+    SafeDebloatMode            = $safeDebloatMode
+    UltraSlimMode              = $ultraSlimMode
+    SetJapaneseKeyboard        = $setJapaneseKeyboard
+    AtlasReviOSMode            = $atlasReviOSMode
+    BundleOptimizationToolkit  = $bundleOptimizationToolkit
+    RemoveStore                = $removeStore
+    KeepXboxServices           = $keepXboxServices
+    KeepAudioTweaks            = $keepAudioTweaks
+    PayloadFormat              = if ($exportESDMode) { "ESD" } elseif ($splitWIMMode) { "SWM" } else { "WIM" }
+}
+try {
+    $resolvedConfig | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $configSnapshotPath -Encoding UTF8 -Force
+} catch {}
+
 Write-Host ""
 Write-Host "Active configuration:" -ForegroundColor Cyan
 Write-Host "  - Profile:                 $(if ($selectedProfile) { $selectedProfile } else { 'Extreme (Default)' })"
@@ -2523,6 +2765,11 @@ Write-Host "  - Japanese 106 Keyboard:   $setJapaneseKeyboard"
 Write-Host "  - AtlasOS & ReviOS Tuning: $atlasReviOSMode"
 Write-Host "  - Optimization Toolkit:    $bundleOptimizationToolkit"
 Write-Host "  - Remove Microsoft Store:  $removeStore"
+Write-Host "  - Keep Xbox Services:      $keepXboxServices"
+Write-Host "  - Low-Latency Audio MMCSS: $keepAudioTweaks"
+if (Test-Path -LiteralPath $configSnapshotPath) {
+    Write-Host "  - Config Snapshot:         $configSnapshotPath" -ForegroundColor DarkCyan
+}
 Write-Host "  - Payload Format:          $(if ($exportESDMode) { 'install.esd (LZMS)' } elseif ($splitWIMMode) { 'install.swm (Split-WIM / FAT32)' } else { 'install.wim (LZX - Recommended)' })"
 Write-Host ""
 
@@ -2614,6 +2861,7 @@ try {
 
     $nano11Dir = Join-Path -Path $baseWorkDir -ChildPath "build"
     $scratchDir = Join-Path -Path $baseWorkDir -ChildPath "scratchdir"
+    Initialize-Nano11BuildState -Dir $baseWorkDir
     $vhdxPath = Join-Path -Path $baseWorkDir -ChildPath "nano11_scratch.vhdx"
     $isVhdxMounted = $false
     Write-Host "Working Directory: $baseWorkDir" -ForegroundColor Cyan
@@ -2754,7 +3002,8 @@ if (-not $DriveLetter) {
         if ($hasWimP) {
             $detectedMediaDrives += $psd
         } elseif ($hasEsdP) {
-            Write-Host "  [!] Notice: Drive $rootClean contains 'install.esd' (MediaCreationTool format). MediaCreationTool ISOs are NOT supported. Skipping..." -ForegroundColor Yellow
+            $detectedMediaDrives += $psd
+            Write-Host "  [i] Notice: Drive $rootClean contains 'install.esd'. It will be converted to install.wim via DISM." -ForegroundColor Cyan
         }
     }
 
@@ -2886,17 +3135,60 @@ if (-not $copySuccess) {
     Copy-Item -Path "$sourcePath*" -Destination $nano11Dir -Recurse -Force | Out-Null
 }
 
-# Ensure install.wim exists in destination; if not copied by robocopy, copy directly
+# Ensure install.wim exists in destination; if not copied by robocopy, copy directly or decompress from install.esd
 if (-not (Test-Path -LiteralPath $destWim) -or ((Get-Item -LiteralPath $destWim).Length -lt 1GB)) {
     if (Test-Path -LiteralPath $sourceWim) {
         Write-Host "Copying install.wim directly from $sourceWim..." -ForegroundColor Cyan
         Copy-Item -LiteralPath $sourceWim -Destination $destWim -Force
+    } elseif (Test-Path -LiteralPath $sourceEsd) {
+        Write-Host "Detected install.esd format (MediaCreationTool ISO). Converting to install.wim..." -ForegroundColor Cyan
+        Write-Host "Decompressing LZMS stream to LZX maximum compression via DISM. Please wait..." -ForegroundColor Cyan
+        
+        $esdInfoOutput = & dism.exe /English /Get-WimInfo "/WimFile:$sourceEsd"
+        $esdIndexEntries = @()
+        $curEsdEntry = $null
+        foreach ($line in ($esdInfoOutput -split '\r?\n')) {
+            if ($line -match '^\s*Index\s*:\s*(\d+)') {
+                $curEsdEntry = [PSCustomObject]@{ Index = $matches[1]; Name = "" }
+                $esdIndexEntries += $curEsdEntry
+            } elseif ($curEsdEntry -and ($line -match '^\s*Name\s*:\s*(.+)')) {
+                $curEsdEntry.Name = $matches[1].Trim()
+            }
+        }
+        $availEsdIndices = @($esdIndexEntries | ForEach-Object { $_.Index })
+        $proEsd = $esdIndexEntries | Where-Object { $_.Name -match 'Pro' -and $_.Name -notmatch 'Workstation' } | Select-Object -First 1
+        $defaultEsdIndex = if ($proEsd) { $proEsd.Index } elseif ($availEsdIndices.Count -gt 0) { $availEsdIndices[0] } else { "1" }
+        
+        $chosenEsdIndex = $defaultEsdIndex
+        if ([string]::IsNullOrWhiteSpace($index) -or ($index -notin $availEsdIndices)) {
+            if (-not $NonInteractive) {
+                Write-Host "Available Windows editions in install.esd:" -ForegroundColor Green
+                foreach ($entry in $esdIndexEntries) {
+                    Write-Host "  [$($entry.Index)] $($entry.Name)"
+                }
+                $userChoice = Read-Host "Select edition index to decompress into install.wim [Default: $defaultEsdIndex]"
+                if (-not [string]::IsNullOrWhiteSpace($userChoice) -and ($userChoice.Trim() -in $availEsdIndices)) {
+                    $chosenEsdIndex = $userChoice.Trim()
+                }
+            }
+        } else {
+            $chosenEsdIndex = $index
+        }
+        
+        Write-Host "Decompressing and exporting Index $chosenEsdIndex from install.esd to $destWim..." -ForegroundColor Cyan
+        & dism.exe /English /Export-Image "/SourceImageFile:$sourceEsd" "/SourceIndex:$chosenEsdIndex" "/DestinationImageFile:$destWim" /Compress:max
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $destWim) -or ((Get-Item -LiteralPath $destWim).Length -lt 1GB)) {
+            Write-Host "Error: DISM failed to convert install.esd to install.wim (Exit code: $LASTEXITCODE)." -ForegroundColor Red
+            Stop-Transcript
+            exit 1
+        }
+        Write-Host "Decompression complete! install.wim created successfully ($([math]::Round((Get-Item -LiteralPath $destWim).Length / 1GB, 2)) GB)." -ForegroundColor Green
+        $index = "1"
     } else {
         Write-Host ""
         Write-Host "=========================================================" -ForegroundColor Red
-        Write-Host " ERROR: 'sources\install.wim' was not found on $DriveLetter!" -ForegroundColor Red
-        Write-Host " MediaCreationTool ISOs containing only 'install.esd' are not supported." -ForegroundColor Yellow
-        Write-Host " Please download the official ISO containing 'install.wim' from Microsoft." -ForegroundColor Yellow
+        Write-Host " ERROR: Neither 'install.wim' nor 'install.esd' was found on $DriveLetter!" -ForegroundColor Red
+        Write-Host " Please mount a valid Windows 11 installation ISO." -ForegroundColor Yellow
         Write-Host "=========================================================" -ForegroundColor Red
         Stop-Transcript
         exit 1
@@ -3093,6 +3385,10 @@ $appxPatterns = @(
 if ($removeStore) {
     Write-Host "  [Store] Microsoft Store will be removed (Microsoft.WindowsStore, Microsoft.StorePurchaseApp)." -ForegroundColor Yellow
     $appxPatterns += @('Microsoft.WindowsStore_*', 'Microsoft.StorePurchaseApp_*')
+}
+if ($keepXboxServices) {
+    Write-Host "  [Xbox] Preserving Xbox Game Bar and Gaming subsystem (-KeepXboxServices)." -ForegroundColor Green
+    $appxPatterns = @($appxPatterns | Where-Object { $_ -notlike '*Xbox*' -and $_ -notlike '*GamingApp*' })
 }
 # Note: *SecHealthUI*, *CoreAI*, *PeopleExperienceHost*, *PinningConfirmationDialog*, *SecureAssessmentBrowser*
 # are protected system components in newer Windows 11 builds that trigger COMException (0x80073cfa) if removed via DISM.
@@ -3738,34 +4034,38 @@ reg.exe add "HKLM\zDEFAULT\Control Panel\Accessibility\Keyboard Response" /v "Fl
 reg.exe add "HKLM\zNTUSER\Control Panel\Accessibility\ToggleKeys" /v "Flags" /t REG_SZ /d "34" /f > $null 2>&1
 reg.exe add "HKLM\zDEFAULT\Control Panel\Accessibility\ToggleKeys" /v "Flags" /t REG_SZ /d "34" /f > $null 2>&1
 
-# Disable Xbox Game Bar & GameDVR
-Write-Host "Disabling Xbox Game Bar & GameDVR..." -ForegroundColor Green
-reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\GameDVR" /v "AllowGameDVR" /t REG_DWORD /d 0 /f > $null 2>&1
-reg.exe add "HKLM\zSOFTWARE\Microsoft\PolicyManager\default\ApplicationManagement\AllowGameDVR" /v "value" /t REG_DWORD /d 0 /f > $null 2>&1
-reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\GameDVR" /v "AppCaptureEnabled" /t REG_DWORD /d 0 /f > $null 2>&1
-reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\GameDVR" /v "AppCaptureEnabled" /t REG_DWORD /d 0 /f > $null 2>&1
-reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\CurrentVersion\GameDVR" /v "AppCaptureEnabled" /t REG_DWORD /d 0 /f > $null 2>&1
-reg.exe add "HKLM\zNTUSER\System\GameConfigStore" /v "GameDVR_Enabled" /t REG_DWORD /d 0 /f > $null 2>&1
-reg.exe add "HKLM\zDEFAULT\System\GameConfigStore" /v "GameDVR_Enabled" /t REG_DWORD /d 0 /f > $null 2>&1
-reg.exe add "HKLM\zNTUSER\System\GameConfigStore" /v "GameDVR_FSEBehaviorMode" /t REG_DWORD /d 2 /f > $null 2>&1
-reg.exe add "HKLM\zDEFAULT\System\GameConfigStore" /v "GameDVR_FSEBehaviorMode" /t REG_DWORD /d 2 /f > $null 2>&1
-reg.exe add "HKLM\zNTUSER\System\GameConfigStore" /v "GameDVR_HonorUserFSEBehaviorMode" /t REG_DWORD /d 1 /f > $null 2>&1
-reg.exe add "HKLM\zDEFAULT\System\GameConfigStore" /v "GameDVR_HonorUserFSEBehaviorMode" /t REG_DWORD /d 1 /f > $null 2>&1
-reg.exe add "HKLM\zNTUSER\System\GameConfigStore" /v "GameDVR_DXGIHonorFSEWindowsCompatible" /t REG_DWORD /d 1 /f > $null 2>&1
-reg.exe add "HKLM\zDEFAULT\System\GameConfigStore" /v "GameDVR_DXGIHonorFSEWindowsCompatible" /t REG_DWORD /d 1 /f > $null 2>&1
-reg.exe add "HKLM\zNTUSER\System\GameConfigStore" /v "GameDVR_EFSEFeatureFlags" /t REG_DWORD /d 0 /f > $null 2>&1
-reg.exe add "HKLM\zDEFAULT\System\GameConfigStore" /v "GameDVR_EFSEFeatureFlags" /t REG_DWORD /d 0 /f > $null 2>&1
+if (-not $keepXboxServices) {
+    # Disable Xbox Game Bar & GameDVR
+    Write-Host "Disabling Xbox Game Bar & GameDVR..." -ForegroundColor Green
+    reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\GameDVR" /v "AllowGameDVR" /t REG_DWORD /d 0 /f > $null 2>&1
+    reg.exe add "HKLM\zSOFTWARE\Microsoft\PolicyManager\default\ApplicationManagement\AllowGameDVR" /v "value" /t REG_DWORD /d 0 /f > $null 2>&1
+    reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\GameDVR" /v "AppCaptureEnabled" /t REG_DWORD /d 0 /f > $null 2>&1
+    reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\GameDVR" /v "AppCaptureEnabled" /t REG_DWORD /d 0 /f > $null 2>&1
+    reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\CurrentVersion\GameDVR" /v "AppCaptureEnabled" /t REG_DWORD /d 0 /f > $null 2>&1
+    reg.exe add "HKLM\zNTUSER\System\GameConfigStore" /v "GameDVR_Enabled" /t REG_DWORD /d 0 /f > $null 2>&1
+    reg.exe add "HKLM\zDEFAULT\System\GameConfigStore" /v "GameDVR_Enabled" /t REG_DWORD /d 0 /f > $null 2>&1
+    reg.exe add "HKLM\zNTUSER\System\GameConfigStore" /v "GameDVR_FSEBehaviorMode" /t REG_DWORD /d 2 /f > $null 2>&1
+    reg.exe add "HKLM\zDEFAULT\System\GameConfigStore" /v "GameDVR_FSEBehaviorMode" /t REG_DWORD /d 2 /f > $null 2>&1
+    reg.exe add "HKLM\zNTUSER\System\GameConfigStore" /v "GameDVR_HonorUserFSEBehaviorMode" /t REG_DWORD /d 1 /f > $null 2>&1
+    reg.exe add "HKLM\zDEFAULT\System\GameConfigStore" /v "GameDVR_HonorUserFSEBehaviorMode" /t REG_DWORD /d 1 /f > $null 2>&1
+    reg.exe add "HKLM\zNTUSER\System\GameConfigStore" /v "GameDVR_DXGIHonorFSEWindowsCompatible" /t REG_DWORD /d 1 /f > $null 2>&1
+    reg.exe add "HKLM\zDEFAULT\System\GameConfigStore" /v "GameDVR_DXGIHonorFSEWindowsCompatible" /t REG_DWORD /d 1 /f > $null 2>&1
+    reg.exe add "HKLM\zNTUSER\System\GameConfigStore" /v "GameDVR_EFSEFeatureFlags" /t REG_DWORD /d 0 /f > $null 2>&1
+    reg.exe add "HKLM\zDEFAULT\System\GameConfigStore" /v "GameDVR_EFSEFeatureFlags" /t REG_DWORD /d 0 /f > $null 2>&1
+} else {
+    Write-Host "Preserving Xbox Game Bar & GameDVR (-KeepXboxServices)..." -ForegroundColor Green
+}
 
 # IFEO Debugger redirect for non-OOBE background processes (OSK/Narrator/Magnifier blocked safely in FirstLogon after OOBE completes)
 $blockedExes = @(
     "CrossDeviceResume.exe",
     "WindowsBackupClient.exe",
     "VoiceAccess.exe",
-    "Livecaptions.exe",
-    "GameBar.exe",
-    "GameBarFTServer.exe",
-    "GameBarPresenceWriter.exe"
+    "Livecaptions.exe"
 )
+if (-not $keepXboxServices) {
+    $blockedExes += @("GameBar.exe", "GameBarFTServer.exe", "GameBarPresenceWriter.exe")
+}
 foreach ($exe in $blockedExes) {
     reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\$exe" /v "Debugger" /t REG_SZ /d "systray.exe" /f > $null 2>&1
 }
@@ -3916,6 +4216,15 @@ reg.exe add "HKLM\zSYSTEM\ControlSet001\Services\Tcpip\Parameters" /v "EnableICM
 
 # MMCSS (Multimedia Class Scheduler Service)
 Write-Host "Applying System Performance & Latency optimizations..." -ForegroundColor Green
+if ($keepAudioTweaks) {
+    Write-Host "  [Audio DAW] Configuring low-latency Pro Audio MMCSS task profile..." -ForegroundColor Green
+    reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Pro Audio" /v "Priority" /t REG_DWORD /d 1 /f > $null 2>&1
+    reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Pro Audio" /v "Scheduling Category" /t REG_SZ /d "High" /f > $null 2>&1
+    reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Pro Audio" /v "SFIO Priority" /t REG_SZ /d "High" /f > $null 2>&1
+    reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Pro Audio" /v "Background Only" /t REG_SZ /d "False" /f > $null 2>&1
+    reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Pro Audio" /v "Clock Rate" /t REG_DWORD /d 10000 /f > $null 2>&1
+    reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Pro Audio" /v "GPU Priority" /t REG_DWORD /d 8 /f > $null 2>&1
+}
 reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" /v "NoLazyMode" /t REG_DWORD /d 1 /f > $null 2>&1
 reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" /v "AlwaysOn" /t REG_DWORD /d 1 /f > $null 2>&1
 reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" /v "NetworkThrottlingIndex" /t REG_DWORD /d 4294967295 /f > $null 2>&1
@@ -3999,10 +4308,10 @@ $serviceConfigs = [ordered]@{
     "WpcMonSvc"                                = 4  # Parental Controls
     "WSAIFabricSvc"                            = 4  # Windows Subsystem for Android Fabric Service
     "WSearch"                                  = 4  # Windows Search Indexer
-    "XblAuthManager"                           = 4  # Xbox Live Auth Manager
-    "XblGameSave"                              = 4  # Xbox Live Game Save
-    "XboxGipSvc"                               = 4  # Xbox Accessory Management Service
-    "XboxNetApiSvc"                            = 4  # Xbox Live Networking Service
+    "XblAuthManager"                           = if ($keepXboxServices) { 3 } else { 4 }  # Xbox Live Auth Manager
+    "XblGameSave"                              = if ($keepXboxServices) { 3 } else { 4 }  # Xbox Live Game Save
+    "XboxGipSvc"                               = if ($keepXboxServices) { 3 } else { 4 }  # Xbox Accessory Management Service
+    "XboxNetApiSvc"                            = if ($keepXboxServices) { 3 } else { 4 }  # Xbox Live Networking Service
 
     # --- Demand Start Services (Start = 3: Manual, runs on demand only - protects LogonUI, DirectWrite & Per-User sessions) ---
     "AppHostSvc"                               = 3  # Application Host Helper
@@ -4683,29 +4992,47 @@ if ($bundleOptimizationToolkit) {
         New-Item -Path $toolsCacheDir -ItemType Directory -Force | Out-Null
     }
 
-    # Ensure Revision Tool exists in cache
+    # Ensure Revision Tool exists in cache (with size validation)
     $revToolLocal = Join-Path -Path $toolsCacheDir -ChildPath "RevisionTool-Setup.exe"
+    if ((Test-Path -LiteralPath $revToolLocal) -and ((Get-Item -LiteralPath $revToolLocal).Length -lt 25MB)) {
+        Write-Warning "Cached RevisionTool-Setup.exe is undersized/corrupt. Re-downloading..."
+        Remove-Item -LiteralPath $revToolLocal -Force -ErrorAction SilentlyContinue
+    }
     if (-not (Test-Path -LiteralPath $revToolLocal)) {
         Write-Host "Downloading Revision Tool installer from GitHub..." -ForegroundColor Cyan
         $revToolUrl = "https://github.com/meetrevision/revision-tool/releases/download/2.11.1/RevisionTool-Setup.exe"
         try {
             [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13
             Invoke-WebRequest -Uri $revToolUrl -OutFile $revToolLocal -UseBasicParsing -TimeoutSec 180
+            if ((Test-Path -LiteralPath $revToolLocal) -and ((Get-Item -LiteralPath $revToolLocal).Length -lt 25MB)) {
+                Write-Warning "Downloaded RevisionTool-Setup.exe was undersized. Removing..."
+                Remove-Item -LiteralPath $revToolLocal -Force -ErrorAction SilentlyContinue
+            }
         } catch {
             Write-Warning "Could not download Revision Tool installer: $_"
+            if (Test-Path -LiteralPath $revToolLocal) { Remove-Item -LiteralPath $revToolLocal -Force -ErrorAction SilentlyContinue }
         }
     }
 
-    # Ensure Optimizer exists in cache
+    # Ensure Optimizer exists in cache (with size validation)
     $optLocal = Join-Path -Path $toolsCacheDir -ChildPath "Optimizer.exe"
+    if ((Test-Path -LiteralPath $optLocal) -and ((Get-Item -LiteralPath $optLocal).Length -lt 2MB)) {
+        Write-Warning "Cached Optimizer.exe is undersized/corrupt. Re-downloading..."
+        Remove-Item -LiteralPath $optLocal -Force -ErrorAction SilentlyContinue
+    }
     if (-not (Test-Path -LiteralPath $optLocal)) {
         Write-Host "Downloading Optimizer from GitHub..." -ForegroundColor Cyan
         $optUrl = "https://github.com/hellzerg/optimizer/releases/download/16.7/Optimizer-16.7.exe"
         try {
             [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13
             Invoke-WebRequest -Uri $optUrl -OutFile $optLocal -UseBasicParsing -TimeoutSec 60
+            if ((Test-Path -LiteralPath $optLocal) -and ((Get-Item -LiteralPath $optLocal).Length -lt 2MB)) {
+                Write-Warning "Downloaded Optimizer.exe was undersized. Removing..."
+                Remove-Item -LiteralPath $optLocal -Force -ErrorAction SilentlyContinue
+            }
         } catch {
             Write-Warning "Could not download Optimizer: $_"
+            if (Test-Path -LiteralPath $optLocal) { Remove-Item -LiteralPath $optLocal -Force -ErrorAction SilentlyContinue }
         }
     }
 
@@ -5242,9 +5569,13 @@ if ($pathOscd -and $pathOscd.Source) {
 $oscdimgExe = $null
 foreach ($candidate in $oscdimgCandidates) {
     if ($candidate -and (Test-Path -LiteralPath $candidate)) {
-        $oscdimgExe = $candidate
-        Write-Host "Found local oscdimg.exe: $oscdimgExe" -ForegroundColor Green
-        break
+        if (Test-OscdimgIntegrity -OscdimgPath $candidate) {
+            $oscdimgExe = $candidate
+            Write-Host "Found verified local oscdimg.exe: $oscdimgExe" -ForegroundColor Green
+            break
+        } else {
+            Write-Warning "Candidate oscdimg binary at '$candidate' failed Authenticode and hash verification! Skipping."
+        }
     }
 }
 
@@ -5264,10 +5595,12 @@ if (-not $oscdimgExe) {
         try {
             Write-Host "  - Attempting download from: $url" -ForegroundColor Gray
             Invoke-WebRequest -Uri $url -OutFile $targetOscdPath -UseBasicParsing -TimeoutSec 15
-            if ((Test-Path -LiteralPath $targetOscdPath) -and ((Get-Item -LiteralPath $targetOscdPath).Length -gt 50KB)) {
+            if ((Test-Path -LiteralPath $targetOscdPath) -and (Test-OscdimgIntegrity -OscdimgPath $targetOscdPath)) {
                 $oscdimgExe = $targetOscdPath
-                Write-Host "  - oscdimg.exe downloaded successfully!" -ForegroundColor Green
+                Write-Host "  - oscdimg.exe downloaded and integrity verified successfully!" -ForegroundColor Green
                 break
+            } else {
+                if (Test-Path -LiteralPath $targetOscdPath) { Remove-Item -LiteralPath $targetOscdPath -Force -ErrorAction SilentlyContinue }
             }
         } catch {
             Write-Host "  - Mirror failed: $($_.Exception.Message)" -ForegroundColor Yellow
@@ -5297,7 +5630,11 @@ if (-not $oscdimgExe) {
 
 # 18. Create bootable ISO (oscdimg) with Architecture-aware bootdata and Volume Label
 Write-Host "Creating bootable ISO image..." -ForegroundColor Green
-$outputIso = Join-Path -Path $scriptDir -ChildPath "nano11.iso"
+$profSlug = if ($selectedProfile) { ($selectedProfile -replace '[^\w\-]', '_').Trim('_') } else { "custom" }
+$isoTimestamp = (Get-Date).ToString("yyyyMMdd_HHmm")
+$dynamicIsoName = "nano11_${profSlug}_${isoTimestamp}.iso"
+$outputIso = Join-Path -Path $scriptDir -ChildPath $dynamicIsoName
+$standardIso = Join-Path -Path $scriptDir -ChildPath "nano11.iso"
 
 # Dismount and remove any existing output ISO to prevent file locks/collisions
 try {
@@ -5404,6 +5741,24 @@ if ($oscdimgExe -and (Test-Path -LiteralPath $oscdimgExe)) {
         Write-Host "=========================================================" -ForegroundColor Green
         Write-Host ""
 
+        # Maintain standard nano11.iso copy for tooling backwards-compatibility
+        try {
+            Copy-Item -LiteralPath $outputIso -Destination $standardIso -Force -ErrorAction SilentlyContinue
+        } catch {}
+
+        # 3-Generation Retention Rotation for ISOs matching this profile
+        try {
+            $existingProfileIsos = Get-ChildItem -Path $scriptDir -Filter "nano11_${profSlug}_*.iso" -File -ErrorAction SilentlyContinue |
+                Sort-Object LastWriteTime -Descending
+            if ($existingProfileIsos.Count -gt 3) {
+                $isosToRemove = $existingProfileIsos | Select-Object -Skip 3
+                foreach ($oldIso in $isosToRemove) {
+                    Write-Host "Rotating out older generation ISO: $($oldIso.Name)" -ForegroundColor DarkGray
+                    Remove-Item -LiteralPath $oldIso.FullName -Force -ErrorAction SilentlyContinue
+                }
+            }
+        } catch {}
+
         # Generate Visual HTML Build Report
         try {
             $reportOutputDir = Split-Path -Path $outputIso -Parent
@@ -5416,9 +5771,12 @@ if ($oscdimgExe -and (Test-Path -LiteralPath $oscdimgExe)) {
                 Architecture      = $architecture
                 SourceDrive       = $DriveLetter
                 OutputIso         = $outputIso
-                PayloadFormat     = if ($SplitWIM) { "install.swm" } else { "install.wim" }
-                OriginalSizeBytes = if ($sourceWimSize -gt 0) { $sourceWimSize } else { 6871947673 }
+                PayloadFormat     = if ($SplitWIM) { "install.swm" } elseif ($exportESDMode) { "install.esd" } else { "install.wim" }
+                OriginalSizeBytes = if ($sourceWimSize -gt 0) { $sourceWimSize } else { 0 }
                 FinalSizeBytes    = $isoItem.Length
+                IsoSha256         = $sha256
+                RegSuccessCount   = $script:regSuccessCount
+                Settings          = $resolvedConfig
             }
             Export-Nano11HtmlReport -OutputPath $reportPath -BuildInfo $reportData
             Write-Host "Visual Build Report generated: $reportPath" -ForegroundColor Cyan

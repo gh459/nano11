@@ -1,7 +1,7 @@
 {
   "ProfileName": "Balanced Pro",
   "Description": "High stability, Windows Update & Windows Defender preserved, WinRE recovery kept, telemetry and bloatware removed",
-  "Version": "2.0",
+  "Version": "2.1",
   "Settings": {
     "RemoveDefender": false,
     "KeepAsianIME": true,

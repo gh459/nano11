@@ -1,7 +1,7 @@
 {
   "ProfileName": "FAT32 USB Split-WIM",
   "Description": "Optimized for older UEFI motherboards that require FAT32 boot media. Splits payload into <=3.8GB SWM chunks",
-  "Version": "2.0",
+  "Version": "2.1",
   "Settings": {
     "RemoveDefender": true,
     "KeepAsianIME": true,

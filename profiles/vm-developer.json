@@ -1,12 +1,12 @@
 {
   "ProfileName": "VM & Developer Workstation",
   "Description": "Optimized for Virtual Machines and development environments with WSL2 pre-enabled, Windows Update and Store preserved, unnecessary hardware services stripped",
-  "Version": "2.0",
+  "Version": "2.1",
   "Settings": {
     "RemoveDefender": false,
     "KeepAsianIME": true,
     "KeepExtraFonts": true,
-    "RemoveDrivers": true,
+    "RemoveDrivers": false,
     "DisableWindowsUpdate": false,
     "KeepBluetooth": false,
     "WSLSupport": true,

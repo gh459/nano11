@@ -1,7 +1,7 @@
 {
   "ProfileName": "Audio & DAW Production",
   "Description": "Optimized for Digital Audio Workstations and music production with minimal DPC latency, background indexing disabled, audio and Bluetooth interfaces preserved",
-  "Version": "2.0",
+  "Version": "2.1",
   "Settings": {
     "RemoveDefender": true,
     "KeepAsianIME": true,
@@ -17,6 +17,7 @@
     "AtlasReviOSMode": true,
     "BundleOptimizationToolkit": true,
     "RemoveStore": false,
-    "PayloadFormat": "WIM"
+    "PayloadFormat": "WIM",
+    "KeepAudioTweaks": true
   }
 }

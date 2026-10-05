@@ -1,7 +1,7 @@
 {
   "ProfileName": "Extreme Slim & Gaming",
   "Description": "Maximum debloat, lowest background latency, gaming tweaks enabled, Microsoft Store and Asian IMEs kept",
-  "Version": "2.0",
+  "Version": "2.1",
   "Settings": {
     "RemoveDefender": true,
     "KeepAsianIME": true,

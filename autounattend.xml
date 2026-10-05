@@ -957,7 +957,7 @@ if (-not $UserCustomizations) {
     Write-Log "Applying Netsh TCP/IP stack optimizations..." "INFO"
     try {
         &amp; netsh int tcp set heuristics disabled 2&gt;$null
-        &amp; netsh int tcp set supplemental template=internet congestionprovider=ctcp 2&gt;$null
+        if ([System.Environment]::OSVersion.Version.Build -lt 26100) { &amp; netsh int tcp set supplemental template=internet congestionprovider=ctcp 2&gt;$null }
         &amp; netsh int tcp set global rss=enabled 2&gt;$null
         &amp; netsh int tcp set global ecncapability=enabled 2&gt;$null
         &amp; netsh int tcp set global timestamps=disabled 2&gt;$null
@@ -1152,7 +1152,7 @@ if (-not $UserCustomizations) {
     Set-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\CI\Policy' -Name 'VerifiedAndReputablePolicyState' -Type 'DWord' -Value 0 -Description 'Controls the Smart App Control feature which blocks untrusted and potentially dangerous applications'
     Set-RegistryValue -Path 'HKLM:\Software\Microsoft\Windows\CurrentVersion\AppModelUnlock' -Name 'AllowDevelopmentWithoutDevLicense' -Type 'DWord' -Value 0 -Description 'Allows the installation of apps from any source, including loose files'
     Set-RegistryValue -Path 'HKLM:\Software\Microsoft\PowerShell\1\ShellIds\Microsoft.PowerShell' -Name 'ExecutionPolicy' -Type 'String' -Value 'RemoteSigned' -Description 'Controls whether PowerShell scripts are allowed to run and under what conditions for both the current user and the local machine'
-    Set-RegistryValue -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon' -Name 'DisableLockWorkstation' -Type 'DWord' -Value 1 -Description 'Allows users to lock their computer using Windows+L, Start menu, or Ctrl+Alt+Del screen'
+    Set-RegistryValue -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon' -Name 'DisableLockWorkstation' -Type 'DWord' -Value 0 -Description 'Allows users to lock their computer using Windows+L, Start menu, or Ctrl+Alt+Del screen'
     Set-RegistryValue -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\AdvertisingInfo' -Name 'DisabledByGroupPolicy' -Type 'DWord' -Value 1 -Description 'Windows generates a unique advertising ID that apps use to track your activity and deliver personalized ads based on your behavior across different apps'
     Remove-RegistryValue -Path 'HKLM:\SOFTWARE\Policies\Microsoft\InputPersonalization' -Name 'AllowInputPersonalization' -Description 'Use your voice for apps using Microsoft''s online speech recognition technology'
     Set-RegistryValue -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\DataCollection' -Name 'AllowTelemetry' -Type 'DWord' -Value 0 -Description 'Send diagnostic data to Microsoft to help improve Windows and keep it secure'
@@ -2148,7 +2148,7 @@ Write-Log "=====================================================================
 		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Control\PriorityControl" /v "Win32PrioritySeparation" /t REG_DWORD /d 38 /f;
 		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Control\FileSystem" /v "NtfsDisableLastAccessUpdate" /t REG_DWORD /d 1 /f;
 		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Control\FileSystem" /v "NtfsDisable8dot3NameCreation" /t REG_DWORD /d 1 /f;
-		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Control\FileSystem" /v "DontVerifyRandomDrivers" /t REG_DWORD /d 1 /f;
+		# Driver signature verification preserved for system integrity
 		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Power" /v "HiberbootEnabled" /t REG_DWORD /d 0 /f;
 		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management" /v "DisablePagingExecutive" /t REG_DWORD /d 0 /f;
 		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management" /v "ClearPageFileAtShutdown" /t REG_DWORD /d 0 /f;
@@ -2159,7 +2159,7 @@ Write-Log "=====================================================================
 		reg.exe add "HKLM\SOFTWARE\Policies\Microsoft\Windows\Psched" /v "NonBestEffortLimit" /t REG_DWORD /d 0 /f;
 		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters" /v "TcpTimedWaitDelay" /t REG_DWORD /d 30 /f;
 		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters" /v "MaxUserPort" /t REG_DWORD /d 65534 /f;
-		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Control\CrashControl" /v "CrashDumpEnabled" /t REG_DWORD /d 0 /f;
+		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Control\CrashControl" /v "CrashDumpEnabled" /t REG_DWORD /d 1 /f;
 		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Control\CrashControl" /v "LogEvent" /t REG_DWORD /d 0 /f;
 		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Control\CrashControl" /v "SendAlert" /t REG_DWORD /d 0 /f;
 	};
@@ -2899,11 +2899,16 @@ goto MENU
 		}
 	};
 	{
-		# Signal FirstLogon completion for post-deployment verification
+		# Signal FirstLogon completion and restore persistent AutoLogon security
 		try {
 			$markerDir = "C:\ProgramData\nano11";
 			if (-not (Test-Path $markerDir)) { New-Item -ItemType Directory -Force -Path $markerDir | Out-Null; }
 			Set-Content -LiteralPath "$markerDir\firstlogon.done" -Value (Get-Date -Format "yyyy-MM-dd HH:mm:ss") -Encoding ascii;
+
+			# Security restore: Tear down permanent AutoLogon after setup logon succeeds
+			Set-ItemProperty -LiteralPath 'Registry::HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon' -Name 'AutoAdminLogon' -Value '0' -Force -ErrorAction SilentlyContinue;
+			Set-ItemProperty -LiteralPath 'Registry::HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon' -Name 'ForceAutoLogon' -Value '0' -Force -ErrorAction SilentlyContinue;
+			Remove-ItemProperty -LiteralPath 'Registry::HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon' -Name 'DefaultPassword' -Force -ErrorAction SilentlyContinue;
 		} catch {}
 	};
 );
