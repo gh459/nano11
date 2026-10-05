@@ -450,6 +450,10 @@ function Clear-DismMountConflicts {
         [string]$TargetMountDir,
         [string]$TargetWimFile
     )
+    # Terminate orphaned dismhost / wimserv worker processes holding locks on mount directories
+    Get-Process -Name "dismhost", "wimserv" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Milliseconds 300
+
     $mountedOutput = & dism.exe /English /Get-MountedImageInfo 2>&1
     if ($LASTEXITCODE -eq 0 -and $mountedOutput) {
         $normMount = if ($TargetMountDir) { try { [System.IO.Path]::GetFullPath($TargetMountDir).TrimEnd('\') } catch { $null } } else { $null }
@@ -3660,7 +3664,9 @@ Write-Host "Selected image index: $index" -ForegroundColor Green
 Enter-Phase 4 "Mount install.wim & Baseline Analysis"
 
 Write-Host "Mounting Windows image (Index: $index)..." -ForegroundColor Green
-Write-Host "  -> DISM is unpacking system files. This typically takes 1-2 minutes on SSD..." -ForegroundColor Cyan
+Write-Host "  -> DISM is unpacking system files (takes approx. 1-2 min on SSD)..." -ForegroundColor Cyan
+Write-Host "  -> [Notice] DISM normally pauses at 90%-94% for 1-2 minutes while committing 100,000+ NTFS ACLs, hardlinks, and metadata." -ForegroundColor Yellow
+Write-Host "     This is expected Windows DISM behavior. Please DO NOT close this window - it will proceed automatically." -ForegroundColor Yellow
 Set-ItemOwnershipAndAccess -Path $destWim
 try { Set-ItemProperty -LiteralPath $destWim -Name IsReadOnly -Value $false -ErrorAction Stop } catch {}
 
@@ -3670,7 +3676,7 @@ Reset-DirectoryWithRobocopy -Path $scratchDir
 
 $mountSuccess = $false
 for ($attempt = 1; $attempt -le 2; $attempt++) {
-    & dism.exe /English /Mount-Image "/ImageFile:$destWim" "/Index:$index" "/MountDir:$scratchDir" /Optimize
+    & dism.exe /English /Mount-Image "/ImageFile:$destWim" "/Index:$index" "/MountDir:$scratchDir"
     if ($LASTEXITCODE -eq 0) {
         $mountSuccess = $true
         $script:MountOpened = $true
@@ -3678,6 +3684,7 @@ for ($attempt = 1; $attempt -le 2; $attempt++) {
     }
 
     Write-Host "Mount attempt $attempt failed (Exit code: $LASTEXITCODE). Attempting aggressive DISM mount recovery..." -ForegroundColor Yellow
+    Get-Process -Name "dismhost", "wimserv" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
     Clear-DismMountConflicts -TargetMountDir $scratchDir -TargetWimFile $destWim
     & dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /discard > $null 2>&1
     & dism.exe /English /Cleanup-Wim > $null 2>&1
