@@ -96,24 +96,36 @@ Describe "nano11 Core Architecture & Integrity Suite" {
         }
     }
 
-    Context "Profile Presets Validation" {
-        $expectedProfiles = @(
-            "extreme-gaming.json",
-            "balanced-pro.json",
-            "fat32-splitwim.json",
-            "handheld-gaming.json",
-            "vm-developer.json",
-            "audio-daw.json"
-        )
+    Context "Built-In Presets & Modular Tweak Architecture" {
+        It "BuiltInPresets, TweakGroups, and PowerPresets should be defined in nano11builder.ps1" {
+            $scriptContent = Get-Content -LiteralPath $builderScript -Raw
+            ($scriptContent -match '\$script:BuiltInPresets\s*=') | Should Be $true
+            ($scriptContent -match '\$script:TweakGroups\s*=') | Should Be $true
+            ($scriptContent -match '\$script:PowerPresets\s*=') | Should Be $true
+        }
 
-        foreach ($pName in $expectedProfiles) {
-            It "Profile $pName should exist and parse as valid JSON" {
-                $pPath = Join-Path -Path $profilesDir -ChildPath $pName
-                Test-Path -LiteralPath $pPath | Should Be $true
-                $json = Get-Content -LiteralPath $pPath -Raw -Encoding utf8 | ConvertFrom-Json
-                $json | Should Not Be $null
-                $json.ProfileName | Should Not BeNullOrEmpty
+        It "All 6 canonical presets should be defined in memory" {
+            $scriptContent = Get-Content -LiteralPath $builderScript -Raw
+            foreach ($pKey in @('extreme', 'balanced', 'fat32', 'handheld', 'vm', 'audio')) {
+                ($scriptContent -match "'$pKey'\s*=") | Should Be $true
             }
+        }
+
+        It "profiles/ directory should not contain old JSON preset files" {
+            if (Test-Path -LiteralPath $profilesDir) {
+                $jsonFiles = Get-ChildItem -Path $profilesDir -Filter "*.json" -ErrorAction SilentlyContinue
+                ($jsonFiles.Count) | Should Be 0
+            }
+        }
+
+        It "nano11builder.ps1 should expose new modular optimization switches" {
+            $scriptContent = Get-Content -LiteralPath $builderScript -Raw
+            ($scriptContent -match '\[switch\]\$RemoveLegacyFOD') | Should Be $true
+            ($scriptContent -match '\[switch\]\$TrimWallpapers') | Should Be $true
+            ($scriptContent -match '\[switch\]\$DisableCPUMitigations') | Should Be $true
+            ($scriptContent -match '\[switch\]\$MMCSSGaming') | Should Be $true
+            ($scriptContent -match '\[switch\]\$FastExport') | Should Be $true
+            ($scriptContent -match '\[switch\]\$UefiOnly') | Should Be $true
         }
     }
 

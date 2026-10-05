@@ -212,11 +212,10 @@ The resulting minimal OS is **not serviceable via cumulative updates** when WinS
 Simply double-click **`nano11-GUI.bat`** (or run `.\nano11builder.ps1 -GUI` as Administrator).  
 The modern dark-mode GUI allows you to:
 - Select an auto-detected installation media drive or browse directly to an official Windows 11 `.iso` file.
-- Pick a one-click profile preset (**Extreme Slim & Gaming**, **Balanced Pro**, **Handheld Gaming**, **VM & Developer**, **Audio & DAW Production**, or **FAT32 USB Split-WIM**).
-- Toggle any of the 15 debloat, localization, and performance options.
+- Pick a one-click built-in profile preset (**Extreme Slim & Gaming**, **Balanced Pro**, **FAT32 USB Split-WIM**, **Portable Gaming PC**, **VM & Developer**, or **Audio & DAW Production**).
+- Toggle any of the debloat, localization, hardware injection, and modular performance options.
 - Choose your payload format (**install.wim**, **install.esd**, or **install.swm** for FAT32 USB).
 - Toggle **High-Speed VHDX Scratch Disk** (`-UseVHDX`) to eliminate host fragmentation.
-- Save or Load customized `.json` configuration profiles.
 - Click **Start nano11 Build** to launch the build process!
 
 #### **Option B: Interactive Console**
@@ -229,53 +228,47 @@ The modern dark-mode GUI allows you to:
    ```powershell
    .\nano11builder.ps1
    ```
-4. Choose a profile preset from the quick selector menu (`[1] Extreme`, `[2] Balanced`, `[3] Handheld Gaming`, `[4] VM Developer`, `[5] Audio DAW`, `[6] FAT32 Split-WIM`, `[7] Load JSON Profile`, `[8] Launch GUI`, `[9] Custom`), or customize settings step-by-step.
+4. Choose a profile preset from the quick selector menu (`[1] Extreme`, `[2] Balanced`, `[3] Handheld Gaming`, `[4] VM Developer`, `[5] Audio DAW`, `[6] FAT32 Split-WIM`, `[7] Launch GUI`, `[8] Custom`), or customize settings step-by-step.
 5. Once `nano11.iso` is generated, follow the [Installation & Setup Guide](#️-installation--setup-guide-ゼロクリック自動インストール) below.
 
 ### **3. Non-Interactive / CLI Automation**
-You can also run the builder non-interactively with customized flags or pre-built profile JSONs:
+You can run the builder completely unattended with built-in presets and modular optimization flags:
 ```powershell
-# 1-Click build with pre-packaged profile preset:
+# 1-Click build with built-in profile preset:
 .\nano11builder.ps1 -NonInteractive -Profile "extreme"
 
+# High-performance gaming build with aggressive CPU boost, mode-2 FSE & low latency:
+.\nano11builder.ps1 -NonInteractive -Profile "extreme" -MMCSSGaming -NvidiaLowLatency -DisableFSE -NoKernelPaging
+
 # Build for Handheld Gaming (ROG Ally, Steam Deck, Legion Go):
-.\nano11builder.ps1 -NonInteractive -Profile "handheld"
+.\nano11builder.ps1 -NonInteractive -Profile "handheld" -HibernateMode Reduced -CrashDumpMode Small
 
 # Build for VM & Developer Workstations (WSL2, Hyper-V):
 .\nano11builder.ps1 -NonInteractive -Profile "vm"
 
-# Accelerate DISM image operations via dynamic VHDX scratch disk:
-.\nano11builder.ps1 -NonInteractive -Profile "extreme" -UseVHDX
+# Pro audio production build with DAW MMCSS prioritization and USB suspend disabled:
+.\nano11builder.ps1 -NonInteractive -Profile "audio" -DAWMode -DisableUSBSuspend
+
+# Fast build with /Compress:fast, dynamic VHDX scratch disk and pure UEFI boot:
+.\nano11builder.ps1 -NonInteractive -Profile "extreme" -UseVHDX -FastExport -UefiOnly
 
 # Run built-in self-test diagnostics without needing an ISO:
 .\nano11builder.ps1 -TestSelf
-
-# Load customized settings from a saved JSON profile:
-.\nano11builder.ps1 -NonInteractive -LoadProfile ".\profiles\balanced-pro.json"
-
-# Export your CLI configuration to a reusable JSON profile:
-.\nano11builder.ps1 -NonInteractive -KeepDefender -EnableWSL -SaveProfile ".\profiles\my-team-config.json"
-
-# Build for older UEFI motherboards requiring FAT32 USB media (Split-WIM <= 3.8GB):
-.\nano11builder.ps1 -NonInteractive -SplitWIM
 ```
 
 ### **Available Parameters:**
 | Parameter | Description |
 | :--- | :--- |
 | `-GUI` (alias: `-UI`) | Launches the dark-themed Graphical User Interface frontend |
-| `-Profile <extreme\|balanced\|handheld\|vm\|audio\|fat32>` (alias: `-Preset`) | Applies a pre-packaged configuration profile preset |
+| `-Profile <extreme\|balanced\|fat32\|handheld\|vm\|audio>` (alias: `-Preset`) | Applies an in-memory configuration preset (Built-in: zero external JSON dependency) |
 | `-UseVHDX` (alias: `-FastVHDX`) | Dynamically mounts an expandable 30 GB VHDX volume as the DISM scratch directory, eliminating host fragmentation and accelerating build times |
 | `-DryRun` (supports `-WhatIf`) | Resolves and verifies configuration, options, and paths without modifying disks or servicing images |
-| `-Validate` | Mounts the final exported `install.wim` in read-only mode and verifies that essential binaries (`osk.exe`, `ctfmon.exe`, `sysprep.exe`, `cmd.exe`) exist |
+| `-Validate` | Mounts the final exported `install.wim` in read-only mode and verifies that essential binaries exist |
 | `-Resume` | Detects an existing valid build workspace and resumes processing from where it was left off |
 | `-SkipEiCfg` | Skips generating `sources\ei.cfg` (preserves OEM/LTSC channel behavior) |
-| `-NoPostInstallAssets` | Omits bundling desktop and setup tool utilities (`Install-Browser`, `Nano11 Control Center`) into the image |
+| `-NoPostInstallAssets` | Omits bundling desktop and setup tool utilities into the image |
 | `-CheckHealth` | Executes DISM `/Cleanup-Image /CheckHealth` verification on the mounted image |
 | `-TestSelf` | Runs the built-in diagnostic and AST static analysis self-test suite |
-| `-AllIndices` | Flag to indicate multi-index processing for multi-edition installation media |
-| `-SaveProfile <Path>` (alias: `-ExportConfig`) | Exports the active configuration settings to a JSON profile file |
-| `-LoadProfile <Path>` (alias: `-ImportConfig`, `-Config`) | Imports configuration settings from a JSON profile file |
 | `-SplitWIM` (aliases: `-FAT32Compatible`, `-FAT32`) / `-NoSplitWIM` | Splits output payload into `<= 3800 MB` chunks (`sources\install.swm`, `install2.swm`) for 100% FAT32 USB UEFI compatibility |
 | `-NonInteractive` (aliases: `-Silent`, `-Unattended`, `-Batch`) | Runs completely unattended without interactive prompts |
 | `-Interactive` | Forces interactive prompt review for all settings |
@@ -284,19 +277,38 @@ You can also run the builder non-interactively with customized flags or pre-buil
 | `-Index <Number>` | Image index inside `install.wim` to modify (e.g. `1` for Home, `3` for Pro) |
 | `-KeepDefender` / `-RemoveDefender` (`-NoDefender`) | Retains or removes Windows Defender (Default: Remove) |
 | `-KeepIME` / `-RemoveIME` (`-NoIME`) | Retains or removes Asian language input methods (Default: Keep) |
-| `-KeepFonts` / `-RemoveFonts` (`-NoFonts`) | Retains or removes international and Asian font families (Default: Keep, or pruned in UltraSlim) |
-| `-KeepDrivers` / `-RemoveDrivers` | Retains or removes printer/scanner drivers in DriverStore (Default: Keep — Recommended to prevent 77% freeze) |
-| `-KeepWindowsUpdate` / `-DisableWindowsUpdate` (`-NoWindowsUpdate`) | Retains or disables Windows Update services (Default: Disable) |
-| `-KeepBluetooth` / `-DisableBluetooth` (`-NoBluetooth`) | Retains or disables Bluetooth peripheral and audio services (Default: Keep) |
-| `-EnableWSL` / `-DisableWSL` (`-NoWSL`) | Pre-enables or disables WSL2 & Virtual Machine Platform (Default: Disable) |
-| `-KeepRecovery` (`-KeepWinRE`) / `-RemoveRecovery` (`-NoRecovery`) | Retains or removes Windows Recovery Environment WinRE (Default: Remove post-install) |
-| `-SafeDebloat` (`-SafeWinSxS`) / `-AggressiveWinSxS` (`-TrimWinSxS`) | Component Store cleanup mode (Default: SafeDebloat — Recommended to prevent 77% freeze) |
-| `-UltraSlim` / `-NoUltraSlim` | Enables or disables UltraSlim ~3.0 GB ISO target mode (Default: Enabled) |
-| `-JapaneseKeyboard` / `-NoJapaneseKeyboard` | Enforces or skips Japanese 106/109 keyboard layout configuration (Default: Enabled) |
-| `-AtlasReviOS` / `-NoAtlasReviOS` | Enables or skips AtlasOS & ReviOS debloat and low-latency tuning (Default: Enabled) |
-| `-BundleOptimizationToolkit` / `-NoBundleOptimizationToolkit` | Bundles or skips Windows Optimization Toolkit on Desktop (Default: Enabled) |
+| `-KeepFonts` / `-RemoveFonts` (`-NoFonts`) | Retains or removes international and Asian font families |
+| `-KeepDrivers` / `-RemoveDrivers` | Retains or removes printer/scanner drivers in DriverStore |
+| `-KeepWindowsUpdate` / `-DisableWindowsUpdate` (`-NoWindowsUpdate`) | Retains or disables Windows Update services |
+| `-KeepBluetooth` / `-DisableBluetooth` (`-NoBluetooth`) | Retains or disables Bluetooth peripheral and audio services |
+| `-EnableWSL` / `-DisableWSL` (`-NoWSL`) | Pre-enables or disables WSL2 & Virtual Machine Platform |
+| `-KeepRecovery` (`-KeepWinRE`) / `-RemoveRecovery` (`-NoRecovery`) | Retains or removes Windows Recovery Environment WinRE |
+| `-SafeDebloat` (`-SafeWinSxS`) / `-AggressiveWinSxS` (`-TrimWinSxS`) | Component Store cleanup mode |
+| `-UltraSlim` / `-NoUltraSlim` | Enables or disables UltraSlim target mode |
+| `-JapaneseKeyboard` / `-NoJapaneseKeyboard` | Enforces or skips Japanese 106/109 keyboard layout configuration |
+| `-AtlasReviOS` / `-NoAtlasReviOS` | Enables or skips AtlasOS & ReviOS debloat and low-latency tuning |
 | `-ExportESD` / `-ExportWIM` (`-NoESD`) | Output image format (Default: install.wim LZX — Fast & Crash-Free) |
-| `-KeepStore` / `-RemoveStore` (`-NoStore`) | Keeps or removes Microsoft Store (`Microsoft.WindowsStore`, `Microsoft.StorePurchaseApp`). winget / App Installer and Store frameworks are always kept (Default: Keep) |
+| `-KeepStore` / `-RemoveStore` (`-NoStore`) | Keeps or removes Microsoft Store |
+| `-KeepBasicApps` | Retains native Notepad, Calculator, and Paint for daily-driver usability |
+| `-KeepSearchIndex` | Retains Windows Search indexing service (`WSearch`) |
+| `-RemoveLegacyFOD` | Purges legacy components: VBScript, PowerShell ISE, Windows Media Player, and SMB1 |
+| `-TrimWallpapers` | Purges redundant 4K stock wallpapers and lock screen images |
+| `-HibernateMode <Off\|Reduced\|Keep>` | Configures hibernation file footprint (Off, Reduced 20%, Keep) |
+| `-CrashDumpMode <Automatic\|Small\|None>` | Configures kernel memory dump sizing (Automatic=7, Small=3, None=0) |
+| `-DisableCPUMitigations` | [Security Trade-off: ★★★] Disables Spectre/Meltdown speculative execution mitigations |
+| `-MMCSSGaming` | Enforces high multimedia scheduling quantum and responsiveness for gaming |
+| `-DAWMode` | Enforces Pro Audio MMCSS and lowest DPC latency priority for audio creation |
+| `-DisableMemCompression` | Disables Windows memory compression for consistent low latency |
+| `-DisableFSE` | Configures Mode 2 Full-Screen Exclusive priority to bypass DWM compositor |
+| `-NvidiaLowLatency` | Applies NVIDIA PowerMizer performance mode & Per-CPU Core DPC registry tuning |
+| `-NoKernelPaging` | Prevents kernel paging to disk (`DisablePagingExecutive = 1`) |
+| `-DisableUSBSuspend` | Prevents USB selective suspend on gaming controllers and audio DACs |
+| `-NoHypervisor` | Sets `hypervisorlaunchtype off` for maximum bare-metal gaming responsiveness |
+| `-RemoveWebViewPostOOBE` | Automatically uninstalls WebView2 during FirstLogon after OOBE completes |
+| `-FastExport` | Uses `/Compress:fast` during DISM export for accelerated build pipelines |
+| `-UefiOnly` | Configures pure UEFI bootdata without legacy BIOS boot sector fallback |
+| `-CpuBoostMode <Efficient\|Aggressive\|Off\|Default>` | Configures CPU power performance boost mode |
+| `-PowerPreset <Desktop\|Handheld\|Balanced\|VM\|Default>` | Applies hardware-tailored power policy table |
 
 > [!TIP]
 > **CLI Option Priority Guarantee**: Specified CLI switches are strictly honored immediately. When running interactively, options already provided via CLI parameters are automatically applied and their prompts are skipped (preventing accidental overrides by pressing Enter). In unattended mode (`-NonInteractive`), all options execute deterministically without any prompt hangs.

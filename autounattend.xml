@@ -2593,6 +2593,9 @@ Write-Log "=====================================================================
 			Disable-MMAgent -ApplicationLaunchPrefetching -ErrorAction SilentlyContinue | Out-Null;
 			Disable-MMAgent -OperationAPI -ErrorAction SilentlyContinue | Out-Null;
 			Enable-MMAgent -PageCombining -ErrorAction SilentlyContinue | Out-Null;
+			if (Test-Path "C:\Windows\Setup\Scripts\disable-memcompression.flag") {
+				Disable-MMAgent -MemoryCompression -ErrorAction SilentlyContinue | Out-Null;
+			}
 		} catch {}
 	};
 	{
@@ -2672,6 +2675,10 @@ Write-Log "=====================================================================
 			&amp; bcdedit.exe /set useplatformclock false 2&gt;$null;
 			&amp; bcdedit.exe /set disabledynamictick yes 2&gt;$null;
 			&amp; bcdedit.exe /set tscsyncpolicy Enhanced 2&gt;$null;
+			&amp; bcdedit.exe /timeout 0 2&gt;$null;
+			if (Test-Path "C:\Windows\Setup\Scripts\no-hypervisor.flag") {
+				&amp; bcdedit.exe /set hypervisorlaunchtype off 2&gt;$null;
+			}
 		} catch {}
 	};
 	{
@@ -2687,6 +2694,10 @@ Write-Log "=====================================================================
 			foreach ($adapter in $adapters) {
 				Set-ItemProperty -Path $adapter.PSPath -Name 'TcpAckFrequency' -Value 1 -Type DWord -Force -ErrorAction SilentlyContinue;
 				Set-ItemProperty -Path $adapter.PSPath -Name 'TCPNoDelay' -Value 1 -Type DWord -Force -ErrorAction SilentlyContinue;
+			}
+			if (Test-Path "C:\Windows\Setup\Scripts\disable-netbios.flag") {
+				Get-ChildItem 'HKLM:\SYSTEM\CurrentControlSet\Services\NetBT\Parameters\Interfaces' -ErrorAction SilentlyContinue |
+					ForEach-Object { Set-ItemProperty $_.PSPath 'NetbiosOptions' 2 -Type DWord -Force -ErrorAction SilentlyContinue };
 			}
 		} catch {}
 	};
@@ -2939,6 +2950,27 @@ goto MENU
 				} catch {}
 			}
 		}
+	};
+	{
+		# Post-OOBE WebView2 removal if flagged
+		if (Test-Path "C:\Windows\Setup\Scripts\remove-webview.flag") {
+			try {
+				Remove-Item 'C:\Windows\System32\Microsoft-Edge-WebView' -Recurse -Force -ErrorAction SilentlyContinue;
+				Remove-Item "C:\Windows\Setup\Scripts\remove-webview.flag" -Force -ErrorAction SilentlyContinue;
+			} catch {}
+		}
+	};
+	{
+		# Boot Time Metrics Tracking (Event ID 100)
+		try {
+			$bootEvent = Get-WinEvent -FilterHashtable @{LogName='Microsoft-Windows-Diagnostics-Performance/Operational'; Id=100} -MaxEvents 1 -ErrorAction SilentlyContinue;
+			if ($bootEvent -and $bootEvent.Properties -and $bootEvent.Properties.Count -gt 0) {
+				$bootMs = $bootEvent.Properties[0].Value;
+				$statsDir = "C:\ProgramData\nano11";
+				if (-not (Test-Path $statsDir)) { New-Item -ItemType Directory -Force -Path $statsDir | Out-Null; }
+				"{0},{1:N0}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $bootMs | Add-Content "$statsDir\boot-stats.csv";
+			}
+		} catch {}
 	};
 	{
 		# WinRE Online Dismantle if winre-cleanup.flag is present

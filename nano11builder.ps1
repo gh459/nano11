@@ -143,7 +143,32 @@ param(
     [switch]$RemoveXboxServices,
 
     # 20. Audio Tweaks & Latency Protection
-    [switch]$KeepAudioTweaks
+    [switch]$KeepAudioTweaks,
+
+    # 21. Advanced Modular Optimization Tweak Toggles
+    [switch]$RemoveLegacyFOD,
+    [switch]$TrimWallpapers,
+    [ValidateSet('Off', 'Reduced', 'Keep')]
+    [string]$HibernateMode = 'Keep',
+    [ValidateSet('Automatic', 'Small', 'None')]
+    [string]$CrashDumpMode = 'Automatic',
+    [switch]$DisableCPUMitigations,
+    [switch]$MMCSSGaming,
+    [switch]$DAWMode,
+    [switch]$DisableMemCompression,
+    [switch]$DisableFSE,
+    [switch]$NvidiaLowLatency,
+    [switch]$NoKernelPaging,
+    [switch]$DisableUSBSuspend,
+    [switch]$NoHypervisor,
+    [switch]$RemoveWebViewPostOOBE,
+    [switch]$FastExport,
+    [switch]$UefiOnly,
+    [ValidateSet('Efficient', 'Aggressive', 'Off', 'Default')]
+    [string]$CpuBoostMode = 'Default',
+    [ValidateSet('Desktop', 'Handheld', 'Balanced', 'VM', 'Default')]
+    [string]$PowerPreset = 'Default',
+    [hashtable]$TweakGroupOverrides
 )
 
 # PowerShell 7+ Compatibility Notice
@@ -719,71 +744,470 @@ function Exit-Phase {
     }
 }
 
+# ==============================================================================
+# Modular Tweak Architecture & In-Memory Built-in Presets
+# ==============================================================================
+
+$script:TweakGroups = [ordered]@{
+    NetworkStack   = @{ Default = $true;  Risk = '★★';  Description = 'TcpAck/RSC/ECN/NetThrottling tuning' }
+    TimerBCD       = @{ Default = $true;  Risk = '★★';  Description = 'dynamic tick/TSC sync/platform clock' }
+    GPULatency     = @{ Default = $true;  Risk = '★';   Description = 'MSI mode/HAGS/GPU scheduling registry' }
+    ServiceTrim    = @{ Default = $true;  Risk = '★★';  Description = 'WSearch/SysMain/DiagTrack/Ndu service trimming' }
+    VisualFX       = @{ Default = $true;  Risk = '★';   Description = 'DWM transparency/animations/effects minimization' }
+    CpuMitigations = @{ Default = $false; Risk = '★★★'; Description = 'Spectre/Meltdown speculative execution mitigations (Security trade-off)' }
+}
+
+$script:PowerPresets = [ordered]@{
+    Desktop   = @{ UsbSuspend = 0; PcieLpm = 0; BoostAc = 2; BoostDc = 2; DiskIdle = 0 }
+    Handheld  = @{ UsbSuspend = 0; PcieLpm = 1; BoostAc = 1; BoostDc = 1; DiskIdle = 60 }
+    Balanced  = @{ UsbSuspend = 1; PcieLpm = 1; BoostAc = 2; BoostDc = 1; DiskIdle = 180 }
+    VM        = @{ UsbSuspend = 1; PcieLpm = 0; BoostAc = 2; BoostDc = 2; DiskIdle = 0 }
+}
+
+$script:BuiltInPresets = [ordered]@{
+    'extreme' = [ordered]@{
+        ProfileName          = 'Extreme Slim & Gaming'
+        Description          = 'Maximum debloat, ultra-low latency kernel/timer tuning, minimal footprint.'
+        RemoveDefender       = $true
+        KeepAsianIME         = $true
+        KeepExtraFonts       = $false
+        RemoveDrivers        = $false
+        DisableWindowsUpdate = $true
+        KeepBluetooth        = $true
+        WSLSupport           = $false
+        KeepRecoveryEnv      = $false
+        SafeDebloatMode      = $true
+        UltraSlimMode        = $true
+        SetJapaneseKeyboard  = $true
+        AtlasReviOSMode      = $true
+        RemoveStore          = $false
+        KeepBasicApps        = $false
+        KeepSearchIndex      = $false
+        KeepXboxServices     = $false
+        KeepAudioTweaks      = $true
+        PayloadFormat        = 'WIM'
+        UseVHDX              = $false
+        PowerPreset          = 'Desktop'
+        RemoveLegacyFOD      = $true
+        TrimWallpapers       = $true
+        HibernateMode        = 'Off'
+        CrashDumpMode        = 'None'
+        DisableCPUMitigations= $false
+        MMCSSGaming          = $true
+        DAWMode              = $false
+        DisableMemCompression= $true
+        DisableFSE           = $true
+        NvidiaLowLatency     = $true
+        NoKernelPaging       = $true
+        DisableUSBSuspend    = $true
+        NoHypervisor         = $true
+        RemoveWebViewPostOOBE= $false
+        FastExport           = $false
+        UefiOnly             = $false
+        CpuBoostMode         = 'Aggressive'
+        TweakGroups          = [ordered]@{
+            NetworkStack   = $true
+            TimerBCD       = $true
+            GPULatency     = $true
+            ServiceTrim    = $true
+            VisualFX       = $true
+            CpuMitigations = $false
+        }
+    }
+    'balanced' = [ordered]@{
+        ProfileName          = 'Balanced Pro'
+        Description          = 'Safe daily debloat: Windows Update & Defender preserved, high stability.'
+        RemoveDefender       = $false
+        KeepAsianIME         = $true
+        KeepExtraFonts       = $true
+        RemoveDrivers        = $false
+        DisableWindowsUpdate = $false
+        KeepBluetooth        = $true
+        WSLSupport           = $false
+        KeepRecoveryEnv      = $true
+        SafeDebloatMode      = $true
+        UltraSlimMode        = $false
+        SetJapaneseKeyboard  = $true
+        AtlasReviOSMode      = $true
+        RemoveStore          = $false
+        KeepBasicApps        = $true
+        KeepSearchIndex      = $true
+        KeepXboxServices     = $true
+        KeepAudioTweaks      = $false
+        PayloadFormat        = 'WIM'
+        UseVHDX              = $false
+        PowerPreset          = 'Balanced'
+        RemoveLegacyFOD      = $false
+        TrimWallpapers       = $false
+        HibernateMode        = 'Keep'
+        CrashDumpMode        = 'Automatic'
+        DisableCPUMitigations= $false
+        MMCSSGaming          = $false
+        DAWMode              = $false
+        DisableMemCompression= $false
+        DisableFSE           = $false
+        NvidiaLowLatency     = $false
+        NoKernelPaging       = $false
+        DisableUSBSuspend    = $false
+        NoHypervisor         = $false
+        RemoveWebViewPostOOBE= $false
+        FastExport           = $false
+        UefiOnly             = $false
+        CpuBoostMode         = 'Default'
+        TweakGroups          = [ordered]@{
+            NetworkStack   = $true
+            TimerBCD       = $true
+            GPULatency     = $true
+            ServiceTrim    = $false
+            VisualFX       = $false
+            CpuMitigations = $false
+        }
+    }
+    'fat32' = [ordered]@{
+        ProfileName          = 'FAT32 USB Split-WIM'
+        Description          = 'Split-WIM payload for 100% FAT32 USB installer compatibility.'
+        RemoveDefender       = $true
+        KeepAsianIME         = $true
+        KeepExtraFonts       = $false
+        RemoveDrivers        = $false
+        DisableWindowsUpdate = $true
+        KeepBluetooth        = $true
+        WSLSupport           = $false
+        KeepRecoveryEnv      = $false
+        SafeDebloatMode      = $true
+        UltraSlimMode        = $true
+        SetJapaneseKeyboard  = $true
+        AtlasReviOSMode      = $true
+        RemoveStore          = $false
+        KeepBasicApps        = $false
+        KeepSearchIndex      = $false
+        KeepXboxServices     = $false
+        KeepAudioTweaks      = $true
+        PayloadFormat        = 'SWM'
+        UseVHDX              = $false
+        PowerPreset          = 'Desktop'
+        RemoveLegacyFOD      = $true
+        TrimWallpapers       = $true
+        HibernateMode        = 'Off'
+        CrashDumpMode        = 'None'
+        DisableCPUMitigations= $false
+        MMCSSGaming          = $true
+        DAWMode              = $false
+        DisableMemCompression= $true
+        DisableFSE           = $true
+        NvidiaLowLatency     = $true
+        NoKernelPaging       = $true
+        DisableUSBSuspend    = $true
+        NoHypervisor         = $true
+        RemoveWebViewPostOOBE= $false
+        FastExport           = $false
+        UefiOnly             = $false
+        CpuBoostMode         = 'Aggressive'
+        TweakGroups          = [ordered]@{
+            NetworkStack   = $true
+            TimerBCD       = $true
+            GPULatency     = $true
+            ServiceTrim    = $true
+            VisualFX       = $true
+            CpuMitigations = $false
+        }
+    }
+    'handheld' = [ordered]@{
+        ProfileName          = 'Portable Gaming PC'
+        Description          = 'Tuned for handhelds (ROG Ally, Steam Deck): battery balance & gamepad protection.'
+        RemoveDefender       = $true
+        KeepAsianIME         = $true
+        KeepExtraFonts       = $false
+        RemoveDrivers        = $false
+        DisableWindowsUpdate = $true
+        KeepBluetooth        = $true
+        WSLSupport           = $false
+        KeepRecoveryEnv      = $false
+        SafeDebloatMode      = $true
+        UltraSlimMode        = $true
+        SetJapaneseKeyboard  = $true
+        AtlasReviOSMode      = $true
+        RemoveStore          = $false
+        KeepBasicApps        = $false
+        KeepSearchIndex      = $false
+        KeepXboxServices     = $true
+        KeepAudioTweaks      = $true
+        PayloadFormat        = 'WIM'
+        UseVHDX              = $false
+        PowerPreset          = 'Handheld'
+        RemoveLegacyFOD      = $true
+        TrimWallpapers       = $true
+        HibernateMode        = 'Reduced'
+        CrashDumpMode        = 'Small'
+        DisableCPUMitigations= $false
+        MMCSSGaming          = $true
+        DAWMode              = $false
+        DisableMemCompression= $true
+        DisableFSE           = $true
+        NvidiaLowLatency     = $false
+        NoKernelPaging       = $true
+        DisableUSBSuspend    = $true
+        NoHypervisor         = $true
+        RemoveWebViewPostOOBE= $false
+        FastExport           = $false
+        UefiOnly             = $false
+        CpuBoostMode         = 'Efficient'
+        TweakGroups          = [ordered]@{
+            NetworkStack   = $true
+            TimerBCD       = $true
+            GPULatency     = $true
+            ServiceTrim    = $true
+            VisualFX       = $true
+            CpuMitigations = $false
+        }
+    }
+    'vm' = [ordered]@{
+        ProfileName          = 'VM & Developer Workstation'
+        Description          = 'Configured for virtual machines and developers: WSL2 & Hyper-V enabled.'
+        RemoveDefender       = $false
+        KeepAsianIME         = $true
+        KeepExtraFonts       = $true
+        RemoveDrivers        = $false
+        DisableWindowsUpdate = $false
+        KeepBluetooth        = $false
+        WSLSupport           = $true
+        KeepRecoveryEnv      = $true
+        SafeDebloatMode      = $true
+        UltraSlimMode        = $false
+        SetJapaneseKeyboard  = $false
+        AtlasReviOSMode      = $false
+        RemoveStore          = $false
+        KeepBasicApps        = $true
+        KeepSearchIndex      = $true
+        KeepXboxServices     = $false
+        KeepAudioTweaks      = $false
+        PayloadFormat        = 'WIM'
+        UseVHDX              = $false
+        PowerPreset          = 'VM'
+        RemoveLegacyFOD      = $false
+        TrimWallpapers       = $false
+        HibernateMode        = 'Off'
+        CrashDumpMode        = 'Automatic'
+        DisableCPUMitigations= $false
+        MMCSSGaming          = $false
+        DAWMode              = $false
+        DisableMemCompression= $false
+        DisableFSE           = $false
+        NvidiaLowLatency     = $false
+        NoKernelPaging       = $false
+        DisableUSBSuspend    = $false
+        NoHypervisor         = $false
+        RemoveWebViewPostOOBE= $false
+        FastExport           = $false
+        UefiOnly             = $false
+        CpuBoostMode         = 'Aggressive'
+        TweakGroups          = [ordered]@{
+            NetworkStack   = $true
+            TimerBCD       = $true
+            GPULatency     = $true
+            ServiceTrim    = $false
+            VisualFX       = $false
+            CpuMitigations = $false
+        }
+    }
+    'audio' = [ordered]@{
+        ProfileName          = 'Audio & DAW Production'
+        Description          = 'Pro Audio MMCSS priority, zero DPC latency spikes, VST compatibility protected.'
+        RemoveDefender       = $true
+        KeepAsianIME         = $true
+        KeepExtraFonts       = $false
+        RemoveDrivers        = $false
+        DisableWindowsUpdate = $true
+        KeepBluetooth        = $false
+        WSLSupport           = $false
+        KeepRecoveryEnv      = $false
+        SafeDebloatMode      = $true
+        UltraSlimMode        = $false
+        SetJapaneseKeyboard  = $true
+        AtlasReviOSMode      = $true
+        RemoveStore          = $false
+        KeepBasicApps        = $true
+        KeepSearchIndex      = $false
+        KeepXboxServices     = $false
+        KeepAudioTweaks      = $true
+        PayloadFormat        = 'WIM'
+        UseVHDX              = $false
+        PowerPreset          = 'Desktop'
+        RemoveLegacyFOD      = $false
+        TrimWallpapers       = $false
+        HibernateMode        = 'Off'
+        CrashDumpMode        = 'Small'
+        DisableCPUMitigations= $false
+        MMCSSGaming          = $false
+        DAWMode              = $true
+        DisableMemCompression= $false
+        DisableFSE           = $false
+        NvidiaLowLatency     = $false
+        NoKernelPaging       = $true
+        DisableUSBSuspend    = $true
+        NoHypervisor         = $true
+        RemoveWebViewPostOOBE= $false
+        FastExport           = $false
+        UefiOnly             = $false
+        CpuBoostMode         = 'Aggressive'
+        TweakGroups          = [ordered]@{
+            NetworkStack   = $false
+            TimerBCD       = $true
+            GPULatency     = $false
+            ServiceTrim    = $true
+            VisualFX       = $true
+            CpuMitigations = $false
+        }
+    }
+}
+
+function Get-Nano11Preset {
+    param([string]$Name)
+    if (-not $Name) { return $script:BuiltInPresets['extreme'] }
+    $clean = $Name.Trim().ToLower()
+    $aliasMap = @{
+        '1'          = 'extreme'
+        'extreme'    = 'extreme'
+        'gaming'     = 'extreme'
+        'slim'       = 'extreme'
+        '2'          = 'balanced'
+        'balanced'   = 'balanced'
+        'safe'       = 'balanced'
+        'pro'        = 'balanced'
+        '3'          = 'fat32'
+        'fat32'      = 'fat32'
+        'split'      = 'fat32'
+        'splitwim'   = 'fat32'
+        '4'          = 'handheld'
+        'handheld'   = 'handheld'
+        'ally'       = 'handheld'
+        'deck'       = 'handheld'
+        'legion'     = 'handheld'
+        '5'          = 'vm'
+        'dev'        = 'vm'
+        'developer'  = 'vm'
+        '6'          = 'audio'
+        'daw'        = 'audio'
+        'dtm'        = 'audio'
+    }
+    $targetKey = if ($aliasMap.ContainsKey($clean)) { $aliasMap[$clean] } else { $clean }
+    if ($script:BuiltInPresets.Contains($targetKey)) {
+        return $script:BuiltInPresets[$targetKey]
+    }
+    return $null
+}
+
 # Helper function: Unified profile settings application
 function Apply-ProfileSettings {
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory = $true)]
-        [PSCustomObject]$ProfileObject,
+        [Parameter(Mandatory = $false)]
+        [string]$ProfileName,
+        [Parameter(Mandatory = $false)]
+        [psobject]$ProfileObject,
         [switch]$UpdateGui,
         [hashtable]$GuiControls
     )
 
-    $p = if ($ProfileObject.Settings) { $ProfileObject.Settings } else { $ProfileObject }
+    $targetPreset = $null
+    if ($ProfileName) {
+        $targetPreset = Get-Nano11Preset -Name $ProfileName
+    } elseif ($ProfileObject) {
+        $targetPreset = if ($ProfileObject.Settings) { $ProfileObject.Settings } else { $ProfileObject }
+    }
+
+    if (-not $targetPreset) {
+        $targetPreset = $script:BuiltInPresets['extreme']
+    }
+
+    $getVal = {
+        param($key, $defaultVal = $false)
+        if ($targetPreset -is [System.Collections.IDictionary]) {
+            if ($targetPreset.Contains($key)) { return $targetPreset[$key] }
+        } elseif ($targetPreset.PSObject.Properties[$key]) {
+            return $targetPreset.$key
+        }
+        return $defaultVal
+    }
 
     if ($UpdateGui -and $GuiControls) {
-        if ($p.PSObject.Properties['RemoveDefender'])            { $GuiControls.chkDefender.Checked = [bool]$p.RemoveDefender }
-        if ($p.PSObject.Properties['KeepAsianIME'])              { $GuiControls.chkIME.Checked = [bool]$p.KeepAsianIME }
-        if ($p.PSObject.Properties['KeepExtraFonts'])            { $GuiControls.chkFonts.Checked = [bool]$p.KeepExtraFonts }
-        if ($p.PSObject.Properties['RemoveDrivers'])             { $GuiControls.chkDrivers.Checked = [bool]$p.RemoveDrivers }
-        if ($p.PSObject.Properties['DisableWindowsUpdate'])      { $GuiControls.chkWU.Checked = [bool]$p.DisableWindowsUpdate }
-        if ($p.PSObject.Properties['KeepBluetooth'])             { $GuiControls.chkBT.Checked = [bool]$p.KeepBluetooth }
-        if ($p.PSObject.Properties['WSLSupport'])                { $GuiControls.chkWSL.Checked = [bool]$p.WSLSupport }
-        if ($p.PSObject.Properties['KeepRecoveryEnv'])           { $GuiControls.chkRecovery.Checked = [bool]$p.KeepRecoveryEnv }
-        if ($p.PSObject.Properties['SafeDebloatMode'])           { $GuiControls.chkSafeDebloat.Checked = [bool]$p.SafeDebloatMode }
-        if ($p.PSObject.Properties['UltraSlimMode'])             { $GuiControls.chkUltraSlim.Checked = [bool]$p.UltraSlimMode }
-        if ($p.PSObject.Properties['SetJapaneseKeyboard'])       { $GuiControls.chkJPKey.Checked = [bool]$p.SetJapaneseKeyboard }
-        if ($p.PSObject.Properties['AtlasReviOSMode'])           { $GuiControls.chkAtlas.Checked = [bool]$p.AtlasReviOSMode }
-        if ($p.PSObject.Properties['RemoveStore'])               { $GuiControls.chkStore.Checked = [bool]$p.RemoveStore }
-        if ($p.PSObject.Properties['KeepBasicApps'])            { if ($GuiControls.chkBasicApps) { $GuiControls.chkBasicApps.Checked = [bool]$p.KeepBasicApps } }
-        if ($p.PSObject.Properties['KeepSearchIndex'])          { if ($GuiControls.chkSearchIndex) { $GuiControls.chkSearchIndex.Checked = [bool]$p.KeepSearchIndex } }
-        if ($p.PSObject.Properties['UseVHDX'])                   { if ($GuiControls.chkVhdx) { $GuiControls.chkVhdx.Checked = [bool]$p.UseVHDX } }
-        if ($p.PSObject.Properties['SkipEiCfg'])                 { if ($GuiControls.chkSkipEiCfg) { $GuiControls.chkSkipEiCfg.Checked = [bool]$p.SkipEiCfg } }
-        if ($p.PSObject.Properties['NoPostInstallAssets'])       { if ($GuiControls.chkNoPostInstall) { $GuiControls.chkNoPostInstall.Checked = [bool]$p.NoPostInstallAssets } }
-        if ($p.PSObject.Properties['PayloadFormat']) {
-            $fmt = $p.PayloadFormat.ToString().ToUpper()
-            if ($fmt -eq 'ESD') { $GuiControls.radESD.Checked = $true }
-            elseif ($fmt -eq 'SWM') { $GuiControls.radSWM.Checked = $true }
-            else { $GuiControls.radWIM.Checked = $true }
-        }
+        $GuiControls.chkDefender.Checked    = [bool](& $getVal 'RemoveDefender' $true)
+        $GuiControls.chkIME.Checked         = [bool](& $getVal 'KeepAsianIME' $true)
+        $GuiControls.chkFonts.Checked       = [bool](& $getVal 'KeepExtraFonts' $false)
+        $GuiControls.chkDrivers.Checked     = [bool](& $getVal 'RemoveDrivers' $false)
+        $GuiControls.chkWU.Checked          = [bool](& $getVal 'DisableWindowsUpdate' $true)
+        $GuiControls.chkBT.Checked          = [bool](& $getVal 'KeepBluetooth' $true)
+        $GuiControls.chkWSL.Checked         = [bool](& $getVal 'WSLSupport' $false)
+        $GuiControls.chkRecovery.Checked    = [bool](& $getVal 'KeepRecoveryEnv' $false)
+        $GuiControls.chkSafeDebloat.Checked = [bool](& $getVal 'SafeDebloatMode' $true)
+        $GuiControls.chkUltraSlim.Checked   = [bool](& $getVal 'UltraSlimMode' $true)
+        $GuiControls.chkJPKey.Checked       = [bool](& $getVal 'SetJapaneseKeyboard' $true)
+        $GuiControls.chkAtlas.Checked       = [bool](& $getVal 'AtlasReviOSMode' $true)
+        $GuiControls.chkStore.Checked       = [bool](& $getVal 'RemoveStore' $false)
+        if ($GuiControls.chkBasicApps)   { $GuiControls.chkBasicApps.Checked   = [bool](& $getVal 'KeepBasicApps' $false) }
+        if ($GuiControls.chkSearchIndex) { $GuiControls.chkSearchIndex.Checked = [bool](& $getVal 'KeepSearchIndex' $false) }
+        if ($GuiControls.chkVhdx)        { $GuiControls.chkVhdx.Checked        = [bool](& $getVal 'UseVHDX' $false) }
+        
+        $fmt = (& $getVal 'PayloadFormat' 'WIM').ToString().ToUpper()
+        if ($fmt -eq 'ESD') { $GuiControls.radESD.Checked = $true }
+        elseif ($fmt -eq 'SWM') { $GuiControls.radSWM.Checked = $true }
+        else { $GuiControls.radWIM.Checked = $true }
     } else {
-        if ($p.PSObject.Properties['RemoveDefender'])            { $script:removeDefender = [bool]$p.RemoveDefender }
-        if ($p.PSObject.Properties['KeepAsianIME'])              { $script:keepAsianIME = [bool]$p.KeepAsianIME }
-        if ($p.PSObject.Properties['KeepExtraFonts'])            { $script:keepExtraFonts = [bool]$p.KeepExtraFonts }
-        if ($p.PSObject.Properties['RemoveDrivers'])             { $script:removeDrivers = [bool]$p.RemoveDrivers }
-        if ($p.PSObject.Properties['DisableWindowsUpdate'])      { $script:disableWU = [bool]$p.DisableWindowsUpdate }
-        if ($p.PSObject.Properties['KeepBluetooth'])             { $script:keepBT = [bool]$p.KeepBluetooth }
-        if ($p.PSObject.Properties['WSLSupport'])                { $script:wslSupport = [bool]$p.WSLSupport }
-        if ($p.PSObject.Properties['KeepRecoveryEnv'])           { $script:keepRecoveryEnv = [bool]$p.KeepRecoveryEnv }
-        if ($p.PSObject.Properties['SafeDebloatMode'])           { $script:safeDebloatMode = [bool]$p.SafeDebloatMode }
-        if ($p.PSObject.Properties['UltraSlimMode'])             { $script:ultraSlimMode = [bool]$p.UltraSlimMode }
-        if ($p.PSObject.Properties['SetJapaneseKeyboard'])       { $script:setJapaneseKeyboard = [bool]$p.SetJapaneseKeyboard }
-        if ($p.PSObject.Properties['AtlasReviOSMode'])           { $script:atlasReviOSMode = [bool]$p.AtlasReviOSMode }
-        if ($p.PSObject.Properties['RemoveStore'])               { $script:removeStore = [bool]$p.RemoveStore }
-        if ($p.PSObject.Properties['KeepBasicApps'])            { $script:keepBasicApps = [bool]$p.KeepBasicApps }
-        if ($p.PSObject.Properties['KeepSearchIndex'])          { $script:keepSearchIndex = [bool]$p.KeepSearchIndex }
-        if ($p.PSObject.Properties['KeepXboxServices'])          { $script:keepXboxServices = [bool]$p.KeepXboxServices }
-        if ($p.PSObject.Properties['KeepAudioTweaks'])           { $script:keepAudioTweaks = [bool]$p.KeepAudioTweaks }
-        if ($p.PSObject.Properties['UseVHDX'])                   { $script:useVHDX = [bool]$p.UseVHDX }
-        if ($p.PSObject.Properties['SkipEiCfg'])                 { $script:skipEiCfg = [bool]$p.SkipEiCfg }
-        if ($p.PSObject.Properties['NoPostInstallAssets'])       { $script:noPostInstallAssets = [bool]$p.NoPostInstallAssets }
-        if ($p.PSObject.Properties['PayloadFormat']) {
-            $fmt = $p.PayloadFormat.ToString().ToUpper()
-            if ($fmt -eq 'ESD') { $script:exportESDMode = $true; $script:splitWIMMode = $false }
-            elseif ($fmt -eq 'SWM') { $script:splitWIMMode = $true; $script:exportESDMode = $false }
-            else { $script:exportESDMode = $false; $script:splitWIMMode = $false }
+        $script:removeDefender       = [bool](& $getVal 'RemoveDefender' $true)
+        $script:keepAsianIME         = [bool](& $getVal 'KeepAsianIME' $true)
+        $script:keepExtraFonts       = [bool](& $getVal 'KeepExtraFonts' $false)
+        $script:removeDrivers        = [bool](& $getVal 'RemoveDrivers' $false)
+        $script:disableWU            = [bool](& $getVal 'DisableWindowsUpdate' $true)
+        $script:keepBT               = [bool](& $getVal 'KeepBluetooth' $true)
+        $script:wslSupport           = [bool](& $getVal 'WSLSupport' $false)
+        $script:keepRecoveryEnv      = [bool](& $getVal 'KeepRecoveryEnv' $false)
+        $script:safeDebloatMode      = [bool](& $getVal 'SafeDebloatMode' $true)
+        $script:ultraSlimMode        = [bool](& $getVal 'UltraSlimMode' $true)
+        $script:setJapaneseKeyboard  = [bool](& $getVal 'SetJapaneseKeyboard' $true)
+        $script:atlasReviOSMode      = [bool](& $getVal 'AtlasReviOSMode' $true)
+        $script:removeStore          = [bool](& $getVal 'RemoveStore' $false)
+        $script:keepBasicApps        = [bool](& $getVal 'KeepBasicApps' $false)
+        $script:keepSearchIndex      = [bool](& $getVal 'KeepSearchIndex' $false)
+        $script:keepXboxServices     = [bool](& $getVal 'KeepXboxServices' $false)
+        $script:keepAudioTweaks      = [bool](& $getVal 'KeepAudioTweaks' $true)
+        $script:useVHDX              = [bool](& $getVal 'UseVHDX' $false)
+
+        # Advanced Modular Optimization Flags
+        $script:removeLegacyFOD      = [bool](& $getVal 'RemoveLegacyFOD' $false)
+        $script:trimWallpapers       = [bool](& $getVal 'TrimWallpapers' $false)
+        $script:hibernateMode        = (& $getVal 'HibernateMode' 'Keep').ToString()
+        $script:crashDumpMode        = (& $getVal 'CrashDumpMode' 'Automatic').ToString()
+        $script:disableCPUMitigations= [bool](& $getVal 'DisableCPUMitigations' $false)
+        $script:mmcssGaming          = [bool](& $getVal 'MMCSSGaming' $false)
+        $script:dawMode              = [bool](& $getVal 'DAWMode' $false)
+        $script:disableMemCompression= [bool](& $getVal 'DisableMemCompression' $false)
+        $script:disableFSE           = [bool](& $getVal 'DisableFSE' $false)
+        $script:nvidiaLowLatency     = [bool](& $getVal 'NvidiaLowLatency' $false)
+        $script:noKernelPaging       = [bool](& $getVal 'NoKernelPaging' $false)
+        $script:disableUSBSuspend    = [bool](& $getVal 'DisableUSBSuspend' $false)
+        $script:noHypervisor         = [bool](& $getVal 'NoHypervisor' $false)
+        $script:removeWebViewPostOOBE= [bool](& $getVal 'RemoveWebViewPostOOBE' $false)
+        $script:fastExport           = [bool](& $getVal 'FastExport' $false)
+        $script:uefiOnly             = [bool](& $getVal 'UefiOnly' $false)
+        $script:cpuBoostMode         = (& $getVal 'CpuBoostMode' 'Default').ToString()
+        $script:powerPreset          = (& $getVal 'PowerPreset' 'Default').ToString()
+
+        # Modular Tweak Groups
+        $tGroups = & $getVal 'TweakGroups' $null
+        if ($tGroups) {
+            foreach ($k in $script:TweakGroups.Keys) {
+                if ($tGroups -is [System.Collections.IDictionary] -and $tGroups.Contains($k)) {
+                    $script:activeTweakGroups[$k] = [bool]$tGroups[$k]
+                }
+            }
         }
+
+        $fmt = (& $getVal 'PayloadFormat' 'WIM').ToString().ToUpper()
+        if ($fmt -eq 'ESD') { $script:exportESDMode = $true; $script:splitWIMMode = $false }
+        elseif ($fmt -eq 'SWM') { $script:splitWIMMode = $true; $script:exportESDMode = $false }
+        else { $script:exportESDMode = $false; $script:splitWIMMode = $false }
     }
+    return $targetPreset
 }
 
 # Helper function: Import configuration settings from a JSON profile
@@ -937,50 +1361,39 @@ function Invoke-Nano11SelfTest {
     }
     $results += [PSCustomObject]@{ Test = "3. autounattend.xml Schema"; Passed = $xmlPass; Details = $xmlMsg }
 
-    # 4. JSON Profile Presets & Schema Linter
-    $profDir = Join-Path -Path $ScriptRoot -ChildPath "profiles"
+    # 4. Built-in Profile Presets & Modular Tweak Integrity
     $profPass = $false
     $profMsg = ""
-    if (Test-Path -LiteralPath $profDir) {
-        $profFiles = Get-ChildItem -Path $profDir -Filter "*.json"
-        if ($profFiles.Count -ge 3) {
-            $badProfs = @()
-            $knownProfileKeys = @(
-                'RemoveDefender', 'KeepAsianIME', 'KeepExtraFonts', 'RemoveDrivers',
-                'DisableWindowsUpdate', 'KeepBluetooth', 'WSLSupport', 'KeepRecoveryEnv',
-                'SafeDebloatMode', 'UltraSlimMode', 'SetJapaneseKeyboard', 'AtlasReviOSMode',
-                'RemoveStore', 'PayloadFormat', 'KeepXboxServices', 'KeepBasicApps', 'KeepSearchIndex',
-                'KeepAudioTweaks', 'UseVHDX'
-            )
-            foreach ($pf in $profFiles) {
-                try {
-                    $json = Get-Content -LiteralPath $pf.FullName -Raw -Encoding UTF8 | ConvertFrom-Json
-                    if (-not $json.ProfileName -or -not $json.Settings) {
-                        $badProfs += "$($pf.Name) (missing ProfileName/Settings)"
-                    } elseif ($json.Version -ne "2.1") {
-                        $badProfs += "$($pf.Name) (Version $($json.Version) != 2.1)"
-                    } else {
-                        foreach ($prop in $json.Settings.PSObject.Properties) {
-                            if ($knownProfileKeys -notcontains $prop.Name) {
-                                $badProfs += "$($pf.Name) (unknown key: $($prop.Name))"
-                            }
-                        }
-                    }
-                } catch {
-                    $badProfs += "$($pf.Name) (invalid JSON: $($_.Exception.Message))"
-                }
+    $expectedPresetKeys = @('extreme', 'balanced', 'fat32', 'handheld', 'vm', 'audio')
+    $missingPresets = @()
+    foreach ($ep in $expectedPresetKeys) {
+        if (-not $script:BuiltInPresets.Contains($ep)) {
+            $missingPresets += $ep
+        }
+    }
+    if ($missingPresets.Count -eq 0 -and $script:TweakGroups.Count -ge 6 -and $script:PowerPresets.Count -ge 4) {
+        $badPresets = @()
+        foreach ($kv in $script:BuiltInPresets.GetEnumerator()) {
+            $pName = $kv.Key
+            $pDef = $kv.Value
+            if (-not $pDef.ProfileName -or -not $pDef.Description) {
+                $badPresets += "$pName (missing ProfileName/Description)"
             }
-            if ($badProfs.Count -eq 0) {
-                $profPass = $true
-                $profMsg = "$($profFiles.Count) profiles validated successfully (v2.1 unified: $($profFiles.BaseName -join ', '))"
-            } else {
-                $profMsg = "Errors in profiles: $($badProfs -join '; ')"
+            if (-not $pDef.PowerPreset -or -not $script:PowerPresets.Contains($pDef.PowerPreset)) {
+                $badPresets += "$pName (invalid PowerPreset: $($pDef.PowerPreset))"
             }
+            if (-not $pDef.TweakGroups) {
+                $badPresets += "$pName (missing TweakGroups)"
+            }
+        }
+        if ($badPresets.Count -eq 0) {
+            $profPass = $true
+            $profMsg = "$($script:BuiltInPresets.Count) built-in presets validated ($($expectedPresetKeys -join ', ')), 6 tweak groups, 4 power presets"
         } else {
-            $profMsg = "Expected at least 3 profiles, found $($profFiles.Count)"
+            $profMsg = "Preset errors: $($badPresets -join '; ')"
         }
     } else {
-        $profMsg = "profiles/ directory not found"
+        $profMsg = "Missing built-in presets: $($missingPresets -join ', ')"
     }
     $results += [PSCustomObject]@{ Test = "4. Profile Presets Integrity"; Passed = $profPass; Details = $profMsg }
 
@@ -1606,7 +2019,7 @@ function Show-Nano11GUI {
 
     $cmbPreset = New-Object System.Windows.Forms.ComboBox
     $cmbPreset.Location = New-Object System.Drawing.Point(80, 25)
-    $cmbPreset.Size = New-Object System.Drawing.Size(310, 24)
+    $cmbPreset.Size = New-Object System.Drawing.Size(575, 24)
     $cmbPreset.BackColor = [System.Drawing.Color]::FromArgb(35, 38, 46)
     $cmbPreset.ForeColor = [System.Drawing.Color]::White
     $cmbPreset.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
@@ -1621,24 +2034,6 @@ function Show-Nano11GUI {
     ))
     $cmbPreset.SelectedIndex = 0
     $grpProfile.Controls.Add($cmbPreset)
-
-    $btnLoadProfile = New-Object System.Windows.Forms.Button
-    $btnLoadProfile.Text = "📂 JSON 読込..."
-    $btnLoadProfile.Location = New-Object System.Drawing.Point(405, 24)
-    $btnLoadProfile.Size = New-Object System.Drawing.Size(120, 26)
-    $btnLoadProfile.BackColor = [System.Drawing.Color]::FromArgb(45, 50, 60)
-    $btnLoadProfile.ForeColor = [System.Drawing.Color]::White
-    $btnLoadProfile.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
-    $grpProfile.Controls.Add($btnLoadProfile)
-
-    $btnSaveProfile = New-Object System.Windows.Forms.Button
-    $btnSaveProfile.Text = "💾 JSON 保存..."
-    $btnSaveProfile.Location = New-Object System.Drawing.Point(535, 24)
-    $btnSaveProfile.Size = New-Object System.Drawing.Size(120, 26)
-    $btnSaveProfile.BackColor = [System.Drawing.Color]::FromArgb(45, 50, 60)
-    $btnSaveProfile.ForeColor = [System.Drawing.Color]::White
-    $btnSaveProfile.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
-    $grpProfile.Controls.Add($btnSaveProfile)
 
     # 3. Customization & Debloat Options GroupBox
     $grpOpts = New-Object System.Windows.Forms.GroupBox
@@ -1722,143 +2117,10 @@ function Show-Nano11GUI {
         $radSWM.Checked = $true
     }
 
-    # Preset selection sync
+    # Preset selection sync backed by Built-in In-Memory Presets
     $updatingPreset = $false
-    $applyPreset = {
-        param($presetIndex)
-        $script:updatingPreset = $true
-        switch ($presetIndex) {
-            0 { # Extreme Slim & Gaming
-                $chkDefender.Checked = $true
-                $chkIME.Checked = $true
-                $chkFonts.Checked = $false
-                $chkDrivers.Checked = $false
-                $chkWU.Checked = $true
-                $chkBT.Checked = $true
-                $chkWSL.Checked = $false
-                $chkRecovery.Checked = $false
-                $chkSafeDebloat.Checked = $true
-                $chkUltraSlim.Checked = $true
-                $chkJPKey.Checked = $true
-                $chkAtlas.Checked = $true
-                $chkStore.Checked = $false
-                $chkBasicApps.Checked = $false
-                $chkSearchIndex.Checked = $false
-                $radWIM.Checked = $true
-            }
-            1 { # Balanced Pro
-                $chkDefender.Checked = $false
-                $chkIME.Checked = $true
-                $chkFonts.Checked = $true
-                $chkDrivers.Checked = $false
-                $chkWU.Checked = $false
-                $chkBT.Checked = $true
-                $chkWSL.Checked = $false
-                $chkRecovery.Checked = $true
-                $chkSafeDebloat.Checked = $true
-                $chkUltraSlim.Checked = $false
-                $chkJPKey.Checked = $true
-                $chkAtlas.Checked = $true
-                $chkStore.Checked = $false
-                $chkBasicApps.Checked = $true
-                $chkSearchIndex.Checked = $true
-                $radWIM.Checked = $true
-            }
-            2 { # FAT32 Split-WIM
-                $chkDefender.Checked = $true
-                $chkIME.Checked = $true
-                $chkFonts.Checked = $false
-                $chkDrivers.Checked = $false
-                $chkWU.Checked = $true
-                $chkBT.Checked = $true
-                $chkWSL.Checked = $false
-                $chkRecovery.Checked = $false
-                $chkSafeDebloat.Checked = $true
-                $chkUltraSlim.Checked = $true
-                $chkJPKey.Checked = $true
-                $chkAtlas.Checked = $true
-                $chkStore.Checked = $false
-                $chkBasicApps.Checked = $false
-                $chkSearchIndex.Checked = $false
-                $radSWM.Checked = $true
-            }
-            3 { # Handheld Gaming
-                $chkDefender.Checked = $true
-                $chkIME.Checked = $true
-                $chkFonts.Checked = $false
-                $chkDrivers.Checked = $false
-                $chkWU.Checked = $true
-                $chkBT.Checked = $true
-                $chkWSL.Checked = $false
-                $chkRecovery.Checked = $false
-                $chkSafeDebloat.Checked = $true
-                $chkUltraSlim.Checked = $true
-                $chkJPKey.Checked = $false
-                $chkAtlas.Checked = $true
-                $chkStore.Checked = $false
-                $chkBasicApps.Checked = $false
-                $chkSearchIndex.Checked = $false
-                $radWIM.Checked = $true
-            }
-            4 { # VM & Developer Workstation
-                $chkDefender.Checked = $false
-                $chkIME.Checked = $true
-                $chkFonts.Checked = $true
-                $chkDrivers.Checked = $false
-                $chkWU.Checked = $false
-                $chkBT.Checked = $false
-                $chkWSL.Checked = $true
-                $chkRecovery.Checked = $true
-                $chkSafeDebloat.Checked = $true
-                $chkUltraSlim.Checked = $false
-                $chkJPKey.Checked = $false
-                $chkAtlas.Checked = $false
-                $chkStore.Checked = $false
-                $chkBasicApps.Checked = $true
-                $chkSearchIndex.Checked = $true
-                $radWIM.Checked = $true
-            }
-            5 { # Audio & DAW Production
-                $chkDefender.Checked = $true
-                $chkIME.Checked = $true
-                $chkFonts.Checked = $false
-                $chkDrivers.Checked = $false
-                $chkWU.Checked = $true
-                $chkBT.Checked = $false
-                $chkWSL.Checked = $false
-                $chkRecovery.Checked = $false
-                $chkSafeDebloat.Checked = $true
-                $chkUltraSlim.Checked = $false
-                $chkJPKey.Checked = $true
-                $chkAtlas.Checked = $true
-                $chkStore.Checked = $false
-                $chkBasicApps.Checked = $true
-                $chkSearchIndex.Checked = $false
-                $radWIM.Checked = $true
-            }
-        }
-        $script:updatingPreset = $false
-    }
+    $presetKeyMap = @('extreme', 'balanced', 'fat32', 'handheld', 'vm', 'audio')
 
-    $cmbPreset.Add_SelectedIndexChanged({
-        if (-not $script:updatingPreset -and $cmbPreset.SelectedIndex -ne ($cmbPreset.Items.Count - 1)) {
-            & $applyPreset $cmbPreset.SelectedIndex
-        }
-    })
-
-    # Hook change events to switch preset to Custom
-    $allCheckboxes = @($chkDefender, $chkIME, $chkFonts, $chkDrivers, $chkWU, $chkBT, $chkWSL, $chkRecovery, $chkSafeDebloat, $chkUltraSlim, $chkJPKey, $chkAtlas, $chkStore, $chkBasicApps, $chkSearchIndex, $chkVHDX)
-    foreach ($c in $allCheckboxes) {
-        $c.Add_CheckedChanged({
-            if (-not $script:updatingPreset) {
-                $script:updatingPreset = $true
-                $cmbPreset.SelectedIndex = ($cmbPreset.Items.Count - 1) # Custom
-                $script:updatingPreset = $false
-            }
-        })
-    }
-
-    # Load / Save Profile Handlers
     $guiControlsMap = @{
         chkDefender    = $chkDefender
         chkIME         = $chkIME
@@ -1881,54 +2143,33 @@ function Show-Nano11GUI {
         radWIM         = $radWIM
     }
 
-    $btnLoadProfile.Add_Click({
-        $ofd = New-Object System.Windows.Forms.OpenFileDialog
-        $ofd.Filter = "nano11 Profile (*.json)|*.json|All files (*.*)|*.*"
-        $profDir = Join-Path -Path $PSScriptRoot -ChildPath "profiles"
-        if (Test-Path -LiteralPath $profDir) { $ofd.InitialDirectory = $profDir }
-        if ($ofd.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
-            $loaded = Import-Nano11Profile -FilePath $ofd.FileName
-            if ($loaded) {
-                $script:updatingPreset = $true
-                Apply-ProfileSettings -ProfileObject $loaded -UpdateGui -GuiControls $guiControlsMap
-                $cmbPreset.SelectedIndex = $cmbPreset.Items.Count - 1
-                $script:updatingPreset = $false
-                [System.Windows.Forms.MessageBox]::Show("プロファイルを正常に読み込みました:`n$($ofd.FileName)", "プロファイル読込完了", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
-            }
+    $applyPreset = {
+        param($presetIndex)
+        $script:updatingPreset = $true
+        if ($presetIndex -ge 0 -and $presetIndex -lt $presetKeyMap.Count) {
+            $pKey = $presetKeyMap[$presetIndex]
+            Apply-ProfileSettings -ProfileName $pKey -UpdateGui -GuiControls $guiControlsMap
+        }
+        $script:updatingPreset = $false
+    }
+
+    $cmbPreset.Add_SelectedIndexChanged({
+        if (-not $script:updatingPreset -and $cmbPreset.SelectedIndex -ne ($cmbPreset.Items.Count - 1)) {
+            & $applyPreset $cmbPreset.SelectedIndex
         }
     })
 
-    $btnSaveProfile.Add_Click({
-        $sfd = New-Object System.Windows.Forms.SaveFileDialog
-        $sfd.Filter = "nano11 Profile (*.json)|*.json|All files (*.*)|*.*"
-        $profDir = Join-Path -Path $PSScriptRoot -ChildPath "profiles"
-        if (Test-Path -LiteralPath $profDir) { $sfd.InitialDirectory = $profDir }
-        $sfd.FileName = "my-custom-profile.json"
-        if ($sfd.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
-            $saveCfg = @{
-                ProfileName               = "Custom Profile"
-                RemoveDefender            = $chkDefender.Checked
-                KeepAsianIME              = $chkIME.Checked
-                KeepExtraFonts            = $chkFonts.Checked
-                RemoveDrivers             = $chkDrivers.Checked
-                DisableWindowsUpdate      = $chkWU.Checked
-                KeepBluetooth             = $chkBT.Checked
-                WSLSupport                = $chkWSL.Checked
-                KeepRecoveryEnv           = $chkRecovery.Checked
-                SafeDebloatMode           = $chkSafeDebloat.Checked
-                UltraSlimMode             = $chkUltraSlim.Checked
-                SetJapaneseKeyboard       = $chkJPKey.Checked
-                AtlasReviOSMode           = $chkAtlas.Checked
-                RemoveStore               = $chkStore.Checked
-                KeepBasicApps             = $chkBasicApps.Checked
-                KeepSearchIndex           = $chkSearchIndex.Checked
-                UseVHDX                   = $chkVHDX.Checked
-                PayloadFormat             = if ($radESD.Checked) { "ESD" } elseif ($radSWM.Checked) { "SWM" } else { "WIM" }
+    # Hook change events to switch preset to Custom
+    $allCheckboxes = @($chkDefender, $chkIME, $chkFonts, $chkDrivers, $chkWU, $chkBT, $chkWSL, $chkRecovery, $chkSafeDebloat, $chkUltraSlim, $chkJPKey, $chkAtlas, $chkStore, $chkBasicApps, $chkSearchIndex, $chkVHDX)
+    foreach ($c in $allCheckboxes) {
+        $c.Add_CheckedChanged({
+            if (-not $script:updatingPreset) {
+                $script:updatingPreset = $true
+                $cmbPreset.SelectedIndex = ($cmbPreset.Items.Count - 1) # Custom
+                $script:updatingPreset = $false
             }
-            Export-Nano11Profile -FilePath $sfd.FileName -Config $saveCfg
-            [System.Windows.Forms.MessageBox]::Show("プロファイルを正常に保存しました:`n$($sfd.FileName)", "プロファイル保存完了", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
-        }
-    })
+        })
+    }
 
     # Bottom Button Panel
     $bottomPanel = New-Object System.Windows.Forms.Panel
@@ -2173,84 +2414,26 @@ $selectedProfile = $null
 $bound = $PSBoundParameters
 $cliBound = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
 
-# 0a. Profile / Preset Parameter
+# 0a. Profile / Preset Parameter (Direct In-Memory Preset Resolution)
 if ($bound.ContainsKey('Profile') -or $bound.ContainsKey('Preset')) {
     $profVal = if ($bound.ContainsKey('Profile')) { $bound['Profile'] } else { $bound['Preset'] }
     $selectedProfile = $profVal.ToString().Trim().ToLower()
     [void]$cliBound.Add('Profile')
-    if ($selectedProfile -in @('extreme', 'gaming', 'slim')) {
-        $removeDefender = $true
-        $keepAsianIME = $true
-        $keepExtraFonts = $false
-        $removeDrivers = $false
-        $disableWU = $true
-        $keepBT = $true
-        $wslSupport = $false
-        $keepRecoveryEnv = $false
-        $safeDebloatMode = $true
-        $ultraSlimMode = $true
-        $setJapaneseKeyboard = $true
-        $atlasReviOSMode = $true
-        $removeStore = $false
-    } elseif ($selectedProfile -in @('balanced', 'safe', 'pro')) {
-        $removeDefender = $false
-        $keepAsianIME = $true
-        $keepExtraFonts = $true
-        $removeDrivers = $false
-        $disableWU = $false
-        $keepBT = $true
-        $wslSupport = $false
-        $keepRecoveryEnv = $true
-        $safeDebloatMode = $true
-        $ultraSlimMode = $false
-        $setJapaneseKeyboard = $true
-        $atlasReviOSMode = $true
-        $removeStore = $false
+    $applied = Apply-ProfileSettings -ProfileName $selectedProfile
+    if (-not $applied) {
+        Write-Warning "Unrecognized profile '$selectedProfile'. Falling back to 'extreme'."
+        Apply-ProfileSettings -ProfileName 'extreme' | Out-Null
+        $selectedProfile = 'extreme'
     } else {
-        # Check if matching profile JSON exists in profiles/
-        $profNameMap = @{
-            'handheld' = 'handheld-gaming.json'
-            'ally'     = 'handheld-gaming.json'
-            'deck'     = 'handheld-gaming.json'
-            'legion'   = 'handheld-gaming.json'
-            'vm'       = 'vm-developer.json'
-            'dev'      = 'vm-developer.json'
-            'developer'= 'vm-developer.json'
-            'audio'    = 'audio-daw.json'
-            'daw'      = 'audio-daw.json'
-            'fat32'    = 'fat32-splitwim.json'
-            'split'    = 'fat32-splitwim.json'
-            'splitwim' = 'fat32-splitwim.json'
-        }
-        $targetProfFile = if ($profNameMap.ContainsKey($selectedProfile)) { $profNameMap[$selectedProfile] } else { "$selectedProfile.json" }
-        $profFullPath = Join-Path -Path $PSScriptRoot -ChildPath (Join-Path "profiles" $targetProfFile)
-        if (-not (Test-Path -LiteralPath $profFullPath)) {
-            $profFullPath = Join-Path -Path $PSScriptRoot -ChildPath (Join-Path "profiles" $selectedProfile)
-        }
-        if (Test-Path -LiteralPath $profFullPath) {
-            $loaded = Import-Nano11Profile -FilePath $profFullPath
-            if ($loaded) {
-                Apply-ProfileSettings -ProfileObject $loaded
-            }
-        }
+        Write-Host "Applied Built-in Profile: $($applied.ProfileName)" -ForegroundColor Green
     }
 }
 
-# 0b. LoadProfile Parameter (JSON Profile Import)
+# 0b. LoadProfile Parameter (Legacy deprecation notice)
 if ($bound.ContainsKey('LoadProfile') -and $bound['LoadProfile']) {
-    $loadProfPath = $bound['LoadProfile']
-    if (-not (Test-Path -LiteralPath $loadProfPath)) {
-        $altProf = Join-Path -Path $PSScriptRoot -ChildPath (Join-Path "profiles" $loadProfPath)
-        if (Test-Path -LiteralPath $altProf) { $loadProfPath = $altProf }
-        elseif (Test-Path -LiteralPath "$altProf.json") { $loadProfPath = "$altProf.json" }
-    }
-    $loaded = Import-Nano11Profile -FilePath $loadProfPath
-    if ($loaded) {
-        $selectedProfile = "json ($([System.IO.Path]::GetFileNameWithoutExtension($loadProfPath)))"
-        [void]$cliBound.Add('Profile')
-        Apply-ProfileSettings -ProfileObject $loaded
-        Write-Host "Loaded profile configuration from: $loadProfPath" -ForegroundColor Green
-    }
+    Write-Warning "External JSON profile loading has been superseded by built-in presets: extreme, balanced, fat32, handheld, vm, audio."
+    Apply-ProfileSettings -ProfileName 'extreme' | Out-Null
+    $selectedProfile = 'extreme'
 }
 
 # 0c. Graphical User Interface (GUI) Trigger
@@ -2506,6 +2689,33 @@ if (& $isAnyBound @('UseVHDX', 'FastVHDX', 'VHDX')) {
     [void]$cliBound.Add('VHDX')
 }
 
+# 21. Advanced Modular Optimization Tweak Toggles overrides
+if (& $isAnyBound @('RemoveLegacyFOD'))       { $removeLegacyFOD = & $getBoundVal 'RemoveLegacyFOD'; [void]$cliBound.Add('RemoveLegacyFOD') }
+if (& $isAnyBound @('TrimWallpapers'))        { $trimWallpapers  = & $getBoundVal 'TrimWallpapers';  [void]$cliBound.Add('TrimWallpapers') }
+if (& $isAnyBound @('DisableCPUMitigations')) { $disableCPUMitigations = & $getBoundVal 'DisableCPUMitigations'; [void]$cliBound.Add('DisableCPUMitigations') }
+if (& $isAnyBound @('MMCSSGaming'))          { $mmcssGaming     = & $getBoundVal 'MMCSSGaming';     [void]$cliBound.Add('MMCSSGaming') }
+if (& $isAnyBound @('DAWMode'))              { $dawMode         = & $getBoundVal 'DAWMode';         [void]$cliBound.Add('DAWMode') }
+if (& $isAnyBound @('DisableMemCompression')){ $disableMemCompression = & $getBoundVal 'DisableMemCompression'; [void]$cliBound.Add('DisableMemCompression') }
+if (& $isAnyBound @('DisableFSE'))           { $disableFSE      = & $getBoundVal 'DisableFSE';      [void]$cliBound.Add('DisableFSE') }
+if (& $isAnyBound @('NvidiaLowLatency'))     { $nvidiaLowLatency = & $getBoundVal 'NvidiaLowLatency'; [void]$cliBound.Add('NvidiaLowLatency') }
+if (& $isAnyBound @('NoKernelPaging'))       { $noKernelPaging  = & $getBoundVal 'NoKernelPaging';  [void]$cliBound.Add('NoKernelPaging') }
+if (& $isAnyBound @('DisableUSBSuspend'))    { $disableUSBSuspend = & $getBoundVal 'DisableUSBSuspend'; [void]$cliBound.Add('DisableUSBSuspend') }
+if (& $isAnyBound @('NoHypervisor'))         { $noHypervisor    = & $getBoundVal 'NoHypervisor';    [void]$cliBound.Add('NoHypervisor') }
+if (& $isAnyBound @('RemoveWebViewPostOOBE')){ $removeWebViewPostOOBE = & $getBoundVal 'RemoveWebViewPostOOBE'; [void]$cliBound.Add('RemoveWebViewPostOOBE') }
+if (& $isAnyBound @('FastExport'))           { $fastExport      = & $getBoundVal 'FastExport';      [void]$cliBound.Add('FastExport') }
+if (& $isAnyBound @('UefiOnly'))             { $uefiOnly        = & $getBoundVal 'UefiOnly';        [void]$cliBound.Add('UefiOnly') }
+if ($bound.ContainsKey('HibernateMode'))     { $hibernateMode   = $bound['HibernateMode'];          [void]$cliBound.Add('HibernateMode') }
+if ($bound.ContainsKey('CrashDumpMode'))     { $crashDumpMode   = $bound['CrashDumpMode'];          [void]$cliBound.Add('CrashDumpMode') }
+if ($bound.ContainsKey('CpuBoostMode') -and $bound['CpuBoostMode'] -ne 'Default') { $cpuBoostMode = $bound['CpuBoostMode']; [void]$cliBound.Add('CpuBoostMode') }
+if ($bound.ContainsKey('PowerPreset') -and $bound['PowerPreset'] -ne 'Default')   { $powerPreset   = $bound['PowerPreset'];   [void]$cliBound.Add('PowerPreset') }
+if ($bound.ContainsKey('TweakGroupOverrides') -and $bound['TweakGroupOverrides']) {
+    foreach ($tgKey in $bound['TweakGroupOverrides'].Keys) {
+        if ($script:TweakGroups.Contains($tgKey)) {
+            $script:activeTweakGroups[$tgKey] = [bool]$bound['TweakGroupOverrides'][$tgKey]
+        }
+    }
+}
+
 # 3. Interactive Prompting Logic
 $isAutomated = $NonInteractive -or $isDryRunMode -or ($cliBound.Count -ge 15 -and (-not $Interactive)) -or ($cliBound.Contains('Profile') -and (-not $Interactive))
 
@@ -2524,81 +2734,43 @@ if ($isAutomated) {
     Write-Host "  [4] 💻 VM & Developer Workstation (WSL2, Hyper-V, WinUpdate)" -ForegroundColor Cyan
     Write-Host "  [5] 🎵 Audio & DAW Production (Minimal Latency, VST Protected)" -ForegroundColor Magenta
     Write-Host "  [6] 💾 FAT32 USB Split-WIM (3.8GB SWM Chunks for UEFI)" -ForegroundColor Yellow
-    Write-Host "  [7] 📂 Load Profile from JSON file" -ForegroundColor Cyan
-    Write-Host "  [8] 🖥️ Launch GUI (Graphical User Interface)" -ForegroundColor Blue
-    Write-Host "  [9] 🔧 Custom (Step-by-step 15 configuration prompts)" -ForegroundColor Magenta
-    $pChoice = Read-Host "Select Profile [1-9] (Default: 1 - Extreme Slim & Gaming)"
+    Write-Host "  [7] 🖥️ Launch GUI (Graphical User Interface)" -ForegroundColor Blue
+    Write-Host "  [8] 🔧 Custom (Step-by-step 15 configuration prompts)" -ForegroundColor Magenta
+    $pChoice = Read-Host "Select Profile [1-8] (Default: 1 - Extreme Slim & Gaming)"
     if ($pChoice) { $pChoice = $pChoice.Trim().ToLower() } else { $pChoice = "1" }
 
     $skipIndividualPrompts = $false
     if ($pChoice -in @('1', 'extreme', 'gaming', 'slim')) {
         $skipIndividualPrompts = $true
         $selectedProfile = "extreme"
+        Apply-ProfileSettings -ProfileName 'extreme' | Out-Null
         Write-Host "Applied Profile: ⚡ Extreme Slim & Gaming" -ForegroundColor Green
-    } elseif ($pChoice -in @('2', 'balanced', 'safe')) {
+    } elseif ($pChoice -in @('2', 'balanced', 'safe', 'pro')) {
         $skipIndividualPrompts = $true
         $selectedProfile = "balanced"
-        if (-not $cliBound.Contains('Defender'))  { $removeDefender = $false }
-        if (-not $cliBound.Contains('WU'))        { $disableWU = $false }
-        if (-not $cliBound.Contains('Recovery'))  { $keepRecoveryEnv = $true }
-        if (-not $cliBound.Contains('UltraSlim')) { $ultraSlimMode = $false }
-        if (-not $cliBound.Contains('Fonts'))     { $keepExtraFonts = $true }
+        Apply-ProfileSettings -ProfileName 'balanced' | Out-Null
         Write-Host "Applied Profile: 🛡️ Balanced Pro (Windows Update & Defender kept)" -ForegroundColor Yellow
     } elseif ($pChoice -in @('3', 'handheld', 'ally', 'deck')) {
         $skipIndividualPrompts = $true
-        $pPath = Join-Path -Path $PSScriptRoot -ChildPath "profiles\handheld-gaming.json"
-        $loaded = Import-Nano11Profile -FilePath $pPath
-        if ($loaded) {
-            $selectedProfile = "handheld-gaming"
-            Apply-ProfileSettings -ProfileObject $loaded
-            Write-Host "Applied Profile: 🎮 Handheld Gaming" -ForegroundColor Green
-        }
+        $selectedProfile = "handheld"
+        Apply-ProfileSettings -ProfileName 'handheld' | Out-Null
+        Write-Host "Applied Profile: 🎮 Handheld Gaming" -ForegroundColor Green
     } elseif ($pChoice -in @('4', 'vm', 'dev', 'developer')) {
         $skipIndividualPrompts = $true
-        $pPath = Join-Path -Path $PSScriptRoot -ChildPath "profiles\vm-developer.json"
-        $loaded = Import-Nano11Profile -FilePath $pPath
-        if ($loaded) {
-            $selectedProfile = "vm-developer"
-            Apply-ProfileSettings -ProfileObject $loaded
-            Write-Host "Applied Profile: 💻 VM & Developer Workstation" -ForegroundColor Cyan
-        }
+        $selectedProfile = "vm"
+        Apply-ProfileSettings -ProfileName 'vm' | Out-Null
+        Write-Host "Applied Profile: 💻 VM & Developer Workstation" -ForegroundColor Cyan
     } elseif ($pChoice -in @('5', 'audio', 'daw')) {
         $skipIndividualPrompts = $true
-        $pPath = Join-Path -Path $PSScriptRoot -ChildPath "profiles\audio-daw.json"
-        $loaded = Import-Nano11Profile -FilePath $pPath
-        if ($loaded) {
-            $selectedProfile = "audio-daw"
-            Apply-ProfileSettings -ProfileObject $loaded
-            Write-Host "Applied Profile: 🎵 Audio & DAW Production" -ForegroundColor Magenta
-        }
+        $selectedProfile = "audio"
+        Apply-ProfileSettings -ProfileName 'audio' | Out-Null
+        Write-Host "Applied Profile: 🎵 Audio & DAW Production" -ForegroundColor Magenta
     } elseif ($pChoice -in @('6', 'fat32', 'split', 'splitwim')) {
         $skipIndividualPrompts = $true
-        $pPath = Join-Path -Path $PSScriptRoot -ChildPath "profiles\fat32-splitwim.json"
-        $loaded = Import-Nano11Profile -FilePath $pPath
-        if ($loaded) {
-            $selectedProfile = "fat32-splitwim"
-            Apply-ProfileSettings -ProfileObject $loaded
-            Write-Host "Applied Profile: 💾 FAT32 USB Split-WIM" -ForegroundColor Yellow
-        }
-    } elseif ($pChoice -in @('7', 'load', 'json')) {
-        $skipIndividualPrompts = $true
-        $pPath = Read-Host "Enter JSON profile path [Default: .\profiles\extreme-gaming.json]"
-        if (-not $pPath) { $pPath = Join-Path -Path $PSScriptRoot -ChildPath "profiles\extreme-gaming.json" }
-        if (-not (Test-Path -LiteralPath $pPath)) {
-            $altProf = Join-Path -Path $PSScriptRoot -ChildPath (Join-Path "profiles" $pPath)
-            if (Test-Path -LiteralPath $altProf) { $pPath = $altProf }
-            elseif (Test-Path -LiteralPath "$altProf.json") { $pPath = "$altProf.json" }
-        }
-        $loaded = Import-Nano11Profile -FilePath $pPath
-        if ($loaded) {
-            $selectedProfile = "json ($([System.IO.Path]::GetFileNameWithoutExtension($pPath)))"
-            Apply-ProfileSettings -ProfileObject $loaded
-            Write-Host "Applied Profile from JSON: $pPath" -ForegroundColor Green
-        } else {
-            Write-Host "Failed to load JSON profile. Reverting to Extreme profile defaults." -ForegroundColor Yellow
-            $selectedProfile = "extreme"
-        }
-    } elseif ($pChoice -in @('8', 'gui', 'ui')) {
+        $selectedProfile = "fat32"
+        Apply-ProfileSettings -ProfileName 'fat32' | Out-Null
+        Write-Host "Applied Profile: 💾 FAT32 USB Split-WIM" -ForegroundColor Yellow
+    } elseif ($pChoice -in @('7', 'gui', 'ui')) {
         $skipIndividualPrompts = $true
         $initialSettings = @{
             SourceDrive               = $SourceDrive
@@ -2763,9 +2935,7 @@ if ($isAutomated) {
         }
     }
 
-    Enter-Phase 9 "Component Store (WinSxS) Optimization"
-
-# 9. Component Store (WinSxS) Optimization Mode
+    # 9. Component Store (WinSxS) Optimization Mode
     if ($cliBound.Contains('WinSxS') -and (-not $Interactive)) {
         Write-Host "9. Component Store mode: $(if ($safeDebloatMode) { '1 (Safe Cleanup)' } else { '2 (Aggressive Pruning)' }) [CLI: Specified]" -ForegroundColor DarkCyan
     } else {
@@ -2988,6 +3158,8 @@ $script:DefenderExclusionAdded = $false
 $script:IsVhdxMounted = $false
 
 try {
+    Enter-Phase 1 "Environment Validation & Workspace Preparation"
+
     # Determine Working Directory (Resolves Issue #27, #23 - Low disk space on C:, and non-NTFS volumes like exFAT)
     if ($WorkDir) {
         if (-not (Test-Path -LiteralPath $WorkDir)) {
@@ -3106,6 +3278,8 @@ assign mount="$scratchDir"
         Write-Warning "Could not mount VHDX scratch disk: $_. Using standard physical directory."
     }
 }
+
+Enter-Phase 2 "Source Media Detection & Validation"
 
 # Determine source drive letter (with auto-detection)
 $DriveLetter = ""
@@ -3315,6 +3489,8 @@ if (-not $Clean -and (Test-Path -LiteralPath $destWim) -and (Test-Path -LiteralP
     } catch {}
 }
 
+Enter-Phase 3 "Installation Media Preparation & Staging"
+
 if (-not $skipMediaCopy) {
 Write-Host "Copying Windows installation files to $nano11Dir..." -ForegroundColor Green
 $sourcePath = $DriveLetter.TrimEnd('\') + "\"
@@ -3481,6 +3657,8 @@ if ([string]::IsNullOrWhiteSpace($index) -or ($index -notin $availableIndices)) 
 }
 Write-Host "Selected image index: $index" -ForegroundColor Green
 
+Enter-Phase 4 "Mount install.wim & Baseline Analysis"
+
 Write-Host "Mounting Windows image (Index: $index)..." -ForegroundColor Green
 Write-Host "  -> DISM is unpacking system files. This typically takes 1-2 minutes on SSD..." -ForegroundColor Cyan
 Set-ItemOwnershipAndAccess -Path $destWim
@@ -3492,7 +3670,7 @@ Reset-DirectoryWithRobocopy -Path $scratchDir
 
 $mountSuccess = $false
 for ($attempt = 1; $attempt -le 2; $attempt++) {
-    & dism.exe /English /Mount-Image "/ImageFile:$destWim" "/Index:$index" "/MountDir:$scratchDir"
+    & dism.exe /English /Mount-Image "/ImageFile:$destWim" "/Index:$index" "/MountDir:$scratchDir" /Optimize
     if ($LASTEXITCODE -eq 0) {
         $mountSuccess = $true
         $script:MountOpened = $true
@@ -3666,6 +3844,20 @@ Enter-Phase 6 "Removing system packages (FoD / Optional features)"
 
 # 6. Removing system packages (FoD / Optional features)
 Write-Host "Removing unnecessary system packages..." -ForegroundColor Cyan
+
+if ($removeLegacyFOD) {
+    Write-Host "Removing legacy system capabilities & features (-RemoveLegacyFOD)..." -ForegroundColor Cyan
+    $legacyCaps = @(
+        'VBSCRIPT~~~~0.0.1.0',
+        'Microsoft.Windows.PowerShell.ISE~~~~0.0.1.0',
+        'Media.WindowsMediaPlayer~~~~0.0.1.0'
+    )
+    foreach ($cap in $legacyCaps) {
+        & dism.exe /English "/image:$scratchDir" /Remove-Capability "/CapabilityName:$cap" > $null 2>&1
+    }
+    & dism.exe /English "/image:$scratchDir" /Disable-Feature /Remove /FeatureName:SMB1Protocol > $null 2>&1
+    Write-Host "  - Legacy capabilities (VBScript, ISE, WMP, SMB1) removed." -ForegroundColor Green
+} -ForegroundColor Cyan
 $packagePatterns = @(
     "Microsoft-Windows-InternetExplorer-Optional-Package~",
     "Microsoft-Windows-MediaPlayer-Package~",
@@ -3928,7 +4120,11 @@ Remove-Item -Path "$scratchDir\Windows\Minidump\*" -Recurse -Force -ErrorAction 
 Remove-Item -Path "$scratchDir\Windows\Prefetch\*" -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item -Path "$scratchDir\Windows\Panther\*" -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item -Path "$scratchDir\Windows\Downloaded Program Files\*" -Recurse -Force -ErrorAction SilentlyContinue
-Remove-Item -Path (Join-Path -Path $winDir -ChildPath "Web") -Recurse -Force -ErrorAction SilentlyContinue
+if ($trimWallpapers -or $ultraSlimMode) {
+    Write-Host "Trimming 4K default wallpapers and lock screen images (-TrimWallpapers)..." -ForegroundColor Cyan
+    Remove-ProtectedDirectory -Path "$scratchDir\Windows\Web\Wallpaper" -ScratchPath $scratchDir
+    Remove-Item "$scratchDir\Windows\Web\Screen\*.jpg" -Force -ErrorAction SilentlyContinue
+}
 Remove-Item -Path (Join-Path -Path $winDir -ChildPath "Help") -Recurse -Force -ErrorAction SilentlyContinue
 
 # Edge Browser and OneDrive (Preserve System32 WebView2 runtime for Windows 11 OOBE stability)
@@ -3998,6 +4194,8 @@ if ($keepRecoveryEnv) {
         }
     }
 }
+
+Enter-Phase 9 "Component Store (WinSxS) Optimization"
 
 # 9. Component Store (WinSxS) Optimization
 if ($safeDebloatMode) {
@@ -4492,7 +4690,15 @@ reg.exe add "HKLM\zSYSTEM\ControlSet001\Control" /v "ServicesPipeTimeout" /t REG
 # Kernel Memory Management (Radical RAM Optimization & Page Combining)
 reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\Session Manager\Memory Management" /v "DisablePageCombining" /t REG_DWORD /d 0 /f > $null 2>&1
 reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\Session Manager\Memory Management" /v "LargeSystemCache" /t REG_DWORD /d 0 /f > $null 2>&1
-reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\Session Manager\Memory Management" /v "DisablePagingExecutive" /t REG_DWORD /d 0 /f > $null 2>&1
+$pagingExecutiveVal = if ($noKernelPaging) { 1 } else { 0 }
+reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\Session Manager\Memory Management" /v "DisablePagingExecutive" /t REG_DWORD /d $pagingExecutiveVal /f > $null 2>&1
+
+# CPU Speculative Execution Mitigations (Spectre / Meltdown toggle: -DisableCPUMitigations)
+if ($disableCPUMitigations) {
+    Write-Host "  [SECURITY WARNING] Disabling CPU speculative execution mitigations (FeatureSettingsOverride=3)..." -ForegroundColor Yellow
+    reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\Session Manager\Memory Management" /v "FeatureSettingsOverride" /t REG_DWORD /d 3 /f > $null 2>&1
+    reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\Session Manager\Memory Management" /v "FeatureSettingsOverrideMask" /t REG_DWORD /d 3 /f > $null 2>&1
+}
 reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\Session Manager\Memory Management" /v "ClearPageFileAtShutdown" /t REG_DWORD /d 0 /f > $null 2>&1
 reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\Session Manager\Memory Management\PrefetchParameters" /v "EnablePrefetcher" /t REG_DWORD /d 0 /f > $null 2>&1
 reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\Session Manager\Memory Management\PrefetchParameters" /v "EnableSuperfetch" /t REG_DWORD /d 0 /f > $null 2>&1
@@ -4526,6 +4732,7 @@ $serviceConfigs = [ordered]@{
     "lfsvc"                                    = 4  # Geolocation Service
     "MapsBroker"                               = 4  # Downloaded Maps Manager
     "NetTcpPortSharing"                        = 4  # Net.Tcp Port Sharing Service
+    "Ndu"                                      = 4  # Network Data Usage Monitoring (Prevents non-paged pool memory leak)
     "PcaSvc"                                   = 4  # Program Compatibility Assistant
     "PhoneSvc"                                 = 4  # Phone Service
     "PrintNotify"                              = 4  # Print Spooler Notification Service
@@ -4657,8 +4864,35 @@ reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\AppCompat" /v "DisableUAR
 # eclean & AtlasOS - Delivery Optimization (P2P Background Upload) Disabled
 reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\DeliveryOptimization" /v "DODownloadMode" /t REG_DWORD /d 0 /f > $null 2>&1
 
-# eclean & AtlasOS - Fast Startup (Hiberboot) Disabled (Improves SSD longevity and dual-boot consistency)
-reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\Session Manager\Power" /v "HiberbootEnabled" /t REG_DWORD /d 0 /f > $null 2>&1
+# Hibernate & Fast Startup Configuration (HibernateMode = Off / Reduced / Keep)
+switch ($hibernateMode.ToLower()) {
+    'off' {
+        reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\Power" /v "HibernateEnabled" /t REG_DWORD /d 0 /f > $null 2>&1
+        reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\Session Manager\Power" /v "HiberbootEnabled" /t REG_DWORD /d 0 /f > $null 2>&1
+    }
+    'reduced' {
+        reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\Power" /v "HibernateEnabled" /t REG_DWORD /d 1 /f > $null 2>&1
+        reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\Power" /v "HiberFileSizePercent" /t REG_DWORD /d 20 /f > $null 2>&1
+        reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\Session Manager\Power" /v "HiberbootEnabled" /t REG_DWORD /d 1 /f > $null 2>&1
+    }
+    default {
+        # Keep OS default or disable fast startup for AtlasOS longevity
+        if ($atlasReviOSMode) {
+            reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\Session Manager\Power" /v "HiberbootEnabled" /t REG_DWORD /d 0 /f > $null 2>&1
+        }
+    }
+}
+
+# Full-Screen Optimizations (DisableFSE: Mode 2 = Fullscreen Exclusive priority)
+if ($disableFSE) {
+    reg.exe add "HKLM\zNTUSER\System\GameConfigStore" /v "GameDVR_FSEBehaviorMode" /t REG_DWORD /d 2 /f > $null 2>&1
+    reg.exe add "HKLM\zNTUSER\System\GameConfigStore" /v "GameDVR_HonorUserFSEBehaviorMode" /t REG_DWORD /d 1 /f > $null 2>&1
+    reg.exe add "HKLM\zDEFAULT\System\GameConfigStore" /v "GameDVR_FSEBehaviorMode" /t REG_DWORD /d 2 /f > $null 2>&1
+    reg.exe add "HKLM\zDEFAULT\System\GameConfigStore" /v "GameDVR_HonorUserFSEBehaviorMode" /t REG_DWORD /d 1 /f > $null 2>&1
+}
+
+# DNS Client LLMNR & Multicast Suppression
+reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows NT\DNSClient" /v "EnableMulticast" /t REG_DWORD /d 0 /f > $null 2>&1
 
 # Enable Win32 Long Paths
 reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\FileSystem" /v "LongPathsEnabled" /t REG_DWORD /d 1 /f > $null 2>&1
@@ -4730,8 +4964,14 @@ if ($atlasReviOSMode) {
     # 1. Network QoS Latency (100% full bandwidth allocation)
     reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\Psched" /v "NonBestEffortLimit" /t REG_DWORD /d 0 /f > $null 2>&1
 
-    # 2. Storage & Crash Control (Disable memory dump bloat and crash alerts)
-    reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\CrashControl" /v "CrashDumpEnabled" /t REG_DWORD /d 0 /f > $null 2>&1
+    # 2. Storage & Crash Control (Configurable CrashDumpMode: Automatic=7, Small=3, None=0)
+    $cdVal = switch ($crashDumpMode.ToLower()) {
+        'none'      { 0 }
+        'small'     { 3 }
+        'automatic' { 7 }
+        default     { if ($atlasReviOSMode) { 0 } else { 7 } }
+    }
+    reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\CrashControl" /v "CrashDumpEnabled" /t REG_DWORD /d $cdVal /f > $null 2>&1
     reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\CrashControl" /v "LogEvent" /t REG_DWORD /d 0 /f > $null 2>&1
     reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\CrashControl" /v "SendAlert" /t REG_DWORD /d 0 /f > $null 2>&1
 
@@ -5092,6 +5332,27 @@ reg.exe add $coreParkingGuid /v "ValueMin" /t REG_DWORD /d 0 /f > $null 2>&1
 $eppGuid = "HKLM\zSYSTEM\ControlSet001\Control\Power\PowerSettings\54533251-82be-4824-96c1-47b60b740d00\36688441-e06f-430b-a16e-b96ff9d400f3"
 reg.exe add $eppGuid /v "ValueMax" /t REG_DWORD /d 0 /f > $null 2>&1
 reg.exe add $eppGuid /v "ValueMin" /t REG_DWORD /d 0 /f > $null 2>&1
+
+# Modular Power Presets (USB Selective Suspend, PCIe ASPM, CPU Boost, Disk Idle)
+$psBase = "HKLM\zSYSTEM\ControlSet001\Control\Power\PowerSettings"
+$resolvedPower = if ($powerPreset -and $script:PowerPresets.Contains($powerPreset)) { $script:PowerPresets[$powerPreset] } else { $script:PowerPresets['Desktop'] }
+
+$usbVal = if ($disableUSBSuspend) { 0 } else { $resolvedPower.UsbSuspend }
+reg.exe add "$psBase\2a737441-1930-4402-8d77-b2bebba308a3\48e6b7a6-50f5-4782-a5d4-53bb8f07e226" /v "ACSettingIndex" /t REG_DWORD /d $usbVal /f > $null 2>&1
+reg.exe add "$psBase\2a737441-1930-4402-8d77-b2bebba308a3\48e6b7a6-50f5-4782-a5d4-53bb8f07e226" /v "DCSettingIndex" /t REG_DWORD /d $usbVal /f > $null 2>&1
+
+reg.exe add "$psBase\501a4d13-42ac-4436-9e57-8b0070663244\ee12f906-d276-4167-bf9b-b4780a50c1fa" /v "ACSettingIndex" /t REG_DWORD /d $resolvedPower.PcieLpm /f > $null 2>&1
+reg.exe add "$psBase\501a4d13-42ac-4436-9e57-8b0070663244\ee12f906-d276-4167-bf9b-b4780a50c1fa" /v "DCSettingIndex" /t REG_DWORD /d $resolvedPower.PcieLpm /f > $null 2>&1
+
+$boostAc = if ($cpuBoostMode -eq 'Aggressive') { 2 } elseif ($cpuBoostMode -eq 'Efficient') { 1 } elseif ($cpuBoostMode -eq 'Off') { 0 } else { $resolvedPower.BoostAc }
+$boostDc = if ($cpuBoostMode -eq 'Aggressive') { 2 } elseif ($cpuBoostMode -eq 'Efficient') { 1 } elseif ($cpuBoostMode -eq 'Off') { 0 } else { $resolvedPower.BoostDc }
+$boostGuid = "$psBase\54533251-82be-4824-96c1-47b60b740d00\be337238-0d82-4146-a960-4f3749d470c7"
+reg.exe add $boostGuid /v "ACSettingIndex" /t REG_DWORD /d $boostAc /f > $null 2>&1
+reg.exe add $boostGuid /v "DCSettingIndex" /t REG_DWORD /d $boostDc /f > $null 2>&1
+
+$diskGuid = "$psBase\0012ee47-9041-4b5d-9b77-535fba8b1442\abfc2519-3608-4c2a-9dea-dfd1d45f50c4"
+reg.exe add $diskGuid /v "ACSettingIndex" /t REG_DWORD /d $resolvedPower.DiskIdle /f > $null 2>&1
+reg.exe add $diskGuid /v "DCSettingIndex" /t REG_DWORD /d $resolvedPower.DiskIdle /f > $null 2>&1
 # Exclude display/chipset driver overwrites in Windows Update (prevents GPU driver rollback)
 reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate" /v "ExcludeWUDriversInQualityUpdate" /t REG_DWORD /d 1 /f > $null 2>&1
 
@@ -5111,6 +5372,12 @@ try {
                 New-Item -Path $msiKey -Force -ErrorAction SilentlyContinue | Out-Null
             }
             Set-ItemProperty -Path $msiKey -Name "MSISupported" -Value 1 -Type DWord -Force -ErrorAction SilentlyContinue
+        }
+        # NVIDIA Ultra Low Latency Registry Tuning (PowerMizer & Per-CPU Core DPC)
+        if ($nvidiaLowLatency -and $_.PSPath -match 'VEN_10DE') {
+            Set-ItemProperty -Path $_.PSPath -Name "PowerMizerEnable" -Value 1 -Type DWord -Force -ErrorAction SilentlyContinue
+            Set-ItemProperty -Path $_.PSPath -Name "PerfLevelSrc" -Value 13090 -Type DWord -Force -ErrorAction SilentlyContinue # 0x3322
+            Set-ItemProperty -Path $_.PSPath -Name "RmGpsPsEnablePerCpuCoreDpc" -Value 1 -Type DWord -Force -ErrorAction SilentlyContinue
         }
     }
 } catch {}
@@ -5269,6 +5536,20 @@ echo %DATE% %TIME% SetupComplete > "%SystemDrive%\ProgramData\nano11\setupcomple
         Write-Host "  - Drivers staged in sources\`$OEM\`$1\Drivers" -ForegroundColor Green
     }
     
+    # Stage feature flags for FirstLogon.ps1 automation
+    if ($disableMemCompression) {
+        Set-Content -LiteralPath (Join-Path -Path $setupScriptsDir -ChildPath "disable-memcompression.flag") -Value "1" -Encoding ascii
+    }
+    if ($noHypervisor -or (-not $wslSupport -and $selectedProfile -in @('extreme', 'handheld', 'audio'))) {
+        Set-Content -LiteralPath (Join-Path -Path $setupScriptsDir -ChildPath "no-hypervisor.flag") -Value "1" -Encoding ascii
+    }
+    if ($script:activeTweakGroups['NetworkStack']) {
+        Set-Content -LiteralPath (Join-Path -Path $setupScriptsDir -ChildPath "disable-netbios.flag") -Value "1" -Encoding ascii
+    }
+    if ($removeWebViewPostOOBE) {
+        Set-Content -LiteralPath (Join-Path -Path $setupScriptsDir -ChildPath "remove-webview.flag") -Value "1" -Encoding ascii
+    }
+
     # Save build traceability manifest (nano11-build-info.json)
     $buildInfoObj = [ordered]@{
         BuilderVersion  = $script:Nano11Version
@@ -5684,7 +5965,8 @@ if ($exportESDMode) {
 
 if (-not $esdSuccess) {
     Write-Host "Exporting modified image to highly-compressed install.wim (LZX)..." -ForegroundColor Green
-    & dism.exe /English /Export-Image "/SourceImageFile:$destWim" "/SourceIndex:$index" "/DestinationImageFile:$tempWim" /Compress:max
+    $compressArg = if ($fastExport) { "/Compress:fast" } else { "/Compress:max" }
+    & dism.exe /English /Export-Image "/SourceImageFile:$destWim" "/SourceIndex:$index" "/DestinationImageFile:$tempWim" $compressArg
     if ($LASTEXITCODE -eq 0 -and (Test-Path -LiteralPath $tempWim) -and ((Get-Item -LiteralPath $tempWim).Length -gt 1GB)) {
         Remove-Item -LiteralPath $destWim -Force -ErrorAction SilentlyContinue
         Rename-Item -LiteralPath $tempWim -NewName "install.wim" -Force
@@ -5990,7 +6272,12 @@ foreach ($c in $efiSysCandidates) {
 
 # Determine bootdata parameters based on discovered boot sector files
 $bootData = $null
-if ($efiSys -and $etfsBoot -and ($architecture -ne 'arm64')) {
+if ($uefiOnly -and $efiSys) {
+    # Force UEFI-only bootdata (no BIOS boot sector)
+    $bootData = "1#pEF,e,b$efiSys"
+    Write-Host "Configured UEFI-Only Boot (-UefiOnly):" -ForegroundColor Green
+    Write-Host "  - UEFI Boot Sector: $efiSys" -ForegroundColor Gray
+} elseif ($efiSys -and $etfsBoot -and ($architecture -ne 'arm64')) {
     # Dual boot: BIOS (etfsboot.com) + UEFI (efisys.bin)
     $bootData = "2#p0,e,b$etfsBoot#pEF,e,b$efiSys"
     Write-Host "Configured Dual Boot (BIOS + UEFI):" -ForegroundColor Green
