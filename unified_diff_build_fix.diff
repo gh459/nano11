@@ -1,0 +1,1277 @@
+--- BASELINE_PRE_BUILD_FIX_BUILDER.bak
++++ nano11builder.ps1
+@@ -1790,0 +1790,4 @@
++    $script:CurrentBuildPhase = "Phase ${PhaseNumber}: $PhaseName"
++    if ($script:DiagnosticData) {
++        $script:DiagnosticData.FailurePhase = $script:CurrentBuildPhase
++    }
+@@ -4608,0 +4612,9 @@
++# Decoupled Build Lifecycle State Flags (Rule 1)
++$script:ExportSucceeded = $false
++$script:FinalPayloadVerified = $false
++$script:VerifiedFinalWimSha256 = $null
++$script:IsoGenerated = $false
++$script:IsoPayloadVerified = $false
++$script:BuildSucceeded = $false
++$isoCreatedSuccessfully = $false
++
+@@ -4614,0 +4627,86 @@
++# Diagnostic Session Isolation (Rule 2)
++$script:BuildId = [System.Guid]::NewGuid().ToString("N").Substring(0, 8) + "_" + (Get-Date -Format "yyyyMMdd_HHmmss")
++$script:DiagDir = Join-Path -Path $scriptDir -ChildPath "build_diagnostics\$($script:BuildId)"
++New-Item -ItemType Directory -Path $script:DiagDir -Force | Out-Null
++
++$script:DiagnosticData = [ordered]@{
++    BuildId                  = $script:BuildId
++    Timestamp                = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
++    BuilderScriptSha256      = (Get-FileHash -LiteralPath $PSCommandPath -Algorithm SHA256 -ErrorAction SilentlyContinue).Hash
++    DismPath                 = $null
++    DismVersion              = $null
++    SourceIsoPath            = $SourceIso
++    SourceIsoSha256          = $null
++    SelectedImageIndex       = $null
++    SelectedImageName        = $null
++    PreExportWimSha256       = $null
++    ExportedWimSha256        = $null
++    FinalWimSha256           = $null
++    ExportCommand            = $null
++    ExportExitCode           = $null
++    FinalApplyCommand        = $null
++    FinalApplyExitCode       = $null
++    OscdimgCommand           = $null
++    OscdimgExitCode          = $null
++    IsoEmbeddedWimSha256     = $null
++    IsoPayloadMatch          = $false
++    ExportSucceeded          = $false
++    FinalPayloadVerified     = $false
++    IsoGenerated             = $false
++    IsoPayloadVerified       = $false
++    BuildSucceeded           = $false
++    FailurePhase             = $null
++    FailureMessage           = $null
++    FailureStackTrace        = $null
++    PreservedArtifacts       = @()
++}
++
++function Write-Nano11DiagnosticReport {
++    param([string]$StatusMessage = "")
++    try {
++        $jsonPath = Join-Path -Path $script:DiagDir -ChildPath "build_diagnostic_report.json"
++        $script:DiagnosticData | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $jsonPath -Encoding utf8
++
++        $txtPath = Join-Path -Path $script:DiagDir -ChildPath "build_diagnostic_summary.txt"
++        $txtLines = @(
++            "=========================================================",
++            " nano11 Build Diagnostic Summary",
++            "=========================================================",
++            "Build ID:                 $($script:DiagnosticData.BuildId)",
++            "Timestamp:                $($script:DiagnosticData.Timestamp)",
++            "Builder Script SHA256:    $($script:DiagnosticData.BuilderScriptSha256)",
++            "Overall Build Status:     $(if ($script:DiagnosticData.BuildSucceeded) { 'SUCCESS' } else { 'FAILED' })",
++            "Failure Phase:            $($script:DiagnosticData.FailurePhase)",
++            "Failure Message:          $($script:DiagnosticData.FailureMessage)",
++            "---------------------------------------------------------",
++            "DISM Path:                $($script:DiagnosticData.DismPath)",
++            "DISM Version:             $($script:DiagnosticData.DismVersion)",
++            "Source ISO:               $($script:DiagnosticData.SourceIsoPath)",
++            "Source ISO SHA256:        $($script:DiagnosticData.SourceIsoSha256)",
++            "Selected Image Index:     $($script:DiagnosticData.SelectedImageIndex)",
++            "Selected Image Name:      $($script:DiagnosticData.SelectedImageName)",
++            "---------------------------------------------------------",
++            "Export Succeeded:         $($script:DiagnosticData.ExportSucceeded)",
++            "Export Exit Code:         $($script:DiagnosticData.ExportExitCode)",
++            "Pre-Export WIM SHA256:    $($script:DiagnosticData.PreExportWimSha256)",
++            "Exported WIM SHA256:      $($script:DiagnosticData.ExportedWimSha256)",
++            "---------------------------------------------------------",
++            "Final Apply Verified:     $($script:DiagnosticData.FinalPayloadVerified)",
++            "Final Apply Exit Code:    $($script:DiagnosticData.FinalApplyExitCode)",
++            "Final WIM SHA256:         $($script:DiagnosticData.FinalWimSha256)",
++            "---------------------------------------------------------",
++            "ISO Generated:            $($script:DiagnosticData.IsoGenerated)",
++            "Oscdimg Exit Code:        $($script:DiagnosticData.OscdimgExitCode)",
++            "ISO Embedded WIM SHA256:  $($script:DiagnosticData.IsoEmbeddedWimSha256)",
++            "ISO Payload Match:        $($script:DiagnosticData.IsoPayloadMatch)",
++            "---------------------------------------------------------",
++            "Preserved Artifacts:",
++            ($script:DiagnosticData.PreservedArtifacts | ForEach-Object { "  - $_" }),
++            "========================================================="
++        )
++        $txtLines | Set-Content -LiteralPath $txtPath -Encoding utf8
++    } catch {
++        Write-Warning "Failed writing diagnostic report: $_"
++    }
++}
++
+@@ -4634,0 +4733,4 @@
++    if ($script:DiagnosticData) {
++        $script:DiagnosticData.DismPath = $dismPath
++        $script:DiagnosticData.DismVersion = $dismVerStr
++    }
+@@ -8580,17 +8683,48 @@
+-$dismExportLog = Join-Path -Path $workDir -ChildPath "dism_export.log"
+-$exportIntegrityReport = Join-Path -Path $workDir -ChildPath "dism_export_integrity_report.txt"
+-Remove-Item -LiteralPath $dismExportLog, $exportIntegrityReport -Force -ErrorAction SilentlyContinue
+-
+-# A. Recovery ESD Export (if requested)
+-if ($exportESDMode) {
+-    Write-Host "Exporting modified image to recovery-compressed install.esd (LZMS)..." -ForegroundColor Green
+-    $exportOut = & dism.exe /English /Export-Image "/SourceImageFile:$destWim" "/SourceIndex:$index" "/DestinationImageFile:$finalEsd" /Compress:recovery "/ScratchDir:$exportScratch" /CheckIntegrity "/LogPath:$dismExportLog" 2>&1
+-    $exportExit = $LASTEXITCODE
+-
+-    $integrityEntry = @(
+-        "=== Phase 13 ESD Export-Image with /CheckIntegrity ===",
+-        "Timestamp:    $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')",
+-        "ExitCode:     $exportExit",
+-        "Raw Output:",
+-        ($exportOut -join "`r`n"),
+-        "======================================================="
++$dismExportLog = Join-Path -Path $script:DiagDir -ChildPath "dism_export.log"
++$exportIntegrityReport = Join-Path -Path $script:DiagDir -ChildPath "dism_export_integrity_report.txt"
++
++# Guard against unverified ESD / SWM modes (Rule 9)
++if ($exportESDMode) {
++    $script:DiagnosticData.FailurePhase = "Phase 13: Export Mode Validation"
++    $script:DiagnosticData.FailureMessage = "ESD export requested but deep apply verification for ESD is unverified in this build. Please build standard WIM."
++    Write-Nano11DiagnosticReport "ESD mode rejected"
++    throw "ESD export mode is disabled because deep apply verification for ESD is unverified. Please build standard WIM."
++}
++if ($splitWIMMode) {
++    $script:DiagnosticData.FailurePhase = "Phase 13: Export Mode Validation"
++    $script:DiagnosticData.FailureMessage = "Split-WIM (SWM) export requested but multipart apply verification is unverified in this build. Please build standard WIM."
++    Write-Nano11DiagnosticReport "SWM mode rejected"
++    throw "Split-WIM (SWM) export mode is disabled because multipart apply verification is unverified. Please build standard WIM."
++}
++
++# Preserve pre-export original WIM backup (Rule 5)
++$destWimBackup = Join-Path -Path "$nano11Dir\sources" -ChildPath "install_pre_export_backup.wim"
++$tempExportWim = Join-Path -Path "$nano11Dir\sources" -ChildPath "install_export_temp.wim"
++
++if (Test-Path -LiteralPath $destWim) {
++    $script:DiagnosticData.PreExportWimSha256 = (Get-FileHash -LiteralPath $destWim -Algorithm SHA256).Hash
++}
++
++# Standard WIM Export with Resilient Compression (/Compress:max -> /Compress:fast) with STRICT /CheckIntegrity (Rule 3)
++$compressModes = if ($fastExport) { @("/Compress:fast") } else { @("/Compress:max", "/Compress:fast") }
++foreach ($compMode in $compressModes) {
++    Write-Host "Exporting modified image to single-edition install.wim ($compMode /CheckIntegrity)..." -ForegroundColor Green
++    if (Test-Path -LiteralPath $tempExportWim) {
++        Remove-Item -LiteralPath $tempExportWim -Force -ErrorAction Stop
++    }
++
++    $exportCmdStr = "dism.exe /English /Export-Image /SourceImageFile:`"$destWim`" /SourceIndex:$index /DestinationImageFile:`"$tempExportWim`" $compMode /ScratchDir:`"$exportScratch`" /CheckIntegrity /LogPath:`"$dismExportLog`""
++    $script:DiagnosticData.ExportCommand = $exportCmdStr
++
++    $exportOut = & dism.exe /English /Export-Image "/SourceImageFile:$destWim" "/SourceIndex:$index" "/DestinationImageFile:$tempExportWim" $compMode "/ScratchDir:$exportScratch" /CheckIntegrity "/LogPath:$dismExportLog" 2>&1
++    $exportExit = $LASTEXITCODE
++    $script:DiagnosticData.ExportExitCode = $exportExit
++
++    $integrityEntry = @(
++        "=== Phase 13 Export-Image ($compMode /CheckIntegrity) ===",
++        "Timestamp:  $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')",
++        "Command:    $exportCmdStr",
++        "ExitCode:   $exportExit",
++        "Raw Output:",
++        ($exportOut -join "`r`n"),
++        "=========================================================="
+@@ -8600,32 +8734,9 @@
+-    if ($exportExit -eq 0 -and (Test-Path -LiteralPath $finalEsd) -and ((Get-Item -LiteralPath $finalEsd).Length -gt 1GB)) {
+-        Write-Host "install.esd successfully created with /CheckIntegrity ($([math]::Round((Get-Item -LiteralPath $finalEsd).Length / 1GB, 2)) GB). Removing temporary install.wim..." -ForegroundColor Green
+-        Remove-Item -LiteralPath $destWim -Force -ErrorAction SilentlyContinue
+-        $script:StreamIntegrityVerified = $true
+-        $script:StreamIntegrityMethod = "DISM /Export-Image /CheckIntegrity (ESD, ExitCode: 0)"
+-        $exportSuccess = $true
+-    } else {
+-        Write-Host "Notice: ESD export with /CheckIntegrity returned exit code $exportExit. Raw output: $(($exportOut | Select-Object -First 2) -join ' '). Retrying without /CheckIntegrity..." -ForegroundColor Yellow
+-        Remove-Item -LiteralPath $finalEsd -Force -ErrorAction SilentlyContinue
+-        $exportRetryOut = & dism.exe /English /Export-Image "/SourceImageFile:$destWim" "/SourceIndex:$index" "/DestinationImageFile:$finalEsd" /Compress:recovery "/ScratchDir:$exportScratch" "/LogPath:$dismExportLog" 2>&1
+-        $exportRetryExit = $LASTEXITCODE
+-
+-        $retryEntry = @(
+-            "=== Phase 13 ESD Export-Image without /CheckIntegrity (Fallback) ===",
+-            "Timestamp:    $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')",
+-            "ExitCode:     $exportRetryExit",
+-            "Raw Output:",
+-            ($exportRetryOut -join "`r`n"),
+-            "===================================================================="
+-        ) -join "`r`n"
+-        [System.IO.File]::AppendAllText($exportIntegrityReport, "$retryEntry`r`n", [System.Text.Encoding]::UTF8)
+-
+-        if ($exportRetryExit -eq 0 -and (Test-Path -LiteralPath $finalEsd) -and ((Get-Item -LiteralPath $finalEsd).Length -gt 1GB)) {
+-            Write-Host "install.esd successfully created ($([math]::Round((Get-Item -LiteralPath $finalEsd).Length / 1GB, 2)) GB). Removing temporary install.wim..." -ForegroundColor Green
+-            Remove-Item -LiteralPath $destWim -Force -ErrorAction SilentlyContinue
+-            $script:StreamIntegrityVerified = $false
+-            $script:StreamIntegrityMethod = "Fallback ESD export without /CheckIntegrity (ExitCode: 0)"
+-            $exportSuccess = $true
+-        } else {
+-            Write-Host "Recovery export failed. Cleaning up incomplete ESD and falling back to install.wim..." -ForegroundColor Yellow
+-            Remove-Item -LiteralPath $finalEsd -Force -ErrorAction SilentlyContinue
+-        }
++    if ($exportExit -eq 0 -and (Test-Path -LiteralPath $tempExportWim) -and ((Get-Item -LiteralPath $tempExportWim).Length -gt 500MB)) {
++        $exportSuccess = $true
++        break
++    } else {
++        Write-Host "Notice: Export with $compMode /CheckIntegrity failed (Exit code: $exportExit)." -ForegroundColor Yellow
++        if (Test-Path -LiteralPath $tempExportWim) {
++            Remove-Item -LiteralPath $tempExportWim -Force -ErrorAction SilentlyContinue
++        }
++        Start-Sleep -Seconds 1
+@@ -8635,128 +8746,28 @@
+-# B. Standard WIM Export with Dual-Tier Resilient Compression (max -> fast)
+-if (-not $exportSuccess) {
+-    $compressModes = @()
+-    if ($fastExport) {
+-        $compressModes += "/Compress:fast"
+-    } else {
+-        $compressModes += "/Compress:max"
+-        $compressModes += "/Compress:fast" # Resilient fallback if max encounters memory exception
+-    }
+-
+-    foreach ($compMode in $compressModes) {
+-        Write-Host "Exporting modified image to single-edition install.wim ($compMode)..." -ForegroundColor Green
+-        Remove-Item -LiteralPath $tempWim -Force -ErrorAction SilentlyContinue
+-
+-        $exportOut = & dism.exe /English /Export-Image "/SourceImageFile:$destWim" "/SourceIndex:$index" "/DestinationImageFile:$tempWim" $compMode "/ScratchDir:$exportScratch" /CheckIntegrity "/LogPath:$dismExportLog" 2>&1
+-        $exportExit = $LASTEXITCODE
+-
+-        $integrityEntry = @(
+-            "=== Phase 13 Export-Image with /CheckIntegrity ===",
+-            "Timestamp:    $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')",
+-            "Mode:         $compMode",
+-            "ExitCode:     $exportExit",
+-            "Raw Output:",
+-            ($exportOut -join "`r`n"),
+-            "=================================================="
+-        ) -join "`r`n"
+-        [System.IO.File]::AppendAllText($exportIntegrityReport, "$integrityEntry`r`n", [System.Text.Encoding]::UTF8)
+-
+-        if ($exportExit -eq 0 -and (Test-Path -LiteralPath $tempWim) -and ((Get-Item -LiteralPath $tempWim).Length -gt 1GB)) {
+-            $script:StreamIntegrityVerified = $true
+-            $script:StreamIntegrityMethod = "DISM /Export-Image /CheckIntegrity (ExitCode: 0)"
+-            Remove-Item -LiteralPath $destWim -Force -ErrorAction SilentlyContinue
+-            Rename-Item -LiteralPath $tempWim -NewName "install.wim" -Force
+-            $exportedWimSize = (Get-Item -LiteralPath $finalWim).Length
+-            Write-Host "install.wim successfully exported with /CheckIntegrity ($([math]::Round($exportedWimSize / 1GB, 2)) GB)." -ForegroundColor Green
+-            $exportSuccess = $true
+-            break
+-        } else {
+-            Write-Host "Notice: Export with /CheckIntegrity returned exit code $exportExit. Raw output: $(($exportOut | Select-Object -First 2) -join ' '). Retrying without /CheckIntegrity..." -ForegroundColor Yellow
+-            Remove-Item -LiteralPath $tempWim -Force -ErrorAction SilentlyContinue
+-            Start-Sleep -Seconds 1
+-            $exportRetryOut = & dism.exe /English /Export-Image "/SourceImageFile:$destWim" "/SourceIndex:$index" "/DestinationImageFile:$tempWim" $compMode "/ScratchDir:$exportScratch" "/LogPath:$dismExportLog" 2>&1
+-            $exportRetryExit = $LASTEXITCODE
+-
+-            $retryEntry = @(
+-                "=== Phase 13 Export-Image without /CheckIntegrity (Fallback) ===",
+-                "Timestamp:    $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')",
+-                "Mode:         $compMode",
+-                "ExitCode:     $exportRetryExit",
+-                "Raw Output:",
+-                ($exportRetryOut -join "`r`n"),
+-                "================================================================"
+-            ) -join "`r`n"
+-            [System.IO.File]::AppendAllText($exportIntegrityReport, "$retryEntry`r`n", [System.Text.Encoding]::UTF8)
+-
+-            if ($exportRetryExit -eq 0 -and (Test-Path -LiteralPath $tempWim) -and ((Get-Item -LiteralPath $tempWim).Length -gt 1GB)) {
+-                $script:StreamIntegrityVerified = $false
+-                $script:StreamIntegrityMethod = "Fallback export without /CheckIntegrity (ExitCode: 0)"
+-                Remove-Item -LiteralPath $destWim -Force -ErrorAction SilentlyContinue
+-                Rename-Item -LiteralPath $tempWim -NewName "install.wim" -Force
+-                $exportedWimSize = (Get-Item -LiteralPath $finalWim).Length
+-                Write-Host "install.wim successfully exported ($([math]::Round($exportedWimSize / 1GB, 2)) GB)." -ForegroundColor Green
+-                $exportSuccess = $true
+-                break
+-            } else {
+-                Write-Host "Export with $compMode did not complete successfully (Exit code: $exportRetryExit). Cleaning up incomplete file..." -ForegroundColor Yellow
+-                Remove-Item -LiteralPath $tempWim -Force -ErrorAction SilentlyContinue
+-                Start-Sleep -Seconds 1
+-            }
+-        }
+-    }
+-}
+-
+-# C. Ultimate Fallback: In-place index pruning if Export-Image failed
+-# Prunes all unmodified editions from original install.wim so that ONLY the modified target edition remains.
+-# This prevents Windows Setup from showing edition selection prompts and prevents clean/bloated editions from being installed.
+-if (-not $exportSuccess) {
+-    Write-Host "Notice: Direct export failed. Initiating automated in-place pruning of unmodified editions from install.wim to guarantee single-edition Pro deployment..." -ForegroundColor Yellow
+-
+-    $maxPruneAttempts = 10
+-    $pruneAttempt = 0
+-    $failedPruneIndices = @()
+-    while ($pruneAttempt -lt $maxPruneAttempts) {
+-        $pruneAttempt++
+-        $currentInfo = & dism.exe /English /Get-WimInfo "/WimFile:$destWim"
+-        $entries = @()
+-        $cur = $null
+-        foreach ($line in ($currentInfo -split '\r?\n')) {
+-            if ($line -match '^\s*Index\s*:\s*(\d+)') {
+-                $cur = [PSCustomObject]@{ Index = [int]$matches[1]; Name = "" }
+-                $entries += $cur
+-            } elseif ($cur -and ($line -match '^\s*Name\s*:\s*(.+)')) {
+-                $cur.Name = $matches[1].Trim()
+-            }
+-        }
+-
+-        if ($entries.Count -le 1) {
+-            Write-Host "install.wim now contains only a single edition ($($entries[0].Name)). Universal setup compliance guaranteed." -ForegroundColor Green
+-            break
+-        }
+-
+-        # Select highest index among unmodified editions to prune safely (excluding previously failed ones)
+-        $toRemove = $entries | Where-Object {
+-            ($_.Index -notin $failedPruneIndices) -and (if ($targetEditionName) { $_.Name -ne $targetEditionName } else { $_.Index -ne [int]$index })
+-        } | Select-Object -Last 1
+-
+-        if (-not $toRemove) {
+-            $toRemove = $entries | Where-Object { ($_.Index -notin $failedPruneIndices) -and ($_.Index -ne [int]$index) } | Select-Object -Last 1
+-        }
+-
+-        if ($toRemove) {
+-            Write-Host "Pruning unmodified edition [Index $($toRemove.Index): $($toRemove.Name)] from install.wim..." -ForegroundColor Cyan
+-            # Do not specify /CheckIntegrity on in-place Delete-Image to prevent aborting on preexisting table mismatches
+-            & dism.exe /English /Delete-Image "/ImageFile:$destWim" "/Index:$($toRemove.Index)" "/ScratchDir:$exportScratch"
+-            if ($LASTEXITCODE -ne 0) {
+-                Write-Host "Warning: Failed to delete edition Index $($toRemove.Index) (Exit code: $LASTEXITCODE)." -ForegroundColor Yellow
+-                $failedPruneIndices += $toRemove.Index
+-            }
+-        } else {
+-            break
+-        }
+-    }
+-
+-    if (Test-Path -LiteralPath $destWim) {
+-        $finalSize = (Get-Item -LiteralPath $destWim).Length
+-        Write-Host "Retained pruned install.wim ($([math]::Round($finalSize / 1GB, 2)) GB) as single-edition installation payload." -ForegroundColor Green
+-    }
+-}
++if (-not $exportSuccess) {
++    $script:ExportSucceeded = $false
++    $script:DiagnosticData.ExportSucceeded = $false
++    $script:DiagnosticData.FailurePhase = "Phase 13: Export Image"
++    $script:DiagnosticData.FailureMessage = "Export-Image with /CheckIntegrity failed under all compression modes. Retaining original pre-export WIM for diagnosis."
++    Write-Nano11DiagnosticReport "Export failed"
++    throw "Phase 13: Export-Image with /CheckIntegrity failed under all compression modes. Halting build to preserve pre-export WIM."
++}
++
++# Verify exported temporary WIM metadata before replacing original
++$tempInfoOut = & dism.exe /English /Get-WimInfo "/WimFile:$tempExportWim" 2>&1
++if ($LASTEXITCODE -ne 0) {
++    throw "Phase 13: Exported temporary WIM metadata inspection failed."
++}
++
++# Step 2: Move original WIM to unique backup (Rule 5)
++Move-Item -LiteralPath $destWim -Destination $destWimBackup -Force -ErrorAction Stop
++# Step 3: Move export output to final install.wim
++Move-Item -LiteralPath $tempExportWim -Destination $destWim -Force -ErrorAction Stop
++
++# Step 4: Record final path existence, size, SHA256
++$finalWimItem = Get-Item -LiteralPath $destWim -ErrorAction Stop
++$script:DiagnosticData.ExportedWimSha256 = (Get-FileHash -LiteralPath $destWim -Algorithm SHA256).Hash
++$script:ExportSucceeded = $true
++$script:DiagnosticData.ExportSucceeded = $true
++$script:StreamIntegrityVerified = $true
++$script:StreamIntegrityMethod = "DISM /Export-Image /CheckIntegrity (ExitCode: 0)"
++Write-Host "install.wim successfully exported with /CheckIntegrity ($([math]::Round($finalWimItem.Length / 1GB, 2)) GB)." -ForegroundColor Green
+@@ -8767,14 +8778,0 @@
+-# Split-WIM (install.swm) for 100% FAT32 USB compatibility
+-if ($splitWIMMode -and (Test-Path -LiteralPath $finalWim)) {
+-    Write-Host "Splitting install.wim into <= 3800MB chunks for 100% FAT32 USB compatibility (install.swm)..." -ForegroundColor Cyan
+-    $swmTarget = Join-Path -Path "$nano11Dir\sources" -ChildPath "install.swm"
+-    & dism.exe /English /Split-Image "/ImageFile:$finalWim" "/SWMFile:$swmTarget" /FileSize:3800
+-    if ($LASTEXITCODE -eq 0 -and (Test-Path -LiteralPath $swmTarget)) {
+-        $swmParts = Get-ChildItem -Path "$nano11Dir\sources" -Filter "install*.swm"
+-        Write-Host "install.swm successfully generated ($($swmParts.Count) parts). Removing single install.wim..." -ForegroundColor Green
+-        Remove-Item -LiteralPath $finalWim -Force -ErrorAction SilentlyContinue
+-    } else {
+-        Write-Host "Warning: Split-Image failed. Retaining single install.wim." -ForegroundColor Yellow
+-    }
+-}
+-
+@@ -8865,145 +8862,136 @@
+-$esdCheck = Join-Path -Path "$nano11Dir\sources" -ChildPath "install.esd"
+-$wimCheck = Join-Path -Path "$nano11Dir\sources" -ChildPath "install.wim"
+-$swmCheck = Join-Path -Path "$nano11Dir\sources" -ChildPath "install.swm"
+-
+-$validEsd = (Test-Path -LiteralPath $esdCheck) -and ((Get-Item -LiteralPath $esdCheck).Length -gt 1GB)
+-$validWim = (Test-Path -LiteralPath $wimCheck) -and ((Get-Item -LiteralPath $wimCheck).Length -gt 1GB)
+-$validSwm = (Test-Path -LiteralPath $swmCheck) -and ((Get-Item -LiteralPath $swmCheck).Length -gt 500MB)
+-
+-# Remove any corrupt stub files or invalid partial files (< 1GB / < 500MB)
+-if (-not $validEsd -and (Test-Path -LiteralPath $esdCheck)) {
+-    Write-Host "Warning: Corrupt or incomplete install.esd detected ($((Get-Item -LiteralPath $esdCheck).Length) bytes). Removing..." -ForegroundColor Yellow
+-    Remove-Item -LiteralPath $esdCheck -Force -ErrorAction SilentlyContinue
+-    $validEsd = $false
+-}
+-if (-not $validWim -and (Test-Path -LiteralPath $wimCheck) -and (-not $validSwm)) {
+-    Write-Host "Warning: Corrupt or incomplete install.wim detected ($((Get-Item -LiteralPath $wimCheck).Length) bytes). Removing..." -ForegroundColor Yellow
+-    Remove-Item -LiteralPath $wimCheck -Force -ErrorAction SilentlyContinue
+-    $validWim = $false
+-}
+-
+-if ($validWim) {
+-    $wimSizeGB = [math]::Round((Get-Item -LiteralPath $wimCheck).Length / 1GB, 2)
+-    Write-Host "Final installation image confirmed: install.wim ($wimSizeGB GB)" -ForegroundColor Green
+-    if (Test-Path -LiteralPath $esdCheck) {
+-        Remove-Item -LiteralPath $esdCheck -Force -ErrorAction SilentlyContinue
+-    }
+-
+-    # 1. Metadata Verification via DISM /Get-WimInfo (Strictly metadata query only, no /CheckIntegrity)
+-    Write-Host "Verifying install.wim metadata structure via DISM..." -ForegroundColor Cyan
+-    $dismMetaOut = & dism.exe /English /Get-WimInfo "/WimFile:$wimCheck" 2>&1
+-    $dismMetaExit = $LASTEXITCODE
+-    $metadataValid = ($dismMetaExit -eq 0) -and ($dismMetaOut -match 'Index\s*:\s*\d+')
+-    $metadataStatus = if ($metadataValid) { "PASS" } else { "FAIL" }
+-
+-    if ($metadataStatus -eq "FAIL") {
+-        Write-Host "CRITICAL ERROR: install.wim failed metadata verification via DISM /Get-WimInfo (ExitCode: $dismMetaExit)!" -ForegroundColor Red
+-        $dismMetaOut | ForEach-Object { Write-Host "    $_" -ForegroundColor Red }
+-        throw "install.wim failed metadata verification (ExitCode: $dismMetaExit). Aborting ISO creation."
+-    }
+-
+-    # 2. Stream Integrity Verification (Decoupled from metadata query)
+-    $streamIntegrityStatus = "NOT VERIFIED"
+-    $streamIntegrityDetails = "No stream integrity verification performed"
+-
+-    $sevenZipCandidates = @(
+-        "C:\Program Files\7-Zip\7z.exe",
+-        "C:\Program Files (x86)\7-Zip\7z.exe"
+-    )
+-    $szTool = $sevenZipCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+-
+-    if ($szTool) {
+-        Write-Host "Performing stream integrity test via 7-Zip..." -ForegroundColor Cyan
+-        $szOut = & "$szTool" t "$wimCheck" 2>&1
+-        $szExit = $LASTEXITCODE
+-        $hasDataError = ($szExit -ne 0) -or ($szOut -match 'Data Error|ERROR:|Sub items Errors')
+-
+-        if ($hasDataError) {
+-            $streamIntegrityStatus = "FAIL"
+-            $streamIntegrityDetails = "7-Zip reported stream or data errors (ExitCode: $szExit)"
+-            Write-Host "CRITICAL ERROR: Stream integrity test detected corrupted streams in install.wim!" -ForegroundColor Red
+-            $szOut | Where-Object { $_ -match 'Data Error|ERROR:|Sub items' } | ForEach-Object { Write-Host "    $_" -ForegroundColor Red }
+-            throw "install.wim failed stream integrity verification via 7-Zip. Aborting ISO creation to prevent corrupted media."
+-        } else {
+-            $streamIntegrityStatus = "PASS"
+-            $streamIntegrityDetails = "7-Zip stream test completed successfully (ExitCode: 0)"
+-        }
+-    } elseif ($script:StreamIntegrityVerified) {
+-        $streamIntegrityStatus = "PASS"
+-        $streamIntegrityDetails = "Verified during Phase 13: $script:StreamIntegrityMethod"
+-    } else {
+-        $streamIntegrityStatus = "NOT VERIFIED"
+-        $streamIntegrityDetails = "7-Zip is not available and Phase 13 export did not produce a verified integrity table ($script:StreamIntegrityMethod)"
+-    }
+-
+-    # Output verification summary
+-    Write-Host "Payload Verification Summary:" -ForegroundColor Cyan
+-    Write-Host "  - Metadata Status:         $metadataStatus" -ForegroundColor $(if ($metadataStatus -eq "PASS") { "Green" } else { "Red" })
+-    Write-Host "  - Stream Integrity Status: $streamIntegrityStatus ($streamIntegrityDetails)" -ForegroundColor $(if ($streamIntegrityStatus -eq "PASS") { "Green" } elseif ($streamIntegrityStatus -eq "NOT VERIFIED") { "Yellow" } else { "Red" })
+-
+-    # Save summary report to sources
+-    $wimSummaryPath = Join-Path -Path "$nano11Dir\sources" -ChildPath "wim-verification-summary.txt"
+-    $wimSummaryLines = @(
+-        "=== Final Payload Verification Summary ===",
+-        "Timestamp:               $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')",
+-        "Target Image:            $wimCheck",
+-        "Image Size:              $wimSizeGB GB",
+-        "Metadata Status:         $metadataStatus",
+-        "Stream Integrity Status: $streamIntegrityStatus",
+-        "Stream Details:          $streamIntegrityDetails",
+-        "=========================================="
+-    )
+-    [System.IO.File]::WriteAllLines($wimSummaryPath, $wimSummaryLines, [System.Text.Encoding]::UTF8)
+-} elseif ($validSwm) {
+-    $swmParts = Get-ChildItem -Path "$nano11Dir\sources" -Filter "install*.swm"
+-    Write-Host "Final installation image confirmed: install.swm (Split-WIM: $($swmParts.Count) parts for FAT32 USB support)" -ForegroundColor Green
+-    if (Test-Path -LiteralPath $wimCheck) {
+-        Remove-Item -LiteralPath $wimCheck -Force -ErrorAction SilentlyContinue
+-    }
+-    if (Test-Path -LiteralPath $esdCheck) {
+-        Remove-Item -LiteralPath $esdCheck -Force -ErrorAction SilentlyContinue
+-    }
+-} elseif ($validEsd) {
+-    $esdSizeGB = [math]::Round((Get-Item -LiteralPath $esdCheck).Length / 1GB, 2)
+-    Write-Host "Final installation image confirmed: install.esd ($esdSizeGB GB)" -ForegroundColor Green
+-    if (Test-Path -LiteralPath $wimCheck) {
+-        Remove-Item -LiteralPath $wimCheck -Force -ErrorAction SilentlyContinue
+-    }
+-
+-    Write-Host "Verifying install.esd metadata structure via DISM..." -ForegroundColor Cyan
+-    $dismMetaOut = & dism.exe /English /Get-WimInfo "/WimFile:$esdCheck" 2>&1
+-    $dismMetaExit = $LASTEXITCODE
+-    $metadataValid = ($dismMetaExit -eq 0) -and ($dismMetaOut -match 'Index\s*:\s*\d+')
+-    $metadataStatus = if ($metadataValid) { "PASS" } else { "FAIL" }
+-
+-    if ($metadataStatus -eq "FAIL") {
+-        Write-Host "CRITICAL ERROR: install.esd failed metadata verification via DISM /Get-WimInfo (ExitCode: $dismMetaExit)!" -ForegroundColor Red
+-        $dismMetaOut | ForEach-Object { Write-Host "    $_" -ForegroundColor Red }
+-        throw "install.esd failed metadata verification (ExitCode: $dismMetaExit). Aborting ISO creation."
+-    }
+-
+-    $streamIntegrityStatus = if ($script:StreamIntegrityVerified) { "PASS" } else { "NOT VERIFIED" }
+-    $streamIntegrityDetails = if ($script:StreamIntegrityVerified) { "Verified during Phase 13: $script:StreamIntegrityMethod" } else { "Phase 13 export did not produce a verified integrity table ($script:StreamIntegrityMethod)" }
+-
+-    Write-Host "Payload Verification Summary:" -ForegroundColor Cyan
+-    Write-Host "  - Metadata Status:         $metadataStatus" -ForegroundColor $(if ($metadataStatus -eq "PASS") { "Green" } else { "Red" })
+-    Write-Host "  - Stream Integrity Status: $streamIntegrityStatus ($streamIntegrityDetails)" -ForegroundColor $(if ($streamIntegrityStatus -eq "PASS") { "Green" } elseif ($streamIntegrityStatus -eq "NOT VERIFIED") { "Yellow" } else { "Red" })
+-
+-    $esdSummaryPath = Join-Path -Path "$nano11Dir\sources" -ChildPath "wim-verification-summary.txt"
+-    $esdSummaryLines = @(
+-        "=== Final Payload Verification Summary ===",
+-        "Timestamp:               $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')",
+-        "Target Image:            $esdCheck",
+-        "Image Size:              $esdSizeGB GB",
+-        "Metadata Status:         $metadataStatus",
+-        "Stream Integrity Status: $streamIntegrityStatus",
+-        "Stream Details:          $streamIntegrityDetails",
+-        "=========================================="
+-    )
+-    [System.IO.File]::WriteAllLines($esdSummaryPath, $esdSummaryLines, [System.Text.Encoding]::UTF8)
+-} else {
+-    Write-Host "CRITICAL ERROR: No valid installation payload (install.wim, install.esd, or install.swm) found in $nano11Dir\sources!" -ForegroundColor Red
+-    Write-Host "Aborting ISO creation to prevent producing an unbootable or corrupt image." -ForegroundColor Red
+-    Stop-Transcript
+-    exit 1
+-}
++$wimCheck = Join-Path -Path "$nano11Dir\sources" -ChildPath "install.wim"
++
++if (-not (Test-Path -LiteralPath $wimCheck) -or ((Get-Item -LiteralPath $wimCheck).Length -lt 500MB)) {
++    $script:DiagnosticData.FailurePhase = "Phase 15: Payload Verification"
++    $script:DiagnosticData.FailureMessage = "No valid install.wim found in $nano11Dir\sources"
++    Write-Nano11DiagnosticReport "Missing install.wim"
++    throw "CRITICAL ERROR: No valid installation payload (install.wim) found in $nano11Dir\sources!"
++}
++
++$wimSizeGB = [math]::Round((Get-Item -LiteralPath $wimCheck).Length / 1GB, 2)
++Write-Host "Final installation image confirmed: install.wim ($wimSizeGB GB)" -ForegroundColor Green
++
++# 1. Metadata Verification via DISM /Get-WimInfo (Strictly metadata query only, no /CheckIntegrity) (Rule 8)
++Write-Host "Verifying install.wim metadata structure via DISM..." -ForegroundColor Cyan
++$dismMetaOut = & dism.exe /English /Get-WimInfo "/WimFile:$wimCheck" 2>&1
++$dismMetaExit = $LASTEXITCODE
++$metaText = ($dismMetaOut -join "`n")
++$hasIndex1 = ($metaText -match '(?m)^\s*Index\s*:\s*1\s*$')
++$totalIndexCount = ([regex]::Matches($metaText, '(?m)^\s*Index\s*:\s*\d+\s*$')).Count
++
++$metadataValid = ($dismMetaExit -eq 0) -and $hasIndex1 -and ($totalIndexCount -eq 1)
++$metadataStatus = if ($metadataValid) { "PASS" } else { "FAIL" }
++
++if ($metadataStatus -eq "FAIL") {
++    $script:DiagnosticData.FailurePhase = "Phase 15: Metadata Verification"
++    $script:DiagnosticData.FailureMessage = "install.wim failed metadata verification (ExitCode: $dismMetaExit, IndexCount: $totalIndexCount)"
++    Write-Nano11DiagnosticReport "Metadata check failed"
++    throw "install.wim failed metadata verification (ExitCode: $dismMetaExit). Expected exactly 1 index (Index 1)."
++}
++
++# 2. Mandatory Deep Apply Verification of Final Payload (Rule 6)
++Write-Host "Performing mandatory deep apply verification of install.wim via DISM..." -ForegroundColor Cyan
++$verifyApply = Join-Path -Path $workDir -ChildPath "deep_apply_verification"
++$verifyScratch = Join-Path -Path $workDir -ChildPath "deep_apply_scratch"
++$verifyLog = Join-Path -Path $script:DiagDir -ChildPath "dism_deep_apply.log"
++$verifyReport = Join-Path -Path $script:DiagDir -ChildPath "final_apply_report.txt"
++
++if (Test-Path -LiteralPath $verifyApply) {
++    Remove-Item -LiteralPath $verifyApply -Recurse -Force -ErrorAction SilentlyContinue
++}
++if (Test-Path -LiteralPath $verifyScratch) {
++    Remove-Item -LiteralPath $verifyScratch -Recurse -Force -ErrorAction SilentlyContinue
++}
++New-Item -ItemType Directory -Path $verifyApply -Force | Out-Null
++New-Item -ItemType Directory -Path $verifyScratch -Force | Out-Null
++
++# Verify free space on target drive (minimum 15GB recommended)
++$applyDriveLetter = (Split-Path -Path (Resolve-Path $verifyApply).Path -Qualifier).TrimEnd(':')
++$driveInfo = [System.IO.DriveInfo]::new($applyDriveLetter)
++$freeSpaceGB = [math]::Round($driveInfo.AvailableFreeSpace / 1GB, 2)
++if ($freeSpaceGB -lt 15) {
++    $spaceMsg = "Insufficient disk space for deep apply verification on drive ${applyDriveLetter}: ($freeSpaceGB GB free, minimum 15 GB required)."
++    $script:DiagnosticData.FailurePhase = "Phase 15: Deep Apply Verification Space Check"
++    $script:DiagnosticData.FailureMessage = $spaceMsg
++    Write-Nano11DiagnosticReport $spaceMsg
++    throw $spaceMsg
++}
++
++$applyCmdStr = "dism.exe /English /Apply-Image /ImageFile:`"$wimCheck`" /Index:1 /ApplyDir:`"$verifyApply`" /CheckIntegrity /Verify /ScratchDir:`"$verifyScratch`" /LogPath:`"$verifyLog`""
++$script:DiagnosticData.FinalApplyCommand = $applyCmdStr
++
++Write-Host "  Executing: $applyCmdStr" -ForegroundColor Cyan
++$applyOut = & dism.exe /English /Apply-Image "/ImageFile:$wimCheck" "/Index:1" "/ApplyDir:$verifyApply" /CheckIntegrity /Verify "/ScratchDir:$verifyScratch" "/LogPath:$verifyLog" 2>&1
++$applyExit = $LASTEXITCODE
++$script:DiagnosticData.FinalApplyExitCode = $applyExit
++
++$applyReportEntry = @(
++    "=== Phase 15 Final Payload Deep Apply Verification ===",
++    "Timestamp:  $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')",
++    "Command:    $applyCmdStr",
++    "ExitCode:   $applyExit",
++    "Raw Output:",
++    ($applyOut -join "`r`n"),
++    "======================================================="
++) -join "`r`n"
++[System.IO.File]::WriteAllText($verifyReport, $applyReportEntry, [System.Text.Encoding]::UTF8)
++
++if ($applyExit -ne 0) {
++    $script:FinalPayloadVerified = $false
++    $script:DiagnosticData.FinalPayloadVerified = $false
++    $script:DiagnosticData.FailurePhase = "Phase 15: Deep Apply Verification"
++    $script:DiagnosticData.FailureMessage = "DISM /Apply-Image /CheckIntegrity /Verify failed with ExitCode: $applyExit. Verification directory and logs preserved."
++    Write-Nano11DiagnosticReport "Deep apply failed"
++    throw "CRITICAL ERROR: install.wim failed deep apply verification (ExitCode: $applyExit). This payload would cause Windows Setup to fail with 0x80070570. Halting build to preserve evidence."
++}
++
++$script:FinalPayloadVerified = $true
++$script:DiagnosticData.FinalPayloadVerified = $true
++$script:VerifiedFinalWimSha256 = (Get-FileHash -LiteralPath $wimCheck -Algorithm SHA256).Hash
++$script:DiagnosticData.FinalWimSha256 = $script:VerifiedFinalWimSha256
++Write-Host "  [PASS] Deep apply verification completed successfully (ExitCode: 0)." -ForegroundColor Green
++Write-Host "  [SHA256] Final WIM: $script:VerifiedFinalWimSha256" -ForegroundColor Green
++
++# Clean up verification scratch on success
++Remove-Item -LiteralPath $verifyApply -Recurse -Force -ErrorAction SilentlyContinue
++Remove-Item -LiteralPath $verifyScratch -Recurse -Force -ErrorAction SilentlyContinue
++
++# 3. Optional Auxiliary 7-Zip Check (Relegated to auxiliary, not replacing Apply) (Rule 7)
++$sevenZipCandidates = @(
++    "C:\Program Files\7-Zip\7z.exe",
++    "C:\Program Files (x86)\7-Zip\7z.exe"
++)
++$szTool = $sevenZipCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
++$aux7zStatus = "SKIPPED"
++if ($szTool) {
++    $szOut = & "$szTool" t "$wimCheck" 2>&1
++    $szExit = $LASTEXITCODE
++    $aux7zStatus = if ($szExit -eq 0 -and -not ($szOut -match 'Data Error|ERROR:|Sub items Errors')) { "PASS" } else { "FAIL" }
++}
++
++# Output separated verification summary (Rule 7)
++Write-Host "Payload Verification Summary:" -ForegroundColor Cyan
++Write-Host "  - Metadata Status:         $metadataStatus" -ForegroundColor Green
++Write-Host "  - Export Status:           PASS" -ForegroundColor Green
++Write-Host "  - Final Apply Status:      PASS" -ForegroundColor Green
++Write-Host "  - Auxiliary 7-Zip Status:  $aux7zStatus" -ForegroundColor Gray
++Write-Host "  - Payload SHA256:          $script:VerifiedFinalWimSha256" -ForegroundColor Green
++Write-Host "  - ISO Payload Match:       PENDING (Phase 18)" -ForegroundColor Yellow
++Write-Host "  - Overall Build Status:    PENDING (Phase 18)" -ForegroundColor Yellow
++
++$wimSummaryPath = Join-Path -Path "$nano11Dir\sources" -ChildPath "wim-verification-summary.txt"
++$wimSummaryLines = @(
++    "=== Final Payload Verification Summary ===",
++    "Timestamp:               $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')",
++    "Target Image:            $wimCheck",
++    "Image Size:              $wimSizeGB GB",
++    "Metadata Status:         $metadataStatus",
++    "Export Status:           PASS",
++    "Final Apply Status:      PASS",
++    "Auxiliary 7-Zip Status:  $aux7zStatus",
++    "Payload SHA256:          $script:VerifiedFinalWimSha256",
++    "ISO Payload Match:       PENDING",
++    "Overall Build Status:    PENDING",
++    "=========================================="
++)
++[System.IO.File]::WriteAllLines($wimSummaryPath, $wimSummaryLines, [System.Text.Encoding]::UTF8)
+@@ -9104,0 +9092,1 @@
++                $tempOscdPath = Join-Path -Path $env:TEMP -ChildPath "oscdimg_dns_temp_$([System.IO.Path]::GetRandomFileName()).exe"
+@@ -9107,4 +9096,7 @@
+-                $wc.DownloadFile("https://$($dnsEntry.IP4Address)/gh459/nano11/main/oscdimg.exe", $targetOscdPath)
+-                if ((Test-Path -LiteralPath $targetOscdPath) -and ((Get-Item -LiteralPath $targetOscdPath).Length -gt 50KB)) {
+-                    $oscdimgExe = $targetOscdPath
+-                    Write-Host "  - oscdimg.exe downloaded successfully via public DNS fallback!" -ForegroundColor Green
++                $wc.DownloadFile("https://$($dnsEntry.IP4Address)/gh459/nano11/main/oscdimg.exe", $tempOscdPath)
++                if ((Test-Path -LiteralPath $tempOscdPath) -and (Test-OscdimgIntegrity -OscdimgPath $tempOscdPath)) {
++                    Move-Item -LiteralPath $tempOscdPath -Destination $targetOscdPath -Force
++                    $oscdimgExe = $targetOscdPath
++                    Write-Host "  - oscdimg.exe downloaded and verified successfully via public DNS fallback!" -ForegroundColor Green
++                } else {
++                    if (Test-Path -LiteralPath $tempOscdPath) { Remove-Item -LiteralPath $tempOscdPath -Force -ErrorAction SilentlyContinue }
+@@ -9119,0 +9111,7 @@
++if (-not $oscdimgExe) {
++    $script:DiagnosticData.FailurePhase = "Phase 17: Locate or Verify oscdimg.exe"
++    $script:DiagnosticData.FailureMessage = "Failed to locate or download an Authenticode-verified oscdimg.exe."
++    Write-Nano11DiagnosticReport "Missing oscdimg"
++    throw "Phase 17: No Authenticode-verified oscdimg.exe available. Cannot proceed with bootable ISO generation."
++}
++
+@@ -9195,1 +9194,0 @@
+-    # Force UEFI-only bootdata (no BIOS boot sector)
+@@ -9200,1 +9198,0 @@
+-    # Dual boot: BIOS (etfsboot.com) + UEFI (efisys.bin)
+@@ -9206,1 +9203,0 @@
+-    # UEFI-only (ARM64 or systems without BIOS bootloader)
+@@ -9211,1 +9207,0 @@
+-    # BIOS-only
+@@ -9216,132 +9211,151 @@
+-    Write-Host "Warning: Neither BIOS nor UEFI boot sector files were found. Output ISO will not be bootable." -ForegroundColor Yellow
+-}
+-
+-$isoCreatedSuccessfully = $false
+-if ($oscdimgExe -and (Test-Path -LiteralPath $oscdimgExe)) {
+-    $oscdimgArgs = @("-m", "-o", "-u2", "-udfver102", "-l`"nano11`"")
+-    if ($bootData) {
+-        $oscdimgArgs += "-bootdata:$bootData"
+-    }
+-    $oscdimgArgs += $nano11Dir
+-    $oscdimgArgs += $outputIso
+-
+-    Write-Host "Executing oscdimg..." -ForegroundColor Cyan
+-    & "$oscdimgExe" @oscdimgArgs
+-    
+-    if ((Test-Path -LiteralPath $outputIso) -and ((Get-Item -LiteralPath $outputIso).Length -gt 1.5GB)) {
+-        $isoCreatedSuccessfully = $true
+-        $isoItem = Get-Item -LiteralPath $outputIso
+-        $isoSizeMB = [math]::Round($isoItem.Length / 1MB, 2)
+-        Write-Host "Calculating SHA256 checksum..." -ForegroundColor Cyan
+-        $sha256 = (Get-FileHash -LiteralPath $outputIso -Algorithm SHA256).Hash
+-        
+-        Write-Host ""
+-        Write-Host "=========================================================" -ForegroundColor Green
+-        Write-Host "   Creation complete! Your ISO is named $isoFileName" -ForegroundColor Green
+-        Write-Host "   Path:   $outputIso ($isoSizeMB MB)" -ForegroundColor Green
+-        Write-Host "   SHA256: $sha256" -ForegroundColor Green
+-        Write-Host "=========================================================" -ForegroundColor Green
+-        Write-Host ""
+-
+-        # 3-Generation Retention Rotation for ISOs matching this profile (when TimestampIso is used)
+-        if ($TimestampIso) {
+-            try {
+-                $existingProfileIsos = Get-ChildItem -Path $scriptDir -Filter "nano11_${profSlug}_*.iso" -File -ErrorAction SilentlyContinue |
+-                    Sort-Object LastWriteTime -Descending
+-                if ($existingProfileIsos.Count -gt 3) {
+-                    $isosToRemove = $existingProfileIsos | Select-Object -Skip 3
+-                    foreach ($oldIso in $isosToRemove) {
+-                        Write-Host "Rotating out older generation ISO: $($oldIso.Name)" -ForegroundColor DarkGray
+-                        Remove-Item -LiteralPath $oldIso.FullName -Force -ErrorAction SilentlyContinue
+-                    }
+-                }
+-            } catch {}
+-        }
+-
+-        # Generate Visual HTML Build Report
+-        try {
+-            $reportOutputDir = Split-Path -Path $outputIso -Parent
+-            if (-not $reportOutputDir) { $reportOutputDir = $PSScriptRoot }
+-            $reportPath = Join-Path -Path $reportOutputDir -ChildPath "nano11_report.html"
+-            $reportData = @{
+-                Title             = "nano11 Master Build Report - $selectedProfile"
+-                Timestamp         = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+-                Profile           = $selectedProfile
+-                Architecture      = $architecture
+-                SourceDrive       = $DriveLetter
+-                OutputIso         = $outputIso
+-                PayloadFormat     = if ($SplitWIM) { "install.swm" } elseif ($exportESDMode) { "install.esd" } else { "install.wim" }
+-                OriginalSizeBytes = if ($sourceWimSize -gt 0) { $sourceWimSize } else { 0 }
+-                FinalSizeBytes    = $isoItem.Length
+-                IsoSha256         = $sha256
+-                RegSuccessCount   = $script:regSuccessCount
+-                Settings          = $resolvedConfig
+-            }
+-            $reportData['RemovedPackagesCount'] = if ($script:RemovedPackages) { $script:RemovedPackages.Count } else { 0 }
+-            $reportData['WinSxSSavedMB']        = if ($script:WinSxSSavedMB) { $script:WinSxSSavedMB } else { 0 }
+-            $reportData['WinSxSBeforeMB']       = if ($script:WinSxsBeforeMB) { $script:WinSxsBeforeMB } else { 0 }
+-            $reportData['WinSxSAfterMB']        = if ($script:WinSxsAfterMB) { $script:WinSxsAfterMB } else { 0 }
+-            Export-Nano11HtmlReport -OutputPath $reportPath -BuildInfo $reportData
+-            Write-Host "Visual Build Report generated: $reportPath" -ForegroundColor Cyan
+-
+-            # Post-build hook execution (tools\post-build.ps1)
+-            $postBuildScript = Join-Path -Path $scriptDir -ChildPath "tools\post-build.ps1"
+-            if (Test-Path -LiteralPath $postBuildScript) {
+-                Write-Host "Executing post-build hook: $postBuildScript..." -ForegroundColor Cyan
+-                try {
+-                    $isoSha256 = (Get-FileHash -LiteralPath $outputIso -Algorithm SHA256).Hash
+-                    & $postBuildScript -IsoPath $outputIso -IsoHash $isoSha256 -Profile $selectedProfile -LogDir $logDir
+-                } catch {
+-                    Write-Warning "Post-build hook exited with warning: $_"
+-                }
+-            }
+-
+-            # GUI completion dialog
+-            if ($GUI -and $isoCreatedSuccessfully -and (Test-Path -LiteralPath $outputIso)) {
+-                $isoLenGB = [math]::Round((Get-Item -LiteralPath $outputIso).Length / 1GB, 2)
+-                $isoHashVal = (Get-FileHash -LiteralPath $outputIso -Algorithm SHA256).Hash
+-                $elapsedStr = if ($elapsedSec) { "$elapsedSec 秒" } else { "完了" }
+-                $dialogMsg = "nano11 ISO ビルドが正常に完了しました！`n`n" +
+-                             "■ 出力先: $outputIso`n" +
+-                             "■ サイズ: $isoLenGB GB`n" +
+-                             "■ SHA256: $isoHashVal`n" +
+-                             "■ 所要時間: $elapsedStr`n`n" +
+-                             "ISO が保存されたフォルダーを開きますか？"
+-                $res = [System.Windows.Forms.MessageBox]::Show($dialogMsg, "nano11 ビルド完了", [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Information)
+-                if ($res -eq [System.Windows.Forms.DialogResult]::Yes) {
+-                    Invoke-Item -LiteralPath (Split-Path -Path $outputIso -Parent)
+-                }
+-            }
+-        } catch {
+-            Write-Warning "Could not export visual build report: $_"
+-        }
+-        if ($validSwm) {
+-            Write-Host "[100% FAT32 USB COMPATIBLE]" -ForegroundColor Green
+-            Write-Host "- The image was split into install.swm parts (each <= 3800MB)." -ForegroundColor Green
+-            Write-Host "- You can copy the contents of nano11.iso directly into any FAT32 USB drive!" -ForegroundColor Green
+-            Write-Host "- Standard UEFI systems will boot seamlessly without needing NTFS or Rufus." -ForegroundColor Green
+-            Write-Host ""
+-        } elseif ((Test-Path -LiteralPath (Join-Path -Path "$nano11Dir\sources" -ChildPath "install.wim")) -and ((Get-Item (Join-Path -Path "$nano11Dir\sources" -ChildPath "install.wim")).Length -gt 4000000000)) {
+-            Write-Host "[IMPORTANT NOTE FOR BOOTABLE USB CREATION]" -ForegroundColor Cyan
+-            Write-Host "- install.wim is larger than 4GB. FAT32 cannot store files > 4GB." -ForegroundColor Yellow
+-            Write-Host "- When creating a bootable USB with Rufus, select 'NTFS' filesystem." -ForegroundColor Yellow
+-            Write-Host "- Or copy nano11.iso directly into a Ventoy USB drive (recommended)." -ForegroundColor Yellow
+-            Write-Host "- Tip: Run with -SplitWIM to automatically split into FAT32-compatible parts." -ForegroundColor Cyan
+-            Write-Host ""
+-        }
+-    } else {
+-        Write-Host ""
+-        Write-Host "=========================================================" -ForegroundColor Red
+-        Write-Host "   ERROR: Failed to create valid bootable ISO!           " -ForegroundColor Red
+-        if (Test-Path -LiteralPath $outputIso) {
+-            Write-Host "   Generated ISO size ($([math]::Round((Get-Item -LiteralPath $outputIso).Length / 1MB, 2)) MB) is abnormally small (< 1.5 GB). Likely missing OS payload." -ForegroundColor Red
+-        } else {
+-            Write-Host "   oscdimg exited with code $LASTEXITCODE. The ISO file was not generated." -ForegroundColor Red
+-        }
+-        Write-Host "   Working directory preserved for inspection: $nano11Dir" -ForegroundColor Yellow
+-        Write-Host "=========================================================" -ForegroundColor Red
+-    }
+-} else {
+-    Write-Host "oscdimg.exe not found. You can manually package the ISO from: $nano11Dir" -ForegroundColor Yellow
+-}
+-
++    $script:DiagnosticData.FailurePhase = "Phase 18: Boot Sector Verification"
++    $script:DiagnosticData.FailureMessage = "Missing required boot sector files (etfsboot.com / efisys.bin). Output ISO would not be bootable."
++    Write-Nano11DiagnosticReport "Missing boot files"
++    throw "Phase 18: Missing required boot sector files. Aborting build to prevent generating unbootable media."
++}
++
++# Temporary ISO generation & payload verification (Rules 11, 12, 13, 14, 20)
++$tempIsoFileName = "nano11_temp_${profSlug}_${isoTimestamp}.iso"
++$tempOutputIso = Join-Path -Path $scriptDir -ChildPath $tempIsoFileName
++if (Test-Path -LiteralPath $tempOutputIso) {
++    Remove-Item -LiteralPath $tempOutputIso -Force -ErrorAction SilentlyContinue
++}
++
++$oscdimgArgs = @("-m", "-o", "-u2", "-udfver102", "-l`"nano11`"")
++if ($bootData) {
++    $oscdimgArgs += "-bootdata:$bootData"
++}
++$oscdimgArgs += $nano11Dir
++$oscdimgArgs += $tempOutputIso
++
++$oscdCmdStr = "$oscdimgExe $($oscdimgArgs -join ' ')"
++$script:DiagnosticData.OscdimgCommand = $oscdCmdStr
++
++Write-Host "Executing oscdimg to temporary ISO: $tempOutputIso..." -ForegroundColor Cyan
++& "$oscdimgExe" @oscdimgArgs
++$oscdimgExit = $LASTEXITCODE
++$script:DiagnosticData.OscdimgExitCode = $oscdimgExit
++
++if ($oscdimgExit -ne 0 -or (-not (Test-Path -LiteralPath $tempOutputIso)) -or ((Get-Item -LiteralPath $tempOutputIso).Length -lt 1.5GB)) {
++    $script:IsoGenerated = $false
++    $script:DiagnosticData.IsoGenerated = $false
++    $script:DiagnosticData.FailurePhase = "Phase 18: ISO Generation"
++    $script:DiagnosticData.FailureMessage = "oscdimg failed with exit code $oscdimgExit (or output file is invalid/too small)."
++    Write-Nano11DiagnosticReport "oscdimg failed"
++    throw "CRITICAL ERROR: Failed to create valid bootable ISO! oscdimg exited with code $oscdimgExit."
++}
++
++$script:IsoGenerated = $true
++$script:DiagnosticData.IsoGenerated = $true
++
++# Mount temporary ISO and verify embedded payload SHA256 against verified final WIM (Rule 13)
++Write-Host "Mounting temporary ISO to verify embedded payload integrity..." -ForegroundColor Cyan
++$isoMountResult = $null
++$embeddedWimSha256 = $null
++try {
++    $isoMountResult = Mount-DiskImage -ImagePath $tempOutputIso -StorageType ISO -PassThru -ErrorAction Stop
++    $isoVol = Get-Volume -DiskImage $isoMountResult -ErrorAction Stop | Select-Object -First 1
++    $isoDriveLetter = $isoVol.DriveLetter
++    if (-not $isoDriveLetter) {
++        throw "Failed to determine drive letter for mounted ISO."
++    }
++    $embeddedWimPath = "${isoDriveLetter}:\sources\install.wim"
++    if (-not (Test-Path -LiteralPath $embeddedWimPath)) {
++        throw "Mounted ISO is missing sources\install.wim payload."
++    }
++    Write-Host "  Calculating SHA256 of embedded sources\install.wim..." -ForegroundColor Cyan
++    $embeddedWimSha256 = (Get-FileHash -LiteralPath $embeddedWimPath -Algorithm SHA256).Hash
++    $script:DiagnosticData.IsoEmbeddedWimSha256 = $embeddedWimSha256
++
++    Write-Host "  Verified Final WIM SHA256:  $script:VerifiedFinalWimSha256" -ForegroundColor Cyan
++    Write-Host "  ISO Embedded WIM SHA256:    $embeddedWimSha256" -ForegroundColor Cyan
++
++    if ($embeddedWimSha256 -ne $script:VerifiedFinalWimSha256) {
++        throw "PAYLOAD HASH MISMATCH: ISO embedded install.wim ($embeddedWimSha256) does not match verified final WIM ($script:VerifiedFinalWimSha256)!"
++    }
++
++    $script:IsoPayloadVerified = $true
++    $script:DiagnosticData.IsoPayloadMatch = $true
++    Write-Host "  [PASS] ISO embedded payload verified identical to verified final WIM." -ForegroundColor Green
++} finally {
++    if ($isoMountResult) {
++        try { Dismount-DiskImage -ImagePath $tempOutputIso -ErrorAction SilentlyContinue | Out-Null } catch {}
++    }
++}
++
++# Promote temporary ISO to official output ISO (Rule 12)
++Write-Host "Promoting verified temporary ISO to official release name..." -ForegroundColor Cyan
++try {
++    $oldMounted = Get-DiskImage -ImagePath $outputIso -ErrorAction SilentlyContinue
++    if ($oldMounted) { Dismount-DiskImage -ImagePath $outputIso -ErrorAction SilentlyContinue | Out-Null }
++} catch {}
++if (Test-Path -LiteralPath $outputIso) {
++    Remove-Item -LiteralPath $outputIso -Force -ErrorAction Stop
++}
++Move-Item -LiteralPath $tempOutputIso -Destination $outputIso -Force -ErrorAction Stop
++
++# 3-Generation Retention Rotation for ISOs matching this profile (when TimestampIso is used)
++if ($TimestampIso) {
++    try {
++        $existingProfileIsos = Get-ChildItem -Path $scriptDir -Filter "nano11_${profSlug}_*.iso" -File -ErrorAction SilentlyContinue |
++            Sort-Object LastWriteTime -Descending
++        if ($existingProfileIsos.Count -gt 3) {
++            $isosToRemove = $existingProfileIsos | Select-Object -Skip 3
++            foreach ($oldIso in $isosToRemove) {
++                Write-Host "Rotating out older generation ISO: $($oldIso.Name)" -ForegroundColor DarkGray
++                Remove-Item -LiteralPath $oldIso.FullName -Force -ErrorAction SilentlyContinue
++            }
++        }
++    } catch {}
++}
++
++# Post-build hook execution (tools\post-build.ps1) (Rule 14)
++$postBuildScript = Join-Path -Path $scriptDir -ChildPath "tools\post-build.ps1"
++if (Test-Path -LiteralPath $postBuildScript) {
++    Write-Host "Executing post-build hook: $postBuildScript..." -ForegroundColor Cyan
++    try {
++        $isoSha256PreHook = (Get-FileHash -LiteralPath $outputIso -Algorithm SHA256).Hash
++        & $postBuildScript -IsoPath $outputIso -IsoHash $isoSha256PreHook -Profile $selectedProfile -LogDir $logDir
++    } catch {
++        Write-Warning "Post-build hook exited with warning: $_"
++    }
++}
++
++# Final ISO SHA256 and size calculation
++$isoItem = Get-Item -LiteralPath $outputIso
++$isoSizeMB = [math]::Round($isoItem.Length / 1MB, 2)
++Write-Host "Calculating final ISO SHA256 checksum..." -ForegroundColor Cyan
++$sha256 = (Get-FileHash -LiteralPath $outputIso -Algorithm SHA256).Hash
++
++# Generate Visual HTML Build Report
++try {
++    $reportOutputDir = Split-Path -Path $outputIso -Parent
++    if (-not $reportOutputDir) { $reportOutputDir = $PSScriptRoot }
++    $reportPath = Join-Path -Path $reportOutputDir -ChildPath "nano11_report.html"
++    $reportData = @{
++        Title             = "nano11 Master Build Report - $selectedProfile"
++        Timestamp         = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
++        Profile           = $selectedProfile
++        Architecture      = $architecture
++        SourceDrive       = $DriveLetter
++        OutputIso         = $outputIso
++        PayloadFormat     = "install.wim"
++        OriginalSizeBytes = if ($sourceWimSize -gt 0) { $sourceWimSize } else { 0 }
++        FinalSizeBytes    = $isoItem.Length
++        IsoSha256         = $sha256
++        RegSuccessCount   = $script:regSuccessCount
++        Settings          = $resolvedConfig
++        ApplyVerified     = $script:FinalPayloadVerified
++        IsoPayloadMatch   = $script:IsoPayloadVerified
++    }
++    $reportData['RemovedPackagesCount'] = if ($script:RemovedPackages) { $script:RemovedPackages.Count } else { 0 }
++    $reportData['WinSxSSavedMB']        = if ($script:WinSxSSavedMB) { $script:WinSxSSavedMB } else { 0 }
++    $reportData['WinSxSBeforeMB']       = if ($script:WinSxsBeforeMB) { $script:WinSxsBeforeMB } else { 0 }
++    $reportData['WinSxSAfterMB']        = if ($script:WinSxsAfterMB) { $script:WinSxsAfterMB } else { 0 }
++    Export-Nano11HtmlReport -OutputPath $reportPath -BuildInfo $reportData
++    Write-Host "Visual Build Report generated: $reportPath" -ForegroundColor Cyan
++} catch {
++    Write-Warning "Could not export visual build report: $_"
++}
++
++# Auxiliary File Inspection (-Validate) (Rule 15)
+@@ -9351,1 +9365,1 @@
+-        Write-Host "Running post-export image validation (-Validate)..." -ForegroundColor Cyan
++        Write-Host "Running auxiliary image file inspection (-Validate)..." -ForegroundColor Cyan
+@@ -9372,1 +9386,1 @@
+-            Write-Warning "Post-export validation mount failed: $_"
++            Write-Warning "Auxiliary validation mount failed: $_"
+@@ -9384,2 +9398,50 @@
+-} catch {
+-    Write-Host ""
++
++# Mark build as fully successful ONLY AFTER ALL VERIFICATIONS SUCCEED (Rules 1, 14, 20)
++$script:BuildSucceeded = $true
++$script:DiagnosticData.BuildSucceeded = $true
++$isoCreatedSuccessfully = $true
++Write-Nano11DiagnosticReport "Build succeeded"
++
++Write-Host ""
++Write-Host "=========================================================" -ForegroundColor Green
++Write-Host "   Creation complete! Your ISO is named $isoFileName" -ForegroundColor Green
++Write-Host "   Path:   $outputIso ($isoSizeMB MB)" -ForegroundColor Green
++Write-Host "   SHA256: $sha256" -ForegroundColor Green
++Write-Host "=========================================================" -ForegroundColor Green
++Write-Host ""
++
++# GUI completion dialog
++if ($GUI -and $script:BuildSucceeded -and (Test-Path -LiteralPath $outputIso)) {
++    $isoLenGB = [math]::Round((Get-Item -LiteralPath $outputIso).Length / 1GB, 2)
++    $elapsedStr = if ($elapsedSec) { "$elapsedSec 秒" } else { "完了" }
++    $dialogMsg = "nano11 ISO ビルドが正常に完了しました！`n`n" +
++                 "■ 出力先: $outputIso`n" +
++                 "■ サイズ: $isoLenGB GB`n" +
++                 "■ SHA256: $sha256`n" +
++                 "■ 所要時間: $elapsedStr`n`n" +
++                 "ISO が保存されたフォルダーを開きますか？"
++    $res = [System.Windows.Forms.MessageBox]::Show($dialogMsg, "nano11 ビルド完了", [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Information)
++    if ($res -eq [System.Windows.Forms.DialogResult]::Yes) {
++        Invoke-Item -LiteralPath (Split-Path -Path $outputIso -Parent)
++    }
++}
++
++} catch {
++    # Outer catch block: Reset success flags, record diagnostics, re-throw (Rule 16)
++    $script:BuildSucceeded = $false
++    $isoCreatedSuccessfully = $false
++    if ($script:DiagnosticData) {
++        $script:DiagnosticData.BuildSucceeded = $false
++        $script:DiagnosticData.FailureMessage = "$_"
++        if ($_.InvocationInfo -and $_.InvocationInfo.PositionMessage) {
++            $script:DiagnosticData.FailureStackTrace = "$($_.InvocationInfo.PositionMessage)`n$($_.ScriptStackTrace)"
++        } else {
++            $script:DiagnosticData.FailureStackTrace = "$($_.ScriptStackTrace)"
++        }
++        Write-Nano11DiagnosticReport "Build failed with exception"
++    }
++
++    Write-Host ""
++    Write-Host "=========================================================" -ForegroundColor Red
++    Write-Host "   nano11 BUILD FAILED!                                  " -ForegroundColor Red
++    Write-Host "=========================================================" -ForegroundColor Red
+@@ -9402,1 +9464,18 @@
+-    # 1. Unload lingering offline registry hives
++    function Test-IsSafePathToDelete {
++        param([string]$Path)
++        if ([string]::IsNullOrWhiteSpace($Path)) { return $false }
++        try {
++            $full = [System.IO.Path]::GetFullPath($Path).TrimEnd('\', '/')
++            if ($full.Length -le 3) { return $false }
++            $systemProfile = [System.Environment]::GetFolderPath([System.Environment+SpecialFolder]::UserProfile)
++            if ($full -ieq $systemProfile.TrimEnd('\', '/')) { return $false }
++            $windowsDir = [System.Environment]::GetFolderPath([System.Environment+SpecialFolder]::Windows)
++            if ($full.StartsWith($windowsDir, [System.StringComparison]::OrdinalIgnoreCase)) { return $false }
++            if ($scriptDir -and ($full -ieq [System.IO.Path]::GetFullPath($scriptDir).TrimEnd('\', '/'))) { return $false }
++            return $true
++        } catch {
++            return $false
++        }
++    }
++
++    # 1. ALWAYS unmount offline registry hives (Rule 17)
+@@ -9411,2 +9490,1 @@
+-    # 2. Re-query and resolve any lingering DISM mounts across all allocated mount directories
+-    $canSafelyClean = $true
++    # 2. ALWAYS unmount lingering DISM mounts across all allocated mount directories (Rule 17)
+@@ -9427,1 +9505,0 @@
+-            $canSafelyClean = $false
+@@ -9440,22 +9517,4 @@
+-                $postQuery = @(Get-Nano11MountedImages)
+-                $stillActive = $postQuery | Where-Object {
+-                    $p = if ($_.Path) { try { ConvertTo-Nano11NormalizedPath -Path $_.Path } catch { $null } } else { $null }
+-                    $p -and ($p -ieq $mPath)
+-                }
+-                if ($stillActive) {
+-                    Write-Warning "Could not confirm unmount of '$mPath'. Marking as Preserved for safety."
+-                    [void]$script:PreservedMountDirs.Add($mPath)
+-                    $canSafelyClean = $false
+-                }
+-            }
+-
+-            # Safely unload any offline hives
+-            $unmountedOk = Unmount-DismOfflineHives -TargetMountDir $mPath -BestEffort
+-            if (-not $unmountedOk) {
+-                Write-Warning "Lingering offline registry hives detected under '$mPath'. Marking as Preserved."
+-                [void]$script:PreservedMountDirs.Add($mPath)
+-                $canSafelyClean = $false
+-            }
+-        } catch {
+-            Write-Warning "Could not query or clean mount status for '$mPath': $_"
+-            $canSafelyClean = $false
++            }
++            [void](Unmount-DismOfflineHives -TargetMountDir $mPath -BestEffort)
++        } catch {
++            Write-Warning "Could not query or clean mount status for '$mPath': $_"
+@@ -9465,33 +9524,3 @@
+-    # 3. Clean working directories only if DISM mounts are confirmed clear
+-    if (-not $NonInteractive -and -not $isoCreatedSuccessfully -and -not $DryRun) {
+-        try { Read-Host "Press Enter to finalize cleanup." } catch {}
+-    }
+-
+-    if ($canSafelyClean) {
+-        if ($isoCreatedSuccessfully) {
+-            if ($nano11Dir -and (Test-Path -LiteralPath $nano11Dir)) {
+-                try {
+-                    Reset-DirectoryWithRobocopy -Path $nano11Dir
+-                    Remove-Item -LiteralPath $nano11Dir -Force -ErrorAction SilentlyContinue
+-                } catch {}
+-            }
+-            foreach ($mPath in $allTargetMounts) {
+-                if (Test-Path -LiteralPath $mPath) {
+-                    try {
+-                        Reset-DirectoryWithRobocopy -Path $mPath
+-                        Remove-Item -LiteralPath $mPath -Force -ErrorAction SilentlyContinue
+-                    } catch {}
+-                }
+-            }
+-        } else {
+-            if ($nano11Dir -and (Test-Path -LiteralPath $nano11Dir)) {
+-                Write-Host "Preserving $nano11Dir for inspection." -ForegroundColor Yellow
+-            }
+-            Write-Host "Preserving workspace mount directories for inspection." -ForegroundColor Yellow
+-        }
+-    } else {
+-        Write-Host "Preserving workspace directories due to unresolved mount state." -ForegroundColor Yellow
+-    }
+-
+-    # 4. Detach and remove VHDX scratch disk if initialized
+-    if ($canSafelyClean -and ($script:IsVhdxMounted -or ($vhdxPath -and (Test-Path -LiteralPath $vhdxPath)))) {
++    # 3. Detach VHDX scratch disk if initialized (ALWAYS ATTEMPT DETACH, Rule 18)
++    $vhdxDetached = $false
++    if ($script:IsVhdxMounted -or ($vhdxPath -and (Test-Path -LiteralPath $vhdxPath))) {
+@@ -9511,20 +9540,2 @@
+-
+-            if ($vhdxDetached) {
+-                if ($vhdxMountDir -and (Test-Path -LiteralPath $vhdxMountDir)) {
+-                    $rpCheck = Get-Item -LiteralPath $vhdxMountDir -Force -ErrorAction SilentlyContinue
+-                    if ($rpCheck -and ($rpCheck.Attributes -band [System.IO.FileAttributes]::ReparsePoint)) {
+-                        try { & mountvol.exe "$vhdxMountDir" /D > $null 2>&1 } catch {}
+-                        try {
+-                            [System.IO.Directory]::Delete($vhdxMountDir, $false)
+-                        } catch {
+-                            try { $rpCheck.Delete() } catch {}
+-                        }
+-                    } else {
+-                        Reset-DirectoryWithRobocopy -Path $vhdxMountDir
+-                        Remove-Item -LiteralPath $vhdxMountDir -Force -ErrorAction SilentlyContinue
+-                    }
+-                }
+-                Remove-Item -LiteralPath $vhdxPath -Force -ErrorAction SilentlyContinue
+-                $script:IsVhdxMounted = $false
+-            } else {
+-                Write-Warning "Could not confirm VHDX detachment for '$vhdxPath'. Preserving VHDX and mount directory for safety."
++            if ($vhdxDetached) {
++                $script:IsVhdxMounted = $false
+@@ -9535,5 +9546,3 @@
+-    } elseif (-not $canSafelyClean -and ($script:IsVhdxMounted -or ($vhdxPath -and (Test-Path -LiteralPath $vhdxPath)))) {
+-        Write-Warning "Preserving VHDX scratch disk ('$vhdxPath') due to unresolved mount or registry hive locks."
+-    }
+-
+-    # 5. Dismount source ISO if mounted by nano11
++    }
++
++    # 4. ALWAYS dismount source ISO if mounted by nano11 (Rule 17)
+@@ -9548,1 +9557,1 @@
+-    # 6. Remove Windows Defender temporary workspace exclusion
++    # 5. ALWAYS remove Windows Defender temporary workspace exclusion (Rule 17)
+@@ -9556,0 +9565,81 @@
++    # 6. Disk deletion: ONLY IF BUILDSUCCEEDED -EQ $TRUE (Rules 17, 18, 19)
++    if ($script:BuildSucceeded) {
++        Write-Host "Build succeeded. Cleaning workspace and intermediate build artifacts..." -ForegroundColor Cyan
++
++        # Clean backup WIM
++        $destWimBackupPath = Join-Path -Path "$nano11Dir\sources" -ChildPath "install_pre_export_backup.wim"
++        if (Test-Path -LiteralPath $destWimBackupPath) {
++            Remove-Item -LiteralPath $destWimBackupPath -Force -ErrorAction SilentlyContinue
++        }
++
++        # Clean nano11Dir
++        if ($nano11Dir -and (Test-Path -LiteralPath $nano11Dir) -and (Test-IsSafePathToDelete -Path $nano11Dir)) {
++            try {
++                Reset-DirectoryWithRobocopy -Path $nano11Dir
++                Remove-Item -LiteralPath $nano11Dir -Force -ErrorAction SilentlyContinue
++            } catch {}
++        }
++
++        # Clean target mount directories
++        foreach ($mPath in $allTargetMounts) {
++            if ((Test-Path -LiteralPath $mPath) -and (Test-IsSafePathToDelete -Path $mPath)) {
++                try {
++                    Reset-DirectoryWithRobocopy -Path $mPath
++                    Remove-Item -LiteralPath $mPath -Force -ErrorAction SilentlyContinue
++                } catch {}
++            }
++        }
++
++        # Clean VHDX file on success
++        if ($vhdxDetached -and $vhdxPath -and (Test-Path -LiteralPath $vhdxPath)) {
++            if ($vhdxMountDir -and (Test-Path -LiteralPath $vhdxMountDir)) {
++                $rpCheck = Get-Item -LiteralPath $vhdxMountDir -Force -ErrorAction SilentlyContinue
++                if ($rpCheck -and ($rpCheck.Attributes -band [System.IO.FileAttributes]::ReparsePoint)) {
++                    try { & mountvol.exe "$vhdxMountDir" /D > $null 2>&1 } catch {}
++                    try { [System.IO.Directory]::Delete($vhdxMountDir, $false) } catch { try { $rpCheck.Delete() } catch {} }
++                } else {
++                    if (Test-IsSafePathToDelete -Path $vhdxMountDir) {
++                        Reset-DirectoryWithRobocopy -Path $vhdxMountDir
++                        Remove-Item -LiteralPath $vhdxMountDir -Force -ErrorAction SilentlyContinue
++                    }
++                }
++            }
++            Remove-Item -LiteralPath $vhdxPath -Force -ErrorAction SilentlyContinue
++        }
++    } else {
++        # BUILD FAILED: STRICTLY PRESERVE FORENSIC ARTIFACTS (Rules 17, 18)
++        Write-Host ""
++        Write-Host "=========================================================" -ForegroundColor Yellow
++        Write-Host " [DIAGNOSTIC PRESERVATION] BUILD DID NOT SUCCEED         " -ForegroundColor Yellow
++        Write-Host " Preserving intermediate artifacts for forensic analysis:" -ForegroundColor Yellow
++        Write-Host "=========================================================" -ForegroundColor Yellow
++        if ($nano11Dir -and (Test-Path -LiteralPath $nano11Dir)) {
++            Write-Host "  - ISO Workspace:     $nano11Dir" -ForegroundColor Yellow
++            $script:DiagnosticData.PreservedArtifacts += $nano11Dir
++            $destWimBackupPath = Join-Path -Path "$nano11Dir\sources" -ChildPath "install_pre_export_backup.wim"
++            if (Test-Path -LiteralPath $destWimBackupPath) {
++                Write-Host "  - Pre-Export WIM:    $destWimBackupPath" -ForegroundColor Yellow
++                $script:DiagnosticData.PreservedArtifacts += $destWimBackupPath
++            }
++            $finalWimPath = Join-Path -Path "$nano11Dir\sources" -ChildPath "install.wim"
++            if (Test-Path -LiteralPath $finalWimPath) {
++                Write-Host "  - Exported WIM:      $finalWimPath" -ForegroundColor Yellow
++                $script:DiagnosticData.PreservedArtifacts += $finalWimPath
++            }
++        }
++        if ($workDir -and (Test-Path -LiteralPath $workDir)) {
++            Write-Host "  - Working Directory: $workDir" -ForegroundColor Yellow
++            $script:DiagnosticData.PreservedArtifacts += $workDir
++        }
++        if ($vhdxPath -and (Test-Path -LiteralPath $vhdxPath)) {
++            Write-Host "  - VHDX Scratch Disk: $vhdxPath" -ForegroundColor Yellow
++            $script:DiagnosticData.PreservedArtifacts += $vhdxPath
++        }
++        if ($script:DiagDir) {
++            Write-Host "  - Diagnostic Report: $script:DiagDir" -ForegroundColor Yellow
++            $script:DiagnosticData.PreservedArtifacts += $script:DiagDir
++        }
++        Write-Host "=========================================================" -ForegroundColor Yellow
++        Write-Nano11DiagnosticReport "Artifacts preserved after build failure"
++    }
++
+@@ -9560,1 +9650,1 @@
+-        Write-Host "Build lifecycle completed in $elapsedSec seconds." -ForegroundColor Cyan
++        Write-Host "Build lifecycle finished in $elapsedSec seconds." -ForegroundColor Cyan
+@@ -9579,9 +9669,13 @@
+-    if ($isoCreatedSuccessfully) {
+-        Write-Host "Done! nano11.iso is ready." -ForegroundColor Green
+-    } else {
+-        $statusMsg = if ($LASTEXITCODE -ne 0) { "with errors" } else { "cleanly" }
+-        $statusColor = if ($LASTEXITCODE -ne 0) { "Red" } else { "Yellow" }
+-        Write-Host "Process ended $statusMsg. Please check the logs in $transcriptPath" -ForegroundColor $statusColor
+-    }
+-}
+-
++    if ($script:BuildSucceeded) {
++        Write-Host "Done! nano11.iso is ready." -ForegroundColor Green
++    } else {
++        Write-Host "Process ended with errors. Build did not succeed." -ForegroundColor Red
++        if ($script:DiagDir) {
++            Write-Host "Diagnostic report directory: $script:DiagDir" -ForegroundColor Yellow
++        }
++        if ($transcriptPath) {
++            Write-Host "Please check the logs in $transcriptPath" -ForegroundColor Yellow
++        }
++    }
++}
++
