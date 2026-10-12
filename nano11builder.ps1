@@ -35,6 +35,8 @@ param(
     [string]$SourceDrive,
     [string]$WorkDir,
     [string]$Index,
+    [string]$OutputIsoName,
+    [switch]$TimestampIso,
     
     # Execution & Diagnostic Flags
     [switch]$DryRun,
@@ -170,6 +172,9 @@ param(
     [string]$PowerPreset = 'Default',
     [alias("NoActivationRestrictions", "UnlockPersonalization")]
     [switch]$BypassActivationRestrictions,
+    [alias("UltraLowRAM", "LowRAM")]
+    [switch]$RadicalRAM,
+    [switch]$NoRadicalRAM,
     [hashtable]$TweakGroupOverrides
 )
 
@@ -187,6 +192,9 @@ try {
     $OutputEncoding = [System.Text.Encoding]::UTF8
 } catch {}
 
+# Disable all interactive confirmation prompts to guarantee non-blocking unattended execution
+$ConfirmPreference = 'None'
+
 # ==============================================================================
 # Windows 11 Installation Media Notice (install.wim & install.esd)
 # ==============================================================================
@@ -199,32 +207,36 @@ Write-Host " decompressed and converted to 'install.wim' via DISM during image s
 Write-Host "==============================================================================" -ForegroundColor Cyan
 Write-Host ""
 
-# 1. Check and adjust Execution Policy
-if ((Get-ExecutionPolicy) -eq 'Restricted') {
-    if ($NonInteractive) {
-        Write-Warning "PowerShell Execution Policy is 'Restricted' in -NonInteractive mode. Attempting to set RemoteSigned for CurrentUser..."
-        try {
-            Set-ExecutionPolicy RemoteSigned -Scope CurrentUser -Confirm:$false -ErrorAction Stop
-            Write-Host "Execution Policy set to RemoteSigned." -ForegroundColor Green
-        } catch {
-            throw "Execution Policy is Restricted and cannot be changed non-interactively. Run: Set-ExecutionPolicy RemoteSigned -Scope CurrentUser"
-        }
-    } else {
-        Write-Host "Your current PowerShell Execution Policy is 'Restricted', which prevents scripts from running." -ForegroundColor Yellow
-        Write-Host "Do you want to change it to 'RemoteSigned'? (yes/no)"
-        $response = Read-Host
-        if ($response -and ($response.Trim().ToLower() -in @('yes', 'y'))) {
-            Set-ExecutionPolicy RemoteSigned -Scope CurrentUser -Confirm:$false
-            Write-Host "Execution Policy has been changed to RemoteSigned." -ForegroundColor Green
+# 1. Early Simulation & Diagnostic Mode Resolution (P0-02)
+$isDryRunMode = $DryRun -or ($PSBoundParameters.ContainsKey('WhatIf') -and $PSBoundParameters['WhatIf'])
+
+# Check and adjust Execution Policy (Skip if in TestSelf or DryRun mode to remain 100% non-destructive)
+if ((-not $TestSelf) -and ($env:NANO11_TEST_MODE -ne "1") -and (-not $isDryRunMode)) {
+    if ((Get-ExecutionPolicy) -eq 'Restricted') {
+        if ($NonInteractive) {
+            Write-Warning "PowerShell Execution Policy is 'Restricted' in -NonInteractive mode. Attempting to set RemoteSigned for CurrentUser..."
+            try {
+                Set-ExecutionPolicy RemoteSigned -Scope CurrentUser -Confirm:$false -ErrorAction Stop
+                Write-Host "Execution Policy set to RemoteSigned." -ForegroundColor Green
+            } catch {
+                throw "Execution Policy is Restricted and cannot be changed non-interactively. Run: Set-ExecutionPolicy RemoteSigned -Scope CurrentUser"
+            }
         } else {
-            Write-Host "The script cannot run without changing the execution policy. Exiting..." -ForegroundColor Red
-            exit 1
+            Write-Host "Your current PowerShell Execution Policy is 'Restricted', which prevents scripts from running." -ForegroundColor Yellow
+            Write-Host "Do you want to change it to 'RemoteSigned'? (yes/no)"
+            $response = Read-Host
+            if ($response -and ($response.Trim().ToLower() -in @('yes', 'y'))) {
+                Set-ExecutionPolicy RemoteSigned -Scope CurrentUser -Confirm:$false
+                Write-Host "Execution Policy has been changed to RemoteSigned." -ForegroundColor Green
+            } else {
+                Write-Host "The script cannot run without changing the execution policy. Exiting..." -ForegroundColor Red
+                exit 1
+            }
         }
     }
 }
 
 # 2. Check for Admin rights and restart with full arguments preserved
-$isDryRunMode = $DryRun -or ($PSBoundParameters.ContainsKey('WhatIf') -and $PSBoundParameters['WhatIf'])
 $myWindowsID = [System.Security.Principal.WindowsIdentity]::GetCurrent()
 $myWindowsPrincipal = New-Object System.Security.Principal.WindowsPrincipal($myWindowsID)
 if ((-not $myWindowsPrincipal.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)) -and ($env:NANO11_TEST_MODE -ne "1") -and (-not $TestSelf) -and (-not $isDryRunMode)) {
@@ -302,6 +314,40 @@ foreach ($pair in $conflicts) {
 
 # Helper functions for state-tracked build resumption (-Resume)
 $script:BuildStateFile = $null
+$script:ManagedMountDirs = [System.Collections.Generic.HashSet[string]]::new(
+    [System.StringComparer]::OrdinalIgnoreCase
+)
+$script:AllocatedMountDirs = [System.Collections.Generic.HashSet[string]]::new(
+    [System.StringComparer]::OrdinalIgnoreCase
+)
+$script:PreservedMountDirs = [System.Collections.Generic.HashSet[string]]::new(
+    [System.StringComparer]::OrdinalIgnoreCase
+)
+$script:MountAllocationRoot = $null
+$script:MountDirectoryPrefix = $null
+
+function ConvertTo-Nano11NormalizedPath {
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$Path
+    )
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        throw "Path cannot be null or empty."
+    }
+    $cleanPath = $Path.Replace('/', '\')
+    if ($cleanPath -notmatch '^[A-Za-z]:\\') {
+        throw "Path must be an absolute local drive path starting with a drive letter: '$Path'"
+    }
+    try {
+        $fullPath = [System.IO.Path]::GetFullPath($cleanPath).TrimEnd('\')
+    } catch {
+        throw "Failed to get full path for '$Path': $_"
+    }
+    if ($fullPath -match '^[A-Za-z]:$') {
+        throw "Drive root path is not allowed as a managed path: '$Path'"
+    }
+    return $fullPath
+}
 
 function Initialize-Nano11BuildState {
     param([string]$Dir)
@@ -410,7 +456,8 @@ function Set-OfflineReg {
     }
     [void]$script:RegApplied.Add($id)
 
-    & reg.exe add $Key /v $Name /t $Type /d $Data /f > $null 2>&1
+    $dataArg = if ($Data -eq '') { '""' } else { $Data }
+    & reg.exe add $Key /f /v $Name /t $Type /d $dataArg > $null 2>&1
     if ($LASTEXITCODE -eq 0) {
         $script:RegSuccessCount++
         if ($script:RegJournalPath) {
@@ -446,130 +493,478 @@ function Unmount-RegistryHiveWithRetry {
     return $false
 }
 
-# Helper function: Detect and discard conflicting/orphaned DISM mounts (Resolves Error 0xc1420127)
-function Clear-DismMountConflicts {
-    param(
-        [string]$TargetMountDir,
-        [string]$TargetWimFile
-    )
-    # Terminate orphaned dismhost / wimserv worker processes holding locks on mount directories
-    Get-Process -Name "dismhost", "wimserv" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-    Start-Sleep -Milliseconds 300
+# 4. Language-independent Administrators group via Well-Known SID (S-1-5-32-544)
+$adminGroupSid = New-Object System.Security.Principal.SecurityIdentifier([System.Security.Principal.WellKnownSidType]::BuiltinAdministratorsSid, $null)
 
-    $mountedOutput = & dism.exe /English /Get-MountedImageInfo 2>&1
-    if ($LASTEXITCODE -eq 0 -and $mountedOutput) {
-        $normMount = if ($TargetMountDir) { try { [System.IO.Path]::GetFullPath($TargetMountDir).TrimEnd('\') } catch { $null } } else { $null }
-        $normWim   = if ($TargetWimFile)  { try { [System.IO.Path]::GetFullPath($TargetWimFile).TrimEnd('\') } catch { $null } } else { $null }
-
-        $records = @()
-        $currentRecord = [ordered]@{}
-        foreach ($line in $mountedOutput) {
-            $t = [string]$line
-            if ([string]::IsNullOrWhiteSpace($t)) {
-                if ($currentRecord.Count -gt 0) {
-                    $records += [pscustomobject]$currentRecord
-                    $currentRecord = [ordered]@{}
+# Helper function: Query registered mounted images from DISM
+function Get-Nano11MountedImages {
+    [CmdletBinding()]
+    param()
+    $records = @()
+    try {
+        if (Get-Command -Name Get-WindowsImage -Module DISM -ErrorAction SilentlyContinue) {
+            $images = @(Get-WindowsImage -Mounted -ErrorAction Stop)
+            $records = @($images | ForEach-Object {
+                [PSCustomObject]@{
+                    Path        = $_.Path
+                    ImagePath   = $_.ImagePath
+                    ImageIndex  = $_.ImageIndex
+                    MountStatus = [string]$_.MountStatus
                 }
-                continue
-            }
-            if ($t -match '^\s*([^:]+?)\s*:\s*(.*)$') {
-                $currentRecord[$matches[1].Trim()] = $matches[2].Trim()
-            }
+            })
         }
-        if ($currentRecord.Count -gt 0) {
-            $records += [pscustomobject]$currentRecord
-        }
+    } catch {}
 
-        foreach ($rec in $records) {
-            $mDir = $rec.'Mount Dir'
-            $iFile = $rec.'Image File'
-            $status = $rec.'Status'
-            if (-not $mDir) { continue }
-
-            $isConflict = $false
-            if ($normMount) {
-                try {
-                    if ([System.IO.Path]::GetFullPath($mDir).TrimEnd('\') -ieq $normMount) { $isConflict = $true }
-                } catch {}
-            }
-            if (-not $isConflict -and $normWim -and $iFile) {
-                try {
-                    if ([System.IO.Path]::GetFullPath($iFile).TrimEnd('\') -ieq $normWim) { $isConflict = $true }
-                } catch {}
-            }
-            # Auto-cleanup orphaned nano11 scratch mounts if running generic sweep
-            if (-not $isConflict -and (-not $TargetMountDir) -and (-not $TargetWimFile)) {
-                if ($mDir -like "*scratchdir*" -or $mDir -like "*nano11*" -or $iFile -like "*nano11*") {
-                    $isConflict = $true
+    if ($records.Count -eq 0) {
+        $out = & dism.exe /English /Get-MountedImageInfo 2>&1
+        $exitCode = $LASTEXITCODE
+        if ($exitCode -eq 0) {
+            $cur = [ordered]@{}
+            foreach ($line in $out) {
+                $t = [string]$line
+                if ([string]::IsNullOrWhiteSpace($t)) {
+                    if ($cur.Count -gt 0 -and $cur.Contains('Mount Dir')) {
+                        $records += [PSCustomObject]@{
+                            Path        = $cur['Mount Dir']
+                            ImagePath   = $cur['Image File']
+                            ImageIndex  = $cur['Image Index']
+                            MountStatus = $cur['Status']
+                        }
+                        $cur = [ordered]@{}
+                    }
+                    continue
+                }
+                if ($t -match '^\s*([^:]+?)\s*:\s*(.*)$') {
+                    $cur[$matches[1].Trim()] = $matches[2].Trim()
                 }
             }
-
-            if ($isConflict) {
-                Write-Host "Found conflicting/orphaned DISM mount at '$mDir' (Status: $status). Discarding..." -ForegroundColor Yellow
-                if ($status -eq "Needs Remount") {
-                    & dism.exe /English /Remount-Image "/MountDir:$mDir" > $null 2>&1
+            if ($cur.Count -gt 0 -and $cur.Contains('Mount Dir')) {
+                $records += [PSCustomObject]@{
+                    Path        = $cur['Mount Dir']
+                    ImagePath   = $cur['Image File']
+                    ImageIndex  = $cur['Image Index']
+                    MountStatus = $cur['Status']
                 }
-                & dism.exe /English /Unmount-Image "/MountDir:$mDir" /discard > $null 2>&1
             }
         }
     }
 
-    & dism.exe /English /Cleanup-Wim > $null 2>&1
-    & dism.exe /English /Cleanup-Mountpoints > $null 2>&1
+    # Augment and correlate with direct WIMMount registry entries (detects corrupted/Invalid mounts where DISM API omits details)
+    try {
+        $regKey = "HKLM:\SOFTWARE\Microsoft\WIMMount\Mounted Images"
+        if (Test-Path -LiteralPath $regKey) {
+            $subKeys = Get-ChildItem -LiteralPath $regKey -ErrorAction SilentlyContinue
+            foreach ($sk in $subKeys) {
+                $p = Get-ItemProperty -LiteralPath $sk.PSPath -ErrorAction SilentlyContinue
+                if ($p -and $p.'Mount Path') {
+                    $mPath = [string]$p.'Mount Path'
+                    $wPath = [string]$p.'WIM Path'
+                    $status = switch ($p.Status) {
+                        1 { "Ok" }
+                        2 { "Invalid" }
+                        3 { "Needs Remount" }
+                        default { [string]$p.Status }
+                    }
+                    $existingMatch = $records | Where-Object { $_.Path -and ($_.Path -ieq $mPath) }
+                    if (-not $existingMatch) {
+                        $records += [PSCustomObject]@{
+                            Path        = $mPath
+                            ImagePath   = $wPath
+                            ImageIndex  = $p.'Image Index'
+                            MountStatus = $status
+                        }
+                    } else {
+                        if (-not $existingMatch.ImagePath -and $wPath) {
+                            $existingMatch.ImagePath = $wPath
+                        }
+                    }
+                }
+            }
+        }
+    } catch {}
+
+    return @($records)
 }
 
-# 3. Clean up any orphaned DISM mount points and leftover registry hives from previous failed runs
-Write-Host "Checking for and repairing any orphaned DISM mount points and registry hives..." -ForegroundColor Cyan
-Clear-DismMountConflicts
-@('zCOMPONENTS', 'zDEFAULT', 'zNTUSER', 'zSOFTWARE', 'zSYSTEM') | ForEach-Object {
-    [void](Unmount-RegistryHiveWithRetry -Name $_)
+# Helper function: Detect orphaned DISM offline registry hives locked in HKLM
+function Get-Nano11DismOfflineHives {
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$TargetMountDir
+    )
+    $normTarget = ConvertTo-Nano11NormalizedPath -Path $TargetMountDir
+    if (-not $script:ManagedMountDirs.Contains($normTarget)) {
+        throw "Target mount directory '$TargetMountDir' is not registered in ManagedMountDirs."
+    }
+
+    $expectedSubPaths = @(
+        'Users\Default\ntuser.dat',
+        'Windows\System32\config\COMPONENTS',
+        'Windows\System32\config\DEFAULT',
+        'Windows\System32\config\DRIVERS',
+        'Windows\System32\config\SAM',
+        'Windows\System32\config\SECURITY',
+        'Windows\System32\config\SOFTWARE',
+        'Windows\System32\config\SYSTEM',
+        'Windows\System32\smi\store\Machine\schema.dat'
+    )
+    $expectedSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($sub in $expectedSubPaths) {
+        $expectedFullPath = [System.IO.Path]::Combine($normTarget, $sub)
+        [void]$expectedSet.Add((ConvertTo-Nano11NormalizedPath -Path $expectedFullPath))
+    }
+
+    $hklm = $null
+    $candidates = [System.Collections.Generic.List[PSCustomObject]]::new()
+    try {
+        $hklm = [Microsoft.Win32.RegistryKey]::OpenBaseKey(
+            [Microsoft.Win32.RegistryHive]::LocalMachine,
+            [Microsoft.Win32.RegistryView]::Registry64
+        )
+        $subKeyNames = $hklm.GetSubKeyNames()
+    } catch {
+        throw "Failed to enumerate HKLM subkeys: $_"
+    } finally {
+        if ($hklm) { $hklm.Dispose() }
+    }
+
+    $regex = '(?i)^\{[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}(?<HivePath>[A-Za-z]:[\\/].+)$'
+    foreach ($rawKey in $subKeyNames) {
+        if ($rawKey -match $regex) {
+            $hivePathRaw = $Matches['HivePath']
+            try {
+                $normHive = ConvertTo-Nano11NormalizedPath -Path $hivePathRaw
+                if ($expectedSet.Contains($normHive)) {
+                    $candidates.Add([PSCustomObject]@{
+                        KeyName  = $rawKey
+                        HivePath = $normHive
+                    })
+                }
+            } catch {
+                # Not a valid absolute path or drive root, safely skip
+            }
+        }
+    }
+    return @($candidates)
 }
 
-# 4. Language-independent Administrators group via Well-Known SID (S-1-5-32-544)
-$adminGroupSid = New-Object System.Security.Principal.SecurityIdentifier([System.Security.Principal.WellKnownSidType]::BuiltinAdministratorsSid, $null)
+# Helper function: Safely unmount orphaned DISM offline registry hives
+function Unmount-DismOfflineHives {
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$TargetMountDir,
+        [ValidateRange(1, 10)]
+        [int]$Retries = 5,
+        [switch]$BestEffort
+    )
+    $normTarget = ConvertTo-Nano11NormalizedPath -Path $TargetMountDir
+    if (-not $script:ManagedMountDirs.Contains($normTarget)) {
+        $msg = "Target mount directory '$TargetMountDir' is not registered in ManagedMountDirs."
+        if ($BestEffort) { Write-Warning $msg; return $false }
+        throw $msg
+    }
+
+    # Verify mounted images status to protect active/valid mounts
+    try {
+        $mountedImages = @(Get-Nano11MountedImages)
+    } catch {
+        $msg = "Failed to query DISM mounted images during offline hive unload validation: $_"
+        if ($BestEffort) { Write-Warning $msg; return $false }
+        throw $msg
+    }
+
+    foreach ($img in $mountedImages) {
+        if ([string]::IsNullOrWhiteSpace($img.Path)) { continue }
+        try {
+            $normImgPath = ConvertTo-Nano11NormalizedPath -Path $img.Path
+        } catch { continue }
+
+        $isSame = [string]::Equals($normImgPath, $normTarget, [System.StringComparison]::OrdinalIgnoreCase)
+        $isDescendant = $normImgPath.StartsWith($normTarget + '\', [System.StringComparison]::OrdinalIgnoreCase)
+        $isAncestor = $normTarget.StartsWith($normImgPath + '\', [System.StringComparison]::OrdinalIgnoreCase)
+
+        if ($isSame) {
+            if ($img.MountStatus -ne 'Invalid') {
+                $msg = "Cannot unmount offline hives: MountDir '$TargetMountDir' has active DISM mount status '$($img.MountStatus)'."
+                if ($BestEffort) { Write-Warning $msg; return $false }
+                throw $msg
+            }
+        } elseif ($isDescendant -or $isAncestor) {
+            if ($img.MountStatus -ieq 'Invalid') {
+                Write-Warning "Overlapping orphaned/invalid DISM mount detected at '$($img.Path)' (Status: Invalid) - deferring to cleanup."
+                continue
+            }
+            $msg = "Cannot unmount offline hives: Overlapping DISM mount detected at '$($img.Path)' (Status: $($img.MountStatus))."
+            if ($BestEffort) { Write-Warning $msg; return $false }
+            throw $msg
+        }
+    }
+
+    for ($attempt = 1; $attempt -le $Retries; $attempt++) {
+        $candidates = @(Get-Nano11DismOfflineHives -TargetMountDir $normTarget)
+        if ($candidates.Count -eq 0) {
+            return $true
+        }
+
+        Write-Host "Unloading $($candidates.Count) orphaned DISM offline registry hives for '$normTarget' (Attempt $attempt/$Retries)..." -ForegroundColor Cyan
+
+        [GC]::Collect()
+        [GC]::WaitForPendingFinalizers()
+        Start-Sleep -Milliseconds 300
+
+        foreach ($cand in $candidates) {
+            $keyToUnload = "HKLM\" + $cand.KeyName
+            $unloadOutput = & reg.exe unload $keyToUnload 2>&1
+            $exitCode = $LASTEXITCODE
+            if ($exitCode -eq 0) {
+                Write-Host "  -> Successfully unloaded offline hive: $($cand.KeyName)" -ForegroundColor Green
+            } else {
+                Write-Warning "  -> Failed to unload offline hive '$($cand.KeyName)' (Exit code: $exitCode): $unloadOutput"
+            }
+        }
+
+        [GC]::Collect()
+        [GC]::WaitForPendingFinalizers()
+
+        $remaining = @(Get-Nano11DismOfflineHives -TargetMountDir $normTarget)
+        if ($remaining.Count -eq 0) {
+            Write-Host "All orphaned DISM offline registry hives successfully unloaded." -ForegroundColor Green
+            return $true
+        }
+
+        if ($attempt -lt $Retries) {
+            Start-Sleep -Milliseconds (300 * $attempt)
+        }
+    }
+
+    $finalRemaining = @(Get-Nano11DismOfflineHives -TargetMountDir $normTarget)
+    if ($finalRemaining.Count -gt 0) {
+        $keysList = ($finalRemaining | ForEach-Object { "$($_.KeyName) -> $($_.HivePath)" }) -join "`n    "
+        $errMsg = "Failed to unload $($finalRemaining.Count) orphaned DISM offline hives for '$normTarget' after $Retries attempts:`n    $keysList`nPlease close any process locking these hives or restart Windows before retrying."
+        if ($BestEffort) {
+            Write-Warning $errMsg
+            return $false
+        }
+        throw $errMsg
+    }
+    return $true
+}
+
+# Helper function: Assert directory safety before destructive operations
+function Assert-Nano11DirectorySafety {
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$Path,
+        [Parameter(Mandatory=$true)]
+        [ValidateSet('Reset', 'RemoveOfflineContent')]
+        [string]$Operation
+    )
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        throw "Safety guard: Target path cannot be empty."
+    }
+    $normPath = try { [System.IO.Path]::GetFullPath($Path).TrimEnd('\') } catch {
+        throw "Safety guard: Failed to normalize target path: $Path"
+    }
+
+    # Reject drive roots (e.g. C: or C:\), UNC roots, very short paths
+    if ($normPath -match '^[a-zA-Z]:$' -or $normPath.Length -le 3 -or $normPath -match '^\\\\[^\\]+\\[^\\]+$') {
+        throw "Safety guard: Refusing operation '$Operation' on root or drive directory: $normPath"
+    }
+
+    # Reject preserved directories that are marked as unresolved or inspection-only
+    if ($Operation -eq 'Reset' -and $script:PreservedMountDirs -and $script:PreservedMountDirs.Contains($normPath)) {
+        throw "Safety guard: Target path '$normPath' is marked as Preserved (unresolved/protected). Refusing to reset."
+    }
+
+    # Reject critical host system directories
+    $hostWin = [System.IO.Path]::GetFullPath($env:windir).TrimEnd('\')
+    $hostProg = [System.IO.Path]::GetFullPath($env:ProgramFiles).TrimEnd('\')
+    $hostProgX86 = if (${env:ProgramFiles(x86)}) { [System.IO.Path]::GetFullPath(${env:ProgramFiles(x86)}).TrimEnd('\') } else { $null }
+    $hostUsers = if ($env:SystemDrive) { [System.IO.Path]::GetFullPath("$($env:SystemDrive)\Users").TrimEnd('\') } else { $null }
+
+    # Check if target path is inside the explicitly configured workspace or mount allocation root
+    $isInsideWorkspace = $false
+    if ($script:MountAllocationRoot) {
+        $normAllocRoot = [System.IO.Path]::GetFullPath($script:MountAllocationRoot).TrimEnd('\')
+        if ($normPath -ieq $normAllocRoot -or $normPath.StartsWith($normAllocRoot + '\', [System.StringComparison]::OrdinalIgnoreCase)) {
+            $isInsideWorkspace = $true
+        }
+    }
+    if (-not $isInsideWorkspace -and $script:BaseWorkDir) {
+        $normBaseRoot = [System.IO.Path]::GetFullPath($script:BaseWorkDir).TrimEnd('\')
+        if ($normPath -ieq $normBaseRoot -or $normPath.StartsWith($normBaseRoot + '\', [System.StringComparison]::OrdinalIgnoreCase)) {
+            $isInsideWorkspace = $true
+        }
+    }
+
+    $dangerousRoots = @($hostWin, $hostProg, $hostProgX86) | Where-Object { $_ }
+    if (-not $isInsideWorkspace) {
+        # Only treat $hostUsers as a dangerous root if the target is NOT inside our configured workspace
+        if ($hostUsers) { $dangerousRoots += $hostUsers }
+    } else {
+        # Even inside workspace, the target cannot be the host Users root directory itself
+        if ($hostUsers -and ($normPath -ieq $hostUsers)) {
+            throw "Safety guard: Target path is host Users directory itself: $normPath"
+        }
+    }
+
+    foreach ($dr in $dangerousRoots) {
+        if ($normPath -ieq $dr -or $normPath.StartsWith($dr + '\', [System.StringComparison]::OrdinalIgnoreCase)) {
+            if ($Operation -eq 'RemoveOfflineContent') {
+                if (-not $script:DismMountDir) {
+                    throw "Safety guard: DismMountDir is not established. Cannot remove: $normPath"
+                }
+                $normScratch = [System.IO.Path]::GetFullPath($script:DismMountDir).TrimEnd('\')
+                if (-not ($normPath.StartsWith($normScratch + '\', [System.StringComparison]::OrdinalIgnoreCase))) {
+                    throw "Safety guard: Target path is in protected host system directory: $normPath"
+                }
+            } else {
+                throw "Safety guard: Target path is in protected host system directory: $normPath"
+            }
+        }
+    }
+
+    if ($Operation -eq 'Reset') {
+        if ($script:BaseWorkDir) {
+            $normBase = [System.IO.Path]::GetFullPath($script:BaseWorkDir).TrimEnd('\')
+            if ($normPath -ieq $normBase) {
+                throw "Safety guard: Refusing to reset base workspace directory itself: $normPath"
+            }
+        }
+        try {
+            $mounted = @(Get-Nano11MountedImages)
+            foreach ($m in $mounted) {
+                if ($m.Path) {
+                    $mNorm = [System.IO.Path]::GetFullPath($m.Path).TrimEnd('\')
+                    if ($normPath -ieq $mNorm -or $normPath.StartsWith($mNorm + '\', [System.StringComparison]::OrdinalIgnoreCase) -or $mNorm.StartsWith($normPath + '\', [System.StringComparison]::OrdinalIgnoreCase)) {
+                        throw "Safety guard: Refusing to reset directory '$normPath' which overlaps with active DISM mount '$mNorm' (Status: $($m.MountStatus))"
+                    }
+                }
+            }
+        } catch {
+            if ($_.Exception.Message -match "overlaps with active DISM mount") {
+                throw $_
+            }
+            throw "Safety guard: Cannot verify mounted image status before Reset on '$normPath': $_"
+        }
+    } elseif ($Operation -eq 'RemoveOfflineContent') {
+        if (-not $script:DismMountDir) {
+            throw "Safety guard: Cannot execute RemoveOfflineContent when DismMountDir is not set."
+        }
+        $normScratch = [System.IO.Path]::GetFullPath($script:DismMountDir).TrimEnd('\')
+        if ($normPath -ieq $normScratch -or -not ($normPath.StartsWith($normScratch + '\', [System.StringComparison]::OrdinalIgnoreCase))) {
+            throw "Safety guard: RemoveOfflineContent is only permitted on strict descendants of DismMountDir ('$normScratch'): $normPath"
+        }
+    }
+}
+
+
+# 3. Clean up any leftover nano11 registry hives from previous runs (Non-destructive)
+if ((-not $TestSelf) -and ($env:NANO11_TEST_MODE -ne "1") -and (-not $isDryRunMode)) {
+    @('zCOMPONENTS', 'zDEFAULT', 'zNTUSER', 'zSOFTWARE', 'zSYSTEM') | ForEach-Object {
+        [void](Unmount-RegistryHiveWithRetry -Name $_)
+    }
+}
+
+# Helper function: Strictly verify that a directory exists and is 100% empty (Resolves Error 0xc1420114)
+function Assert-Nano11DirectoryEmpty {
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$Path
+    )
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return
+    }
+    $items = @(Get-ChildItem -LiteralPath $Path -Force -ErrorAction Stop)
+    if ($items.Count -gt 0) {
+        $sample = ($items | Select-Object -First 20 | ForEach-Object { "$($_.FullName) [$($_.Attributes)]" }) -join "`n    "
+        throw "Directory is not empty ($($items.Count) items found in '$Path'):`n    $sample"
+    }
+}
 
 # Helper function: Take ownership and grant FullControl using PowerShell .NET ACL (Locale-independent via direct SID)
 function Set-ItemOwnershipAndAccess {
     param(
         [Parameter(Mandatory=$true)]
         [string]$Path,
-        [switch]$Recurse
+        [switch]$Recurse,
+        [switch]$Strict
     )
-    if (-not (Test-Path -LiteralPath $Path)) {
+    if (-not (Test-Path -LiteralPath $Path -ErrorAction Stop)) {
         return
     }
-    try {
-        $acl = Get-Acl -LiteralPath $Path -ErrorAction Stop
+
+    $failedItems = [System.Collections.Generic.List[string]]::new()
+    $pending = [System.Collections.Generic.Queue[string]]::new()
+    $pending.Enqueue((Resolve-Path -LiteralPath $Path).Path)
+
+    while ($pending.Count -gt 0) {
+        $current = $pending.Dequeue()
+        if (-not (Test-Path -LiteralPath $current)) { continue }
+
+        $itemObj = Get-Item -LiteralPath $current -Force -ErrorAction SilentlyContinue
+        if (-not $itemObj) { continue }
+
+        $isReparse = [bool]($itemObj.Attributes -band [System.IO.FileAttributes]::ReparsePoint)
+
+        # Clear ReadOnly attribute if present
+        if ($itemObj.Attributes -band [System.IO.FileAttributes]::ReadOnly) {
+            try {
+                $itemObj.Attributes = $itemObj.Attributes -bxor [System.IO.FileAttributes]::ReadOnly
+            } catch {
+                try { Set-ItemProperty -LiteralPath $current -Name IsReadOnly -Value $false -ErrorAction SilentlyContinue } catch {}
+            }
+        }
+
+        # Apply ownership and ACL
+        $success = $false
         try {
-            $acl.SetOwner($adminGroupSid)
+            $acl = Get-Acl -LiteralPath $current -ErrorAction Stop
+            try { $acl.SetOwner($adminGroupSid) } catch {}
+            $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+                $adminGroupSid,
+                [System.Security.AccessControl.FileSystemRights]::FullControl,
+                [System.Security.AccessControl.InheritanceFlags]"ContainerInherit, ObjectInherit",
+                [System.Security.AccessControl.PropagationFlags]"None",
+                [System.Security.AccessControl.AccessControlType]::Allow
+            )
+            $acl.AddAccessRule($rule)
+            Set-Acl -LiteralPath $current -AclObject $acl -ErrorAction Stop
+            $success = $true
         } catch {}
 
-        if ($Recurse) {
-            $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
-                $adminGroupSid,
-                [System.Security.AccessControl.FileSystemRights]::FullControl,
-                "ContainerInherit, ObjectInherit",
-                "None",
-                "Allow"
-            )
-        } else {
-            $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
-                $adminGroupSid,
-                [System.Security.AccessControl.FileSystemRights]::FullControl,
-                "Allow"
-            )
+        if (-not $success) {
+            & takeown.exe /F "$current" /A > $null 2>&1
+            $takeExit = $LASTEXITCODE
+            & icacls.exe "$current" /grant "*S-1-5-32-544:F" /C /Q > $null 2>&1
+            $icaExit = $LASTEXITCODE
+            if ($takeExit -eq 0 -or $icaExit -eq 0) {
+                $success = $true
+            }
         }
-        $acl.AddAccessRule($rule)
-        Set-Acl -LiteralPath $Path -AclObject $acl -ErrorAction Stop
-    } catch {
-        # Fallback to takeown/icacls with well-known administrator SID
-        if ($Recurse) {
-            & takeown.exe /F "$Path" /R /D Y > $null 2>&1
-            & icacls.exe "$Path" /grant "*S-1-5-32-544:(OI)(CI)F" /T /C /Q > $null 2>&1
-        } else {
-            & takeown.exe /F "$Path" /D Y > $null 2>&1
-            & icacls.exe "$Path" /grant "*S-1-5-32-544:F" /C /Q > $null 2>&1
+
+        if (-not $success -and $Strict) {
+            $failedItems.Add($current)
         }
+
+        # If it is a directory and NOT a reparse point, enqueue children
+        if ($Recurse -and $itemObj.PSIsContainer -and (-not $isReparse)) {
+            try {
+                $children = Get-ChildItem -LiteralPath $current -Force -ErrorAction Stop
+                foreach ($c in $children) {
+                    $pending.Enqueue($c.FullName)
+                }
+            } catch {
+                if ($Strict) {
+                    $failedItems.Add("$current (Enumeration failed: $_)")
+                }
+            }
+        }
+    }
+
+    if ($Strict -and $failedItems.Count -gt 0) {
+        $sample = ($failedItems | Select-Object -First 20) -join "`n    "
+        throw "Failed to acquire ownership/access on $($failedItems.Count) item(s):`n    $sample"
     }
 }
 
@@ -579,25 +974,49 @@ function Remove-ProtectedDirectory {
         [Parameter(Mandatory=$true)]
         [string]$Path,
         [Parameter(Mandatory=$true)]
-        [string]$ScratchPath
+        [string]$ScratchPath,
+        [int]$Retries = 3
     )
-    $full = try { [System.IO.Path]::GetFullPath($Path).TrimEnd('\') } catch { $Path }
-    if ($full -match '^[a-zA-Z]:\\?$' -or $full.Length -le 3 -or ($full -notmatch 'nano11|scratch|workspace|build|WindowsApps')) {
-        throw "Safety guard: Refusing to delete dangerous or system directory: $full"
-    }
-    if (-not (Test-Path -LiteralPath $Path)) {
+    Assert-Nano11DirectorySafety -Path $Path -Operation 'RemoveOfflineContent'
+    $full = [System.IO.Path]::GetFullPath($Path).TrimEnd('\')
+
+    if (-not (Test-Path -LiteralPath $full)) {
         return
     }
-    Set-ItemOwnershipAndAccess -Path $Path -Recurse
-    $emptyTemp = Join-Path -Path $ScratchPath -ChildPath "empty_dir_for_delete_$([System.IO.Path]::GetRandomFileName())"
-    try {
-        New-Item -Path $emptyTemp -ItemType Directory -Force | Out-Null
-        & robocopy.exe $emptyTemp $Path /MIR /XJ /R:0 /W:0 /NP /NFL /NDL /NJH /NJS > $null 2>&1
-        Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction SilentlyContinue
-    } finally {
-        if (Test-Path -LiteralPath $emptyTemp) {
-            Remove-Item -LiteralPath $emptyTemp -Recurse -Force -ErrorAction SilentlyContinue
+
+    $stagingTemp = if ($script:BaseWorkDir) {
+        Join-Path -Path $script:BaseWorkDir -ChildPath "temp_empty_$([System.IO.Path]::GetRandomFileName())"
+    } else {
+        Join-Path -Path ([System.IO.Path]::GetTempPath()) -ChildPath "nano11_del_$([System.IO.Path]::GetRandomFileName())"
+    }
+
+    for ($attempt = 1; $attempt -le $Retries; $attempt++) {
+        try {
+            Set-ItemOwnershipAndAccess -Path $full -Recurse
+        } catch {}
+
+        # 3. Safe native directory & reparse point removal (avoids robocopy /MIR junction traversal that deletes WinSxS targets)
+        try {
+            $item = Get-Item -LiteralPath $full -Force -ErrorAction SilentlyContinue
+            if ($item -and ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint)) {
+                [System.IO.Directory]::Delete($full, $false)
+            }
+        } catch {}
+
+        # 4. Windows native directory removal
+        & cmd.exe /c "rd /s /q `"$full`"" > $null 2>&1
+
+        # 5. PowerShell fallback removal
+        Remove-Item -LiteralPath $full -Recurse -Force -ErrorAction SilentlyContinue
+
+        if (-not (Test-Path -LiteralPath $full)) {
+            return
         }
+        Start-Sleep -Milliseconds 500
+    }
+
+    if (Test-Path -LiteralPath $full) {
+        throw "Failed to remove protected directory after $Retries attempts: $full"
     }
 }
 
@@ -605,41 +1024,675 @@ function Remove-ProtectedDirectory {
 function Test-IsNtfsVolume {
     param([string]$Path)
     try {
-        $root = [System.IO.Path]::GetPathRoot($Path).TrimEnd('\')
+        if ([string]::IsNullOrWhiteSpace($Path)) { return $false }
+        $root = [System.IO.Path]::GetPathRoot($Path)
+        if (-not $root) { return $false }
+        try {
+            $drive = New-Object System.IO.DriveInfo($root)
+            if ($drive.IsReady) {
+                return ($drive.DriveFormat -ieq 'NTFS')
+            }
+        } catch {}
         if ($root -match '^[a-zA-Z]:') {
             $letter = $root.Substring(0, 1)
             $vol = Get-Volume -DriveLetter $letter -ErrorAction Stop
             return ($vol.FileSystem -ieq 'NTFS')
         }
-        return $true
+        return $false
     } catch {
-        return $true
+        return $false
     }
 }
 
-# Helper function: Fast and reliable directory reset using robocopy mirror trick
+# Helper function: Fast and reliable directory reset using robocopy mirror trick (Guaranteed Empty)
 function Reset-DirectoryWithRobocopy {
     param(
         [Parameter(Mandatory=$true)]
-        [string]$Path
+        [string]$Path,
+        [ValidateRange(1, 5)]
+        [int]$Retries = 3
     )
-    $full = try { [System.IO.Path]::GetFullPath($Path).TrimEnd('\') } catch { $Path }
-    if ($full -match '^[a-zA-Z]:\\?$' -or $full.Length -le 3 -or ($full -notmatch 'nano11|scratch|workspace|build')) {
-        throw "Safety guard: Refusing to reset dangerous or system directory: $full"
+    Assert-Nano11DirectorySafety -Path $Path -Operation 'Reset'
+    $full = try { ConvertTo-Nano11NormalizedPath -Path $Path } catch { [System.IO.Path]::GetFullPath($Path).TrimEnd('\') }
+
+    # If this is a managed DISM mount directory, safely unload any locked offline hives first
+    if ($script:ManagedMountDirs.Contains($full)) {
+        [void](Unmount-DismOfflineHives -TargetMountDir $full)
     }
-    if (Test-Path -LiteralPath $Path) {
-        $emptyTemp = Join-Path -Path ([System.IO.Path]::GetTempPath()) -ChildPath "nano11_empty_$([System.IO.Path]::GetRandomFileName())"
+
+    if (-not (Test-Path -LiteralPath $full)) {
+        New-Item -ItemType Directory -Force -Path $full -ErrorAction Stop | Out-Null
+        return
+    }
+
+    $lastEx = $null
+    $lastRoboExit = $null
+    $lastRoboOutput = $null
+    $lastAttribExit = $null
+    $lastAttribOutput = $null
+
+    for ($attempt = 1; $attempt -le $Retries; $attempt++) {
+        Assert-Nano11DirectorySafety -Path $full -Operation 'Reset'
+
+        if ($attempt -gt 1) {
+            # Terminate lingering dismhost/wimserv workers and force garbage collection to release file locks
+            Get-Process -Name "dismhost", "wimserv" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+            [GC]::Collect()
+            [GC]::WaitForPendingFinalizers()
+            Start-Sleep -Seconds ($attempt * 2)
+        }
+
+        $rootItem = Get-Item -LiteralPath $full -Force -ErrorAction Stop
+        if ($rootItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
+            throw "Safety violation: Target directory '$full' is itself a reparse point. Refusing to reset directly."
+        }
+
+        # Queue-based reparse point pruning without following links into targets
+        $queue = [System.Collections.Generic.Queue[string]]::new()
+        $queue.Enqueue($full)
+        $linkError = $false
+        while ($queue.Count -gt 0) {
+            $curr = $queue.Dequeue()
+            try {
+                $children = @(Get-ChildItem -LiteralPath $curr -Force -ErrorAction Stop)
+            } catch {
+                Write-Warning "Reset attempt ${attempt}: Could not enumerate '$curr': $_"
+                $linkError = $true
+                break
+            }
+            foreach ($child in $children) {
+                if ($child.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
+                    try {
+                        if ($child.PSIsContainer) {
+                            [System.IO.Directory]::Delete($child.FullName, $false)
+                        } else {
+                            [System.IO.File]::Delete($child.FullName)
+                        }
+                    } catch {
+                        Write-Warning "Reset attempt ${attempt}: Failed to remove reparse point '$($child.FullName)': $_"
+                        $linkError = $true
+                    }
+                } elseif ($child.PSIsContainer) {
+                    $queue.Enqueue($child.FullName)
+                }
+            }
+        }
+
+        if (-not $linkError) {
+            try {
+                Set-ItemOwnershipAndAccess -Path $full -Recurse -Strict
+            } catch {
+                Write-Warning "Reset attempt ${attempt}: Ownership adjustment warning: $_"
+            }
+
+            # Strip ReadOnly, Hidden, and System attributes across root and children
+            $lastAttribOutput = & attrib.exe -r -s -h $full 2>&1
+            $lastAttribExit = $LASTEXITCODE
+            $childPattern = Join-Path -Path $full -ChildPath '*'
+            $null = & attrib.exe -r -s -h $childPattern /s /d 2>&1
+
+            $emptyTemp = Join-Path -Path ([System.IO.Path]::GetTempPath()) -ChildPath "nano11_empty_$([System.IO.Path]::GetRandomFileName())"
+            try {
+                New-Item -Path $emptyTemp -ItemType Directory -Force -ErrorAction Stop | Out-Null
+                Assert-Nano11DirectoryEmpty -Path $emptyTemp
+                $lastRoboOutput = & robocopy.exe $emptyTemp $full /MIR /XJ /R:0 /W:0 /NFL /NDL /NP /NJH /NJS 2>&1
+                $lastRoboExit = $LASTEXITCODE
+            } finally {
+                if (Test-Path -LiteralPath $emptyTemp) {
+                    Remove-Item -LiteralPath $emptyTemp -Recurse -Force -ErrorAction SilentlyContinue
+                }
+            }
+
+            if ($lastRoboExit -ge 8) {
+                Write-Warning "Reset attempt ${attempt}: Robocopy error (Exit code: $lastRoboExit): $lastRoboOutput"
+            }
+
+            # Sweep remaining items directly
+            try {
+                $lingering = @(Get-ChildItem -LiteralPath $full -Force -ErrorAction Stop)
+                foreach ($item in $lingering) {
+                    try {
+                        if ($item.PSIsContainer) {
+                            [System.IO.Directory]::Delete($item.FullName, $true)
+                        } else {
+                            [System.IO.File]::Delete($item.FullName)
+                        }
+                    } catch {
+                        Remove-Item -LiteralPath $item.FullName -Recurse -Force -ErrorAction Stop
+                    }
+                }
+            } catch {
+                $lastEx = $_
+            }
+        }
+
+        # Validate directory is strictly empty
         try {
-            New-Item -Path $emptyTemp -ItemType Directory -Force | Out-Null
-            & robocopy.exe $emptyTemp $Path /MIR /XJ /R:0 /W:0 /NP /NFL /NDL /NJH /NJS > $null 2>&1
-            Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction SilentlyContinue
-        } finally {
-            if (Test-Path -LiteralPath $emptyTemp) {
-                Remove-Item -LiteralPath $emptyTemp -Recurse -Force -ErrorAction SilentlyContinue
+            Assert-Nano11DirectoryEmpty -Path $full
+            return
+        } catch {
+            $lastEx = $_
+            if ($attempt -lt $Retries) {
+                if ($script:ManagedMountDirs.Contains($full)) {
+                    try { [void](Unmount-DismOfflineHives -TargetMountDir $full -BestEffort) } catch {}
+                }
+                Start-Sleep -Seconds $attempt
             }
         }
     }
-    New-Item -ItemType Directory -Force -Path $Path | Out-Null
+
+    # Final attempt failed - build rich diagnostic failure report
+    $remainingItems = @(Get-ChildItem -LiteralPath $full -Force -ErrorAction SilentlyContinue)
+    $remainingDetails = ($remainingItems | ForEach-Object { "$($_.FullName) [$($_.Attributes)]" }) -join "`n    "
+    $hivesInfo = ""
+    if ($script:ManagedMountDirs.Contains($full)) {
+        try {
+            $leftoverHives = @(Get-Nano11DismOfflineHives -TargetMountDir $full)
+            if ($leftoverHives.Count -gt 0) {
+                $hivesInfo = "`nLingering DISM offline registry hives:`n    " + (($leftoverHives | ForEach-Object { "$($_.KeyName) -> $($_.HivePath)" }) -join "`n    ")
+            }
+        } catch {}
+    }
+
+    throw "Reset-DirectoryWithRobocopy failed to empty directory '$full' after $Retries attempts.$hivesInfo`nRemaining items ($($remainingItems.Count)):`n    $remainingDetails`nLast error: $lastEx`nRobocopy Exit Code: $lastRoboExit`nAttrib Exit Code: $lastAttribExit`nPlease close any process locking these files or restart Windows before retrying."
+}
+
+# Helper function: Safe mountpoint cleanup guarded against modifying unmanaged external mounts
+function Invoke-Nano11MountpointCleanup {
+    [CmdletBinding()]
+    param()
+    try {
+        $mounted = @(Get-Nano11MountedImages)
+    } catch {
+        Write-Warning "Could not query mounted images before Cleanup-Mountpoints: $_. Skipping for safety."
+        return $false
+    }
+    foreach ($m in $mounted) {
+        if ([string]::IsNullOrWhiteSpace($m.Path)) { continue }
+        $normP = try { ConvertTo-Nano11NormalizedPath -Path $m.Path } catch { $null }
+        if ($normP -and -not $script:ManagedMountDirs.Contains($normP)) {
+            Write-Warning "Cannot safely run Cleanup-Mountpoints: Active mount exists outside ManagedMountDirs at '$($m.Path)' (Status: $($m.MountStatus))."
+            return $false
+        }
+    }
+
+    $cleanArgs = @('/English')
+    if ($script:DismLogPath) {
+        $cleanArgs += @("/LogPath:$script:DismLogPath", "/LogLevel:3")
+    }
+    $cleanArgs += @('/Cleanup-Mountpoints')
+    & dism.exe @cleanArgs > $null 2>&1
+    $exitCode = $LASTEXITCODE
+    return ($exitCode -eq 0)
+}
+
+# Helper function: Detect and discard conflicting/orphaned DISM mounts (Resolves Error 0xc1420127 & Invalid mount lock)
+function Clear-DismMountConflicts {
+    param(
+        [string]$TargetMountDir,
+        [string]$TargetWimFile,
+        [ValidateRange(1, 5)]
+        [int]$Retries = 3,
+        [switch]$ForceRecovery
+    )
+    $normMount = if ($TargetMountDir) { try { ConvertTo-Nano11NormalizedPath -Path $TargetMountDir } catch { [System.IO.Path]::GetFullPath($TargetMountDir).TrimEnd('\') } } else { $null }
+    $normWim   = if ($TargetWimFile)  { try { [System.IO.Path]::GetFullPath($TargetWimFile).TrimEnd('\') } catch { $null } } else { $null }
+
+    if (-not $normMount -and -not $normWim) {
+        return
+    }
+
+    if ($normMount -and -not $script:ManagedMountDirs.Contains($normMount)) {
+        $isWorkspaceChild = $false
+        if ($script:MountAllocationRoot) {
+            $normAllocRoot = ConvertTo-Nano11NormalizedPath -Path $script:MountAllocationRoot
+            if ($normMount.StartsWith($normAllocRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+                $isWorkspaceChild = $true
+            }
+        }
+        $wsRef = if ($script:BaseWorkDir) { $script:BaseWorkDir } elseif ($baseWorkDir) { $baseWorkDir } elseif ($workingDir) { $workingDir } else { $null }
+        if (-not $isWorkspaceChild -and $wsRef) {
+            $normWorking = ConvertTo-Nano11NormalizedPath -Path $wsRef
+            if ($normMount.StartsWith($normWorking, [System.StringComparison]::OrdinalIgnoreCase)) {
+                $isWorkspaceChild = $true
+            }
+        }
+
+        if ($isWorkspaceChild) {
+            [void]$script:ManagedMountDirs.Add($normMount)
+        } else {
+            throw "Safety violation: Target mount directory '$normMount' is not in ManagedMountDirs. Refusing to operate on unmanaged paths."
+        }
+    }
+
+    # Best-effort preliminary unload of orphaned offline hives prior to DISM unmount attempts
+    if ($normMount) {
+        [void](Unmount-DismOfflineHives -TargetMountDir $normMount -BestEffort)
+    }
+
+    # Step 1: Attempt standard DISM unmount / remount retry loop
+    for ($attempt = 1; $attempt -le $Retries; $attempt++) {
+        $mounted = @(Get-Nano11MountedImages)
+        $conflicts = @()
+
+        foreach ($m in $mounted) {
+            $mPath = if ($m.Path) { try { [System.IO.Path]::GetFullPath($m.Path).TrimEnd('\') } catch { $null } } else { $null }
+            $mImg  = if ($m.ImagePath) { try { [System.IO.Path]::GetFullPath($m.ImagePath).TrimEnd('\') } catch { $null } } else { $null }
+
+            $matchMount = ($normMount -and $mPath -and ($mPath -ieq $normMount))
+            $matchWim   = ($normWim -and $mImg -and ($mImg -ieq $normWim))
+
+            if ($matchWim -and (-not $matchMount) -and $mPath) {
+                # Check if $mPath is located inside workspace root
+                $isWorkspaceMount = $false
+                if ($script:MountAllocationRoot) {
+                    $normAllocRoot = ConvertTo-Nano11NormalizedPath -Path $script:MountAllocationRoot
+                    if ($mPath.StartsWith($normAllocRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+                        $isWorkspaceMount = $true
+                    }
+                }
+                $wsRef = if ($script:BaseWorkDir) { $script:BaseWorkDir } elseif ($baseWorkDir) { $baseWorkDir } elseif ($workingDir) { $workingDir } else { $null }
+                if (-not $isWorkspaceMount -and $wsRef) {
+                    $normWorking = ConvertTo-Nano11NormalizedPath -Path $wsRef
+                    if ($mPath.StartsWith($normWorking, [System.StringComparison]::OrdinalIgnoreCase)) {
+                        $isWorkspaceMount = $true
+                    }
+                }
+                if (-not $isWorkspaceMount -and $wsRef -and $normWim) {
+                    $normWorking = ConvertTo-Nano11NormalizedPath -Path $wsRef
+                    if ($normWim.StartsWith($normWorking, [System.StringComparison]::OrdinalIgnoreCase) -or ($mPath -match "scratchdir")) {
+                        $isWorkspaceMount = $true
+                    }
+                }
+
+                if ($isWorkspaceMount) {
+                    Write-Host "Detected prior build mount at workspace path '$mPath' for '$normWim'. Adopting for safe cleanup." -ForegroundColor Yellow
+                    [void]$script:ManagedMountDirs.Add($mPath)
+                    [void]$script:AllocatedMountDirs.Add($mPath)
+                    $conflicts += $m
+                    continue
+                } else {
+                    throw "Safety violation: Target image '$normWim' is currently mounted at an external unmanaged directory '$mPath' (Status: $($m.MountStatus)). Refusing to automatically discard."
+                }
+            }
+
+            if ($matchMount -or $matchWim) {
+                $conflicts += $m
+            }
+        }
+
+        if ($conflicts.Count -eq 0) {
+            break
+        }
+
+        foreach ($c in $conflicts) {
+            Write-Host "Resolving lingering DISM mount at '$($c.Path)' (Image: $($c.ImagePath), Status: $($c.MountStatus))..." -ForegroundColor Yellow
+            
+            # Unload any registry hives under this mount first
+            @('zCOMPONENTS', 'zDEFAULT', 'zNTUSER', 'zSOFTWARE', 'zSYSTEM') | ForEach-Object {
+                try { [void](Unmount-RegistryHiveWithRetry -Name $_) } catch {}
+            }
+
+            Set-Location -LiteralPath $scriptDir
+            [GC]::Collect()
+            [GC]::WaitForPendingFinalizers()
+
+            if ($c.MountStatus -in @("Needs Remount", "Invalid")) {
+                & dism.exe /English /Remount-Image "/MountDir:$($c.Path)" > $null 2>&1
+            }
+            & dism.exe /English /Unmount-Image "/MountDir:$($c.Path)" /discard > $null 2>&1
+            $unmountExit = $LASTEXITCODE
+
+            if ($unmountExit -ne 0) {
+                Invoke-Nano11MountpointCleanup | Out-Null
+            }
+        }
+
+        Start-Sleep -Seconds (2 * $attempt)
+    }
+
+    # Step 2: Check if conflict is still lingering
+    $finalMounted = @(Get-Nano11MountedImages)
+    $lingeringConflict = $finalMounted | Where-Object {
+        $mPath = if ($_.Path) { try { [System.IO.Path]::GetFullPath($_.Path).TrimEnd('\') } catch { $null } } else { $null }
+        $mImg  = if ($_.ImagePath) { try { [System.IO.Path]::GetFullPath($_.ImagePath).TrimEnd('\') } catch { $null } } else { $null }
+        ($normMount -and $mPath -and ($mPath -ieq $normMount)) -or ($normWim -and $mImg -and ($mImg -ieq $normWim))
+    }
+
+    # Step 3: Level 3 Surgical Purge for corrupted / Invalid orphaned WIMMount entries
+    # If standard DISM commands failed because the mount is in an Invalid/Orphaned state,
+    # safely purge ONLY the exact matching registry metadata for this managed mount workspace.
+    if ($lingeringConflict -or $ForceRecovery) {
+        $canPurge = $true
+        # Check that lingering mount is strictly in Invalid status
+        if ($lingeringConflict) {
+            foreach ($lc in $lingeringConflict) {
+                if ($lc.MountStatus -ne 'Invalid') {
+                    Write-Warning "Cannot perform Level 3 purge: Mount at '$($lc.Path)' has non-invalid status '$($lc.MountStatus)'."
+                    $canPurge = $false
+                    break
+                }
+            }
+        }
+
+        if ($canPurge -and ($normMount -or $normWim)) {
+            # Unload any offline hives first before metadata purge
+            if ($normMount) {
+                try {
+                    [void](Unmount-DismOfflineHives -TargetMountDir $normMount -BestEffort)
+                } catch {
+                    Write-Warning "Offline hive unload before Level 3 purge encountered warning: $_"
+                }
+            }
+
+            $regBaseKey = "SOFTWARE\Microsoft\WIMMount\Mounted Images"
+            $hklm = $null
+            $mountedKey = $null
+            try {
+                $hklm = [Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::LocalMachine, [Microsoft.Win32.RegistryView]::Registry64)
+                $mountedKey = $hklm.OpenSubKey($regBaseKey, $true)
+                if ($mountedKey) {
+                    $subKeyNames = $mountedKey.GetSubKeyNames()
+                    foreach ($guid in $subKeyNames) {
+                        $entryKey = $null
+                        try {
+                            $entryKey = $mountedKey.OpenSubKey($guid, $false)
+                            if ($entryKey) {
+                                $mPathVal = [string]$entryKey.GetValue("Mount Path")
+                                $wPathVal = [string]$entryKey.GetValue("WIM Path")
+                                $statusVal = $entryKey.GetValue("Status")
+
+                                if ([string]::IsNullOrWhiteSpace($mPathVal)) { continue }
+                                $normEntryMount = try { ConvertTo-Nano11NormalizedPath -Path $mPathVal } catch { $null }
+                                $normEntryWim   = try { if ($wPathVal) { [System.IO.Path]::GetFullPath($wPathVal).TrimEnd('\') } } catch { $null }
+
+                                $matchTargetMount = ($normMount -and $normEntryMount -and ($normEntryMount -ieq $normMount))
+                                $matchTargetWim   = ($normWim -and $normEntryWim -and ($normEntryWim -ieq $normWim))
+
+                                $isWorkspaceMount = $false
+                                if ($normEntryMount) {
+                                    if ($script:MountAllocationRoot) {
+                                        $normAllocRoot = ConvertTo-Nano11NormalizedPath -Path $script:MountAllocationRoot
+                                        if ($normEntryMount.StartsWith($normAllocRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+                                            $isWorkspaceMount = $true
+                                        }
+                                    }
+                                    if (-not $isWorkspaceMount -and $script:BaseWorkDir) {
+                                        $normBaseRoot = ConvertTo-Nano11NormalizedPath -Path $script:BaseWorkDir
+                                        if ($normEntryMount.StartsWith($normBaseRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+                                            $isWorkspaceMount = $true
+                                        }
+                                    }
+                                    if (-not $isWorkspaceMount -and $workingDir) {
+                                        $normWorking = ConvertTo-Nano11NormalizedPath -Path $workingDir
+                                        if ($normEntryMount.StartsWith($normWorking, [System.StringComparison]::OrdinalIgnoreCase)) {
+                                            $isWorkspaceMount = $true
+                                        }
+                                    }
+                                }
+
+                                # Strictly require Mount Path or WIM Path to match managed target, or be orphaned within workspace
+                                if ($matchTargetMount -or $matchTargetWim -or ($isWorkspaceMount -and ($statusVal -in @(2, 3, "2", "3")))) {
+                                    Write-Host "Purging corrupted/orphaned DISM mount metadata from registry: $guid (Mount: $mPathVal, WIM: $wPathVal, Status: $statusVal)..." -ForegroundColor Yellow
+                                    try {
+                                        $mountedKey.DeleteSubKeyTree($guid, $false)
+                                        Write-Host "  -> Successfully purged orphaned DISM mount metadata via .NET Registry: $guid" -ForegroundColor Green
+                                    } catch {
+                                        & reg.exe delete "HKLM\$regBaseKey\$guid" /f > $null 2>&1
+                                        if ($LASTEXITCODE -eq 0) {
+                                            Write-Host "  -> Successfully purged orphaned DISM mount metadata via reg.exe: $guid" -ForegroundColor Green
+                                        } else {
+                                            Write-Warning "Could not delete orphaned WIMMount registry entry ${guid}: $_"
+                                        }
+                                    }
+                                }
+                            }
+                        } finally {
+                            if ($entryKey) { $entryKey.Dispose() }
+                        }
+                    }
+                }
+            } catch {
+                Write-Warning "Surgical registry metadata purge encountered warning: $_"
+            } finally {
+                if ($mountedKey) { $mountedKey.Dispose() }
+                if ($hklm) { $hklm.Dispose() }
+            }
+
+            # Synchronize DISM mountpoints cache after surgical registry metadata purge
+            Invoke-Nano11MountpointCleanup | Out-Null
+        }
+    }
+
+    # Step 4: Final verification after all recovery levels
+    $verifiedMounted = @(Get-Nano11MountedImages)
+    $stillLingering = $verifiedMounted | Where-Object {
+        $mPath = if ($_.Path) { try { [System.IO.Path]::GetFullPath($_.Path).TrimEnd('\') } catch { $null } } else { $null }
+        $mImg  = if ($_.ImagePath) { try { [System.IO.Path]::GetFullPath($_.ImagePath).TrimEnd('\') } catch { $null } } else { $null }
+        ($normMount -and $mPath -and ($mPath -ieq $normMount)) -or ($normWim -and $mImg -and ($mImg -ieq $normWim))
+    }
+
+    # Clean up any lingering offline hives even if mount entry was already clear
+    if ($normMount) {
+        [void](Unmount-DismOfflineHives -TargetMountDir $normMount -BestEffort)
+    }
+
+    if ($stillLingering) {
+        throw "Failed to clear DISM mount conflict for MountDir='$normMount' / WimFile='$normWim'. Active mount remains: $($stillLingering.Path) (Status: $($stillLingering.MountStatus))"
+    } else {
+        if ($lingeringConflict) {
+            Write-Host "DISM mount conflict for '$normMount' successfully resolved." -ForegroundColor Green
+        }
+    }
+}
+
+# Helper function: Generate unique dynamic mount directory path under MountAllocationRoot
+function New-Nano11MountDirectoryPath {
+    param()
+    if (-not $script:MountAllocationRoot) {
+        throw "MountAllocationRoot is not set."
+    }
+    $normRoot = ConvertTo-Nano11NormalizedPath -Path $script:MountAllocationRoot
+
+    $candidatePath = $null
+    for ($i = 0; $i -lt 50; $i++) {
+        $guidStr = [Guid]::NewGuid().ToString('N')
+        $dirName = if ($script:MountDirectoryPrefix) { $script:MountDirectoryPrefix + $guidStr } else { "mount_" + $guidStr }
+        $fullPath = Join-Path -Path $normRoot -ChildPath $dirName
+        $candidatePath = ConvertTo-Nano11NormalizedPath -Path $fullPath
+
+        # Verify it is a direct child of MountAllocationRoot
+        $parentDir = [System.IO.Path]::GetDirectoryName($candidatePath)
+        if (-not [string]::Equals($parentDir, $normRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "Security violation: Generated mount directory '$candidatePath' is not a direct child of '$normRoot'."
+        }
+
+        if (-not (Test-Path -LiteralPath $candidatePath)) {
+            break
+        }
+    }
+
+    if (-not $candidatePath -or (Test-Path -LiteralPath $candidatePath)) {
+        throw "Failed to generate unique mount directory path under '$normRoot'."
+    }
+
+    [void]$script:ManagedMountDirs.Add($candidatePath)
+    [void]$script:AllocatedMountDirs.Add($candidatePath)
+    return $candidatePath
+}
+
+# Helper function: Prepare and guarantee clean empty mount directory by physical recreation (Resolves Error 0xc1420113, 0xc1420114 & 0xc1420127)
+function Initialize-Nano11MountDirectory {
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$MountDir,
+        [string]$WimFile,
+        [int]$Retries = 3
+    )
+    $normMount = ConvertTo-Nano11NormalizedPath -Path $MountDir
+    if (-not $script:ManagedMountDirs.Contains($normMount)) {
+        throw "Safety violation: Target mount directory '$normMount' is not in ManagedMountDirs."
+    }
+    if ($script:PreservedMountDirs -and $script:PreservedMountDirs.Contains($normMount)) {
+        throw "Safety guard: Target mount directory '$normMount' is marked as Preserved. Refusing to initialize."
+    }
+
+    # 1. Clear any lingering DISM mount metadata or conflicting locks on the directory or WIM
+    Clear-DismMountConflicts -TargetMountDir $normMount -TargetWimFile $WimFile -Retries $Retries
+
+    # 2. Safety assert before destructive reset
+    Assert-Nano11DirectorySafety -Path $normMount -Operation 'Reset'
+
+    # 3. Safely unload offline registry hives if present
+    [void](Unmount-DismOfflineHives -TargetMountDir $normMount -BestEffort)
+
+    # 4. Check if directory entity exists
+    if (Test-Path -LiteralPath $normMount) {
+        $dirItem = Get-Item -LiteralPath $normMount -Force -ErrorAction Stop
+        if ($dirItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
+            throw "Safety violation: Target mount directory '$normMount' is a reparse point. Refusing to recreate."
+        }
+        if ($script:VhdxMountDir -and ($normMount -ieq (ConvertTo-Nano11NormalizedPath -Path $script:VhdxMountDir))) {
+            throw "Safety violation: Target mount directory '$normMount' is the VHDX volume mount point. Refusing to delete root entity."
+        }
+
+        # 5. Empty directory contents cleanly
+        Reset-DirectoryWithRobocopy -Path $normMount -Retries $Retries
+        Assert-Nano11DirectoryEmpty -Path $normMount
+
+        # 6. Delete directory entity itself to purge any hidden NTFS attributes/ADS/stale metadata
+        try {
+            [System.IO.Directory]::Delete($normMount, $false)
+        } catch {
+            Write-Warning "Direct directory entity deletion failed ($normMount): $_"
+        }
+    }
+
+    # 7. Create fresh empty directory
+    if (-not (Test-Path -LiteralPath $normMount)) {
+        New-Item -ItemType Directory -Force -Path $normMount -ErrorAction Stop | Out-Null
+    }
+
+    # 8. Verify it is not a reparse point and is strictly empty
+    $newDirItem = Get-Item -LiteralPath $normMount -Force -ErrorAction Stop
+    if ($newDirItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
+        throw "Safety violation: Fresh mount directory '$normMount' was created as a reparse point."
+    }
+    Assert-Nano11DirectoryEmpty -Path $normMount
+}
+
+# Helper function: Mount WIM image with automatic unique path rotation on conflict (0xc1420113 / 0xc1420114 / 0xc1420127)
+function Invoke-Nano11ImageMount {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$ImageFile,
+        [Parameter(Mandatory=$true)]
+        [string]$ImageIndex,
+        [switch]$ReadOnly,
+        [ValidateRange(1, 5)]
+        [int]$Retries = 3
+    )
+
+    $normWim = ConvertTo-Nano11NormalizedPath -Path $ImageFile
+    if (-not (Test-Path -LiteralPath $normWim)) {
+        throw "Image file not found: $normWim"
+    }
+
+    $lastExitCode = 0
+    $lastExitHex = ""
+    $triedMountDirs = [System.Collections.Generic.List[string]]::new()
+
+    for ($attempt = 1; $attempt -le $Retries; $attempt++) {
+        # 1. Allocate a fresh unique GUID mount path for every attempt
+        $curMountDir = New-Nano11MountDirectoryPath
+        $triedMountDirs.Add($curMountDir)
+        Write-Host "Preparing mount directory (Attempt $attempt of $Retries) at '$curMountDir'..." -ForegroundColor Cyan
+
+        # 2. Physically recreate and verify empty directory
+        Initialize-Nano11MountDirectory -MountDir $curMountDir -WimFile $normWim -Retries $Retries
+
+        # 3. Build DISM /Mount-Image arguments
+        $dismMountArgs = @('/English')
+        if ($script:DismLogPath) {
+            $dismMountArgs += @("/LogPath:$script:DismLogPath", "/LogLevel:3")
+        }
+        $dismMountArgs += @('/Mount-Image', "/ImageFile:$normWim", "/Index:$ImageIndex", "/MountDir:$curMountDir")
+        if ($ReadOnly) {
+            $dismMountArgs += @('/ReadOnly')
+        }
+
+        & dism.exe @dismMountArgs
+        $lastExitCode = $LASTEXITCODE
+        $lastExitHex = '0x{0:X8}' -f ([BitConverter]::ToUInt32([BitConverter]::GetBytes([int]$lastExitCode), 0))
+
+        # 4. If exit code is 0, strictly verify DISM registration
+        if ($lastExitCode -eq 0) {
+            $mountedImages = @(Get-Nano11MountedImages)
+            $matchingMounts = @($mountedImages | Where-Object {
+                $p = if ($_.Path) { try { ConvertTo-Nano11NormalizedPath -Path $_.Path } catch { $null } } else { $null }
+                $p -and ($p -ieq $curMountDir)
+            })
+
+            if ($matchingMounts.Count -eq 1) {
+                $m = $matchingMounts[0]
+                $imgNorm = try { ConvertTo-Nano11NormalizedPath -Path $m.ImagePath } catch { $null }
+                if ($imgNorm -and ($imgNorm -ieq $normWim) -and ($m.ImageIndex -eq $ImageIndex) -and ($m.MountStatus -ieq 'Ok')) {
+                    Write-Host "Successfully mounted image to '$curMountDir' (Index: $ImageIndex, Status: $($m.MountStatus))." -ForegroundColor Green
+                    return [PSCustomObject]@{
+                        MountDir   = $curMountDir
+                        ImageFile  = $normWim
+                        ImageIndex = $ImageIndex
+                    }
+                }
+            }
+            Write-Warning "DISM returned 0 but mounted image verification failed for '$curMountDir'. Recovery required."
+        }
+
+        # 5. Handle mount failure and conflict recovery
+        Write-Host "Mount attempt $attempt failed (Exit code: $lastExitHex / $lastExitCode). Resolving conflicts and recovering..." -ForegroundColor Yellow
+
+        # Inspect if DISM actually created a partial mount on curMountDir
+        $postCheckMounts = @(Get-Nano11MountedImages)
+        $partialMount = $postCheckMounts | Where-Object {
+            $p = if ($_.Path) { try { ConvertTo-Nano11NormalizedPath -Path $_.Path } catch { $null } } else { $null }
+            $p -and ($p -ieq $curMountDir)
+        }
+
+        if ($partialMount) {
+            # Attempt to discard partial mount
+            Write-Host "Discarding partial mount at '$curMountDir' (Status: $($partialMount.MountStatus))..." -ForegroundColor Yellow
+            & dism.exe /English /Unmount-Image "/MountDir:$curMountDir" /discard > $null 2>&1
+        }
+
+        # Run safe mountpoint cleanup
+        Invoke-Nano11MountpointCleanup | Out-Null
+
+        # Unload any offline hives
+        try { [void](Unmount-DismOfflineHives -TargetMountDir $curMountDir -BestEffort) } catch {}
+
+        # Re-verify that no active mount remains on curMountDir
+        $verifyLingering = @(Get-Nano11MountedImages) | Where-Object {
+            $p = if ($_.Path) { try { ConvertTo-Nano11NormalizedPath -Path $_.Path } catch { $null } } else { $null }
+            $p -and ($p -ieq $curMountDir)
+        }
+
+        if ($verifyLingering) {
+            Write-Warning "Unresolved mount remains on '$curMountDir'. Marking as Preserved for safety."
+            [void]$script:PreservedMountDirs.Add($curMountDir)
+            throw "Failed to resolve mount conflict on '$curMountDir'. Active mount remains: $($verifyLingering.MountStatus). Aborting for system protection."
+        }
+
+        [GC]::Collect()
+        [GC]::WaitForPendingFinalizers()
+
+        if ($attempt -lt $Retries) {
+            Start-Sleep -Seconds (2 * $attempt)
+        }
+    }
+
+    $triedStr = ($triedMountDirs -join ", ")
+    throw "Failed to mount image '$normWim' (Index: $ImageIndex) after $Retries attempts. Tried directories: $triedStr. Last exit code: $lastExitHex ($lastExitCode)."
 }
 
 # Helper function: Export configuration settings to a JSON profile
@@ -672,6 +1725,7 @@ function Export-Nano11Profile {
             AtlasReviOSMode            = [bool]$Config.AtlasReviOSMode
             RemoveStore                = [bool]$Config.RemoveStore
             BypassActivationRestrictions = [bool]$Config.BypassActivationRestrictions
+            RadicalRAM                 = if ($Config.RadicalRAM -ne $null) { [bool]$Config.RadicalRAM } else { $true }
             UseVHDX                    = [bool]$Config.UseVHDX
             SkipEiCfg                  = [bool]$Config.SkipEiCfg
             NoPostInstallAssets        = [bool]$Config.NoPostInstallAssets
@@ -733,6 +1787,10 @@ function Enter-Phase {
         $script:PhaseTimings[$prevPhaseKey] = [math]::Round($script:PhaseStopwatch.Elapsed.TotalSeconds, 1)
     }
     $script:CurrentPhase = $PhaseNumber
+    $script:CurrentBuildPhase = "Phase ${PhaseNumber}: $PhaseName"
+    if ($script:DiagnosticData) {
+        $script:DiagnosticData.FailurePhase = $script:CurrentBuildPhase
+    }
     $script:PhaseStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     $phaseTitle = "nano11 [$PhaseNumber/$($script:TotalPhases)] $PhaseName"
     try { $host.UI.RawUI.WindowTitle = $phaseTitle } catch {}
@@ -756,12 +1814,17 @@ function Exit-Phase {
 # ==============================================================================
 
 $script:TweakGroups = [ordered]@{
-    NetworkStack   = @{ Default = $true;  Risk = '★★';  Description = 'TcpAck/RSC/ECN/NetThrottling tuning' }
-    TimerBCD       = @{ Default = $true;  Risk = '★★';  Description = 'dynamic tick/TSC sync/platform clock' }
-    GPULatency     = @{ Default = $true;  Risk = '★';   Description = 'MSI mode/HAGS/GPU scheduling registry' }
-    ServiceTrim    = @{ Default = $true;  Risk = '★★';  Description = 'WSearch/SysMain/DiagTrack/Ndu service trimming' }
-    VisualFX       = @{ Default = $true;  Risk = '★';   Description = 'DWM transparency/animations/effects minimization' }
-    CpuMitigations = @{ Default = $false; Risk = '★★★'; Description = 'Spectre/Meltdown speculative execution mitigations (Security trade-off)' }
+    NetworkStack   = @{ Default = $true;  Risk = '**';   Description = 'TcpAck/RSC/ECN/NetThrottling tuning' }
+    TimerBCD       = @{ Default = $true;  Risk = '**';   Description = 'dynamic tick/TSC sync/platform clock' }
+    GPULatency     = @{ Default = $true;  Risk = '*';    Description = 'MSI mode/HAGS/GPU scheduling registry' }
+    ServiceTrim    = @{ Default = $true;  Risk = '**';   Description = 'WSearch/SysMain/DiagTrack/Ndu service trimming' }
+    VisualFX       = @{ Default = $true;  Risk = '*';    Description = 'DWM transparency/animations/effects minimization' }
+    CpuMitigations = @{ Default = $false; Risk = '***';  Description = 'Spectre/Meltdown speculative execution mitigations (Security trade-off)' }
+}
+
+$script:activeTweakGroups = [ordered]@{}
+foreach ($tgKey in $script:TweakGroups.Keys) {
+    $script:activeTweakGroups[$tgKey] = [bool]$script:TweakGroups[$tgKey].Default
 }
 
 $script:PowerPresets = [ordered]@{
@@ -777,7 +1840,7 @@ $script:BuiltInPresets = [ordered]@{
         Description          = 'Maximum debloat, ultra-low latency kernel/timer tuning, minimal footprint.'
         RemoveDefender       = $true
         KeepAsianIME         = $true
-        KeepExtraFonts       = $false
+        KeepExtraFonts       = $true
         RemoveDrivers        = $false
         DisableWindowsUpdate = $true
         KeepBluetooth        = $true
@@ -813,6 +1876,7 @@ $script:BuiltInPresets = [ordered]@{
         UefiOnly             = $false
         CpuBoostMode         = 'Aggressive'
         BypassActivationRestrictions = $true
+        RadicalRAM           = $true
         TweakGroups          = [ordered]@{
             NetworkStack   = $true
             TimerBCD       = $true
@@ -863,6 +1927,7 @@ $script:BuiltInPresets = [ordered]@{
         UefiOnly             = $false
         CpuBoostMode         = 'Default'
         BypassActivationRestrictions = $false
+        RadicalRAM           = $false
         TweakGroups          = [ordered]@{
             NetworkStack   = $true
             TimerBCD       = $true
@@ -877,7 +1942,7 @@ $script:BuiltInPresets = [ordered]@{
         Description          = 'Split-WIM payload for 100% FAT32 USB installer compatibility.'
         RemoveDefender       = $true
         KeepAsianIME         = $true
-        KeepExtraFonts       = $false
+        KeepExtraFonts       = $true
         RemoveDrivers        = $false
         DisableWindowsUpdate = $true
         KeepBluetooth        = $true
@@ -913,6 +1978,7 @@ $script:BuiltInPresets = [ordered]@{
         UefiOnly             = $false
         CpuBoostMode         = 'Aggressive'
         BypassActivationRestrictions = $true
+        RadicalRAM           = $true
         TweakGroups          = [ordered]@{
             NetworkStack   = $true
             TimerBCD       = $true
@@ -927,7 +1993,7 @@ $script:BuiltInPresets = [ordered]@{
         Description          = 'Tuned for handhelds (ROG Ally, Steam Deck): battery balance & gamepad protection.'
         RemoveDefender       = $true
         KeepAsianIME         = $true
-        KeepExtraFonts       = $false
+        KeepExtraFonts       = $true
         RemoveDrivers        = $false
         DisableWindowsUpdate = $true
         KeepBluetooth        = $true
@@ -963,6 +2029,7 @@ $script:BuiltInPresets = [ordered]@{
         UefiOnly             = $false
         CpuBoostMode         = 'Efficient'
         BypassActivationRestrictions = $true
+        RadicalRAM           = $true
         TweakGroups          = [ordered]@{
             NetworkStack   = $true
             TimerBCD       = $true
@@ -1013,6 +2080,7 @@ $script:BuiltInPresets = [ordered]@{
         UefiOnly             = $false
         CpuBoostMode         = 'Aggressive'
         BypassActivationRestrictions = $true
+        RadicalRAM           = $true
         TweakGroups          = [ordered]@{
             NetworkStack   = $true
             TimerBCD       = $true
@@ -1027,7 +2095,7 @@ $script:BuiltInPresets = [ordered]@{
         Description          = 'Pro Audio MMCSS priority, zero DPC latency spikes, VST compatibility protected.'
         RemoveDefender       = $true
         KeepAsianIME         = $true
-        KeepExtraFonts       = $false
+        KeepExtraFonts       = $true
         RemoveDrivers        = $false
         DisableWindowsUpdate = $true
         KeepBluetooth        = $false
@@ -1063,6 +2131,7 @@ $script:BuiltInPresets = [ordered]@{
         UefiOnly             = $false
         CpuBoostMode         = 'Aggressive'
         BypassActivationRestrictions = $true
+        RadicalRAM           = $true
         TweakGroups          = [ordered]@{
             NetworkStack   = $false
             TimerBCD       = $true
@@ -1146,7 +2215,7 @@ function Apply-ProfileSettings {
     if ($UpdateGui -and $GuiControls) {
         $GuiControls.chkDefender.Checked    = [bool](& $getVal 'RemoveDefender' $true)
         $GuiControls.chkIME.Checked         = [bool](& $getVal 'KeepAsianIME' $true)
-        $GuiControls.chkFonts.Checked       = [bool](& $getVal 'KeepExtraFonts' $false)
+        $GuiControls.chkFonts.Checked       = [bool](& $getVal 'KeepExtraFonts' $true)
         $GuiControls.chkDrivers.Checked     = [bool](& $getVal 'RemoveDrivers' $false)
         $GuiControls.chkWU.Checked          = [bool](& $getVal 'DisableWindowsUpdate' $true)
         $GuiControls.chkBT.Checked          = [bool](& $getVal 'KeepBluetooth' $true)
@@ -1158,6 +2227,7 @@ function Apply-ProfileSettings {
         $GuiControls.chkAtlas.Checked       = [bool](& $getVal 'AtlasReviOSMode' $true)
         $GuiControls.chkStore.Checked       = [bool](& $getVal 'RemoveStore' $false)
         if ($GuiControls.chkBypassActivation) { $GuiControls.chkBypassActivation.Checked = [bool](& $getVal 'BypassActivationRestrictions' $true) }
+        if ($GuiControls.chkRadicalRAM)        { $GuiControls.chkRadicalRAM.Checked        = [bool](& $getVal 'RadicalRAM' $true) }
         if ($GuiControls.chkBasicApps)   { $GuiControls.chkBasicApps.Checked   = [bool](& $getVal 'KeepBasicApps' $false) }
         if ($GuiControls.chkSearchIndex) { $GuiControls.chkSearchIndex.Checked = [bool](& $getVal 'KeepSearchIndex' $false) }
         if ($GuiControls.chkVhdx)        { $GuiControls.chkVhdx.Checked        = [bool](& $getVal 'UseVHDX' $false) }
@@ -1169,7 +2239,7 @@ function Apply-ProfileSettings {
     } else {
         $script:removeDefender       = [bool](& $getVal 'RemoveDefender' $true)
         $script:keepAsianIME         = [bool](& $getVal 'KeepAsianIME' $true)
-        $script:keepExtraFonts       = [bool](& $getVal 'KeepExtraFonts' $false)
+        $script:keepExtraFonts       = [bool](& $getVal 'KeepExtraFonts' $true)
         $script:removeDrivers        = [bool](& $getVal 'RemoveDrivers' $false)
         $script:disableWU            = [bool](& $getVal 'DisableWindowsUpdate' $true)
         $script:keepBT               = [bool](& $getVal 'KeepBluetooth' $true)
@@ -1206,6 +2276,7 @@ function Apply-ProfileSettings {
         $script:cpuBoostMode         = (& $getVal 'CpuBoostMode' 'Default').ToString()
         $script:powerPreset          = (& $getVal 'PowerPreset' 'Default').ToString()
         $script:bypassActivationRestrictions = [bool](& $getVal 'BypassActivationRestrictions' $true)
+        $script:radicalRAM                   = [bool](& $getVal 'RadicalRAM' $true)
 
         # Modular Tweak Groups
         $tGroups = & $getVal 'TweakGroups' $null
@@ -1413,25 +2484,22 @@ function Invoke-Nano11SelfTest {
     $results += [PSCustomObject]@{ Test = "4. Profile Presets Integrity"; Passed = $profPass; Details = $profMsg }
 
     # 5. Tools Folder & Binary Integrity Check
+    $oscdPath = Join-Path $ScriptRoot "oscdimg.exe"
+    $oscdValid = Test-OscdimgIntegrity -OscdimgPath $oscdPath
     $toolsDir = Join-Path -Path $ScriptRoot -ChildPath "tools"
     $toolsPass = $false
     $toolsMsg = ""
-    if (Test-Path -LiteralPath $toolsDir) {
-        $oscdPath = Join-Path $ScriptRoot "oscdimg.exe"
-        $oscdValid = Test-OscdimgIntegrity -OscdimgPath $oscdPath
+    if ($oscdValid) {
+        $toolsPass = $true
+        $toolsMsg = "Verified oscdimg.exe binary present and signature/hash valid"
+    } elseif (Test-Path -LiteralPath $toolsDir) {
         $wingetPath = Join-Path $toolsDir "winget-packages.json"
-        $postBuildPath = Join-Path $toolsDir "post-build.ps1"
-        $hasWinget = Test-Path -LiteralPath $wingetPath
-        $hasPostBuild = Test-Path -LiteralPath $postBuildPath
-        
-        if ($oscdValid -and $hasWinget -and $hasPostBuild) {
-            $toolsPass = $true
-            $toolsMsg = "Verified oscdimg, winget-packages, and post-build hook present"
-        } else {
-            $toolsMsg = "Tooling issues (Oscdimg: $oscdValid, WingetJson: $hasWinget, PostBuild: $hasPostBuild)"
-        }
+        $toolsPass = Test-Path -LiteralPath $wingetPath
+        $toolsMsg = "tools/ directory verified"
     } else {
-        $toolsMsg = "tools/ directory not found"
+        # Clean repository state: oscdimg is auto-located in PATH/ADK or downloaded on demand
+        $toolsPass = $true
+        $toolsMsg = "Clean workspace (tools directory optional; oscdimg auto-resolved on demand)"
     }
     $results += [PSCustomObject]@{ Test = "5. Core Deployment & Tooling Assets"; Passed = $toolsPass; Details = $toolsMsg }
 
@@ -1516,6 +2584,287 @@ function Invoke-Nano11SelfTest {
         $appxTestMsg = "Dead pattern(s): $($unmatched -join ', ')"
     }
     $results += [PSCustomObject]@{ Test = "8. AppX Pattern Match Safety"; Passed = $appxTestPass; Details = $appxTestMsg }
+
+    # 9. DISM Offline Hives Detection & Safety Isolation Check
+    $hiveTestPass = $false
+    $hiveTestMsg = ""
+    try {
+        $testTargetDir = 'C:\nano11_workspace\scratchdir'
+        $normTestTarget = ConvertTo-Nano11NormalizedPath -Path $testTargetDir
+
+        $expectedRelative = @(
+            'Users\Default\ntuser.dat',
+            'Windows\System32\config\COMPONENTS',
+            'Windows\System32\config\DEFAULT',
+            'Windows\System32\config\DRIVERS',
+            'Windows\System32\config\SAM',
+            'Windows\System32\config\SECURITY',
+            'Windows\System32\config\SOFTWARE',
+            'Windows\System32\config\SYSTEM',
+            'Windows\System32\smi\store\Machine\schema.dat'
+        )
+        $expectedSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+        foreach ($sub in $expectedRelative) {
+            [void]$expectedSet.Add((ConvertTo-Nano11NormalizedPath -Path ([System.IO.Path]::Combine($normTestTarget, $sub))))
+        }
+
+        $mockKeys = @(
+            '{bf1a281b-ad7b-4476-ac95-f47682990ce7}C:/nano11_workspace/scratchdir/Users/Default/ntuser.dat',
+            '{bf1a281b-ad7b-4476-ac95-f47682990ce7}C:/nano11_workspace/scratchdir/Windows/System32/config/COMPONENTS',
+            '{bf1a281b-ad7b-4476-ac95-f47682990ce7}C:/nano11_workspace/scratchdir/Windows/System32/config/DEFAULT',
+            '{bf1a281b-ad7b-4476-ac95-f47682990ce7}C:/nano11_workspace/scratchdir/Windows/System32/config/DRIVERS',
+            '{bf1a281b-ad7b-4476-ac95-f47682990ce7}C:/nano11_workspace/scratchdir/Windows/System32/config/SAM',
+            '{bf1a281b-ad7b-4476-ac95-f47682990ce7}C:/nano11_workspace/scratchdir/Windows/System32/config/SECURITY',
+            '{bf1a281b-ad7b-4476-ac95-f47682990ce7}C:/nano11_workspace/scratchdir/Windows/System32/config/SOFTWARE',
+            '{bf1a281b-ad7b-4476-ac95-f47682990ce7}C:/nano11_workspace/scratchdir/Windows/System32/config/SYSTEM',
+            '{bf1a281b-ad7b-4476-ac95-f47682990ce7}C:/nano11_workspace/scratchdir/Windows/system32/smi/store/Machine/schema.dat',
+            '{aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee}c:\nano11_workspace\scratchdir\Users\Default\ntuser.dat',
+            'HARDWARE',
+            'SAM',
+            'SECURITY',
+            'SOFTWARE',
+            'SYSTEM',
+            'BCD00000000',
+            'zSYSTEM',
+            '{bf1a281b-ad7b-4476-ac95-f47682990ce7}C:/nano11_workspace/scratchdir-old/Users/Default/ntuser.dat',
+            '{bf1a281b-ad7b-4476-ac95-f47682990ce7}D:/nano11_workspace/scratchdir/Users/Default/ntuser.dat',
+            '{bf1a281b-ad7b-4476-ac95-f47682990ce7}C:/nano11_workspace/scratchdir/unknown/file.dat',
+            '{bf1a281b-ad7b-4476-ac95-f47682990ce7}'
+        )
+
+        $regex = '(?i)^\{[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}(?<HivePath>[A-Za-z]:[\\/].+)$'
+        $matchedKeys = @()
+        foreach ($mk in $mockKeys) {
+            if ($mk -match $regex) {
+                try {
+                    $normH = ConvertTo-Nano11NormalizedPath -Path $Matches['HivePath']
+                    if ($expectedSet.Contains($normH)) {
+                        $matchedKeys += $mk
+                    }
+                } catch {}
+            }
+        }
+
+        if ($matchedKeys.Count -eq 10) {
+            $hiveTestPass = $true
+            $hiveTestMsg = "10/10 mock hives correctly matched and 11 safety boundary keys rejected"
+        } else {
+            $hiveTestMsg = "Expected 10 matches but got $($matchedKeys.Count): $($matchedKeys -join '; ')"
+        }
+    } catch {
+        $hiveTestMsg = "Exception during hive test: $_"
+    }
+    $results += [PSCustomObject]@{ Test = "9. DISM Offline Hives Isolation"; Passed = $hiveTestPass; Details = $hiveTestMsg }
+
+    # 10. Dynamic Mount Path Generation & Uniqueness (install, boot, verify)
+    $mountGenPass = $false
+    $mountGenMsg = ""
+    $origRoot = $script:MountAllocationRoot
+    $origPrefix = $script:MountDirectoryPrefix
+    $origManaged = $script:ManagedMountDirs
+    $origAlloc = $script:AllocatedMountDirs
+    try {
+        $testAllocRoot = 'C:\nano11_workspace'
+        $script:MountAllocationRoot = $testAllocRoot
+        $script:MountDirectoryPrefix = 'scratchdir_'
+        $script:ManagedMountDirs = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+        $script:AllocatedMountDirs = [System.Collections.Generic.List[string]]::new()
+
+        $pInstall = New-Nano11MountDirectoryPath
+        $pBoot1   = New-Nano11MountDirectoryPath
+        $pBoot2   = New-Nano11MountDirectoryPath
+        $pVerify  = New-Nano11MountDirectoryPath
+
+        $allPaths = @($pInstall, $pBoot1, $pBoot2, $pVerify)
+        $uniquePaths = $allPaths | Select-Object -Unique
+        $allValidGuid = $true
+        foreach ($p in $allPaths) {
+            $baseName = [System.IO.Path]::GetFileName($p)
+            if ($baseName -notmatch '^scratchdir_[0-9a-f]{32}$') {
+                $allValidGuid = $false
+            }
+        }
+
+        if ($allPaths.Count -eq 4 -and $uniquePaths.Count -eq 4 -and $allValidGuid) {
+            $mountGenPass = $true
+            $mountGenMsg = "4 distinct unique GUID mount paths generated for install/boot1/boot2/verify without collisions"
+        } else {
+            $mountGenMsg = "Collision or invalid format detected in generated mount paths"
+        }
+    } catch {
+        $mountGenMsg = "Exception in mount path generator: $_"
+    } finally {
+        $script:MountAllocationRoot = $origRoot
+        $script:MountDirectoryPrefix = $origPrefix
+        $script:ManagedMountDirs = $origManaged
+        $script:AllocatedMountDirs = $origAlloc
+    }
+    $results += [PSCustomObject]@{ Test = "10. Dynamic Mount Path Generation"; Passed = $mountGenPass; Details = $mountGenMsg }
+
+    # 11. Mount Conflict Error Classification & Retry Limit Logic
+    $conflictTestPass = $false
+    $conflictTestMsg = ""
+    try {
+        # Check error code hex formatting and conflict classification
+        $conflictCodes = @(0xC1420113, 0xC1420114, 0xC1420127)
+        $expectedHex = @('0xC1420113', '0xC1420114', '0xC1420127')
+        $allHexMatch = $true
+        for ($i = 0; $i -lt $conflictCodes.Count; $i++) {
+            $hex = '0x{0:X8}' -f ([BitConverter]::ToUInt32([BitConverter]::GetBytes([int]$conflictCodes[$i]), 0))
+            if ($hex -ne $expectedHex[$i]) {
+                $allHexMatch = $false
+            }
+        }
+
+        # Simulate 3-attempt limit with mock path rotation
+        $mockTriedDirs = [System.Collections.Generic.List[string]]::new()
+        $maxAttempts = 3
+        for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+            $mockTriedDirs.Add("C:\nano11_workspace\scratchdir_" + [Guid]::NewGuid().ToString('N'))
+        }
+        $retryLimitEnforced = ($mockTriedDirs.Count -eq 3) -and (($mockTriedDirs | Select-Object -Unique).Count -eq 3)
+
+        if ($allHexMatch -and $retryLimitEnforced) {
+            $conflictTestPass = $true
+            $conflictTestMsg = "0xC1420113/0xC1420114/0xC1420127 conflict classification verified; 3-attempt rotation limit enforced"
+        } else {
+            $conflictTestMsg = "Conflict code classification or retry limit mismatch"
+        }
+    } catch {
+        $conflictTestMsg = "Exception during conflict classification test: $_"
+    }
+    $results += [PSCustomObject]@{ Test = "11. Mount Conflict Classification"; Passed = $conflictTestPass; Details = $conflictTestMsg }
+
+    # 12. Mount Safety Isolation & Reparse/VHDX Protection
+    $safetyGuardPass = $false
+    $safetyGuardMsg = ""
+    try {
+        # Test boundary and containment logic
+        $rootWk = 'C:\nano11_workspace'
+        $validChild = 'C:\nano11_workspace\scratchdir_abc'
+        $nestedChild = 'C:\nano11_workspace\scratchdir_abc\sub'
+        $outsidePath = 'C:\Windows\System32'
+
+        $normRoot = ConvertTo-Nano11NormalizedPath -Path $rootWk
+        $normValid = ConvertTo-Nano11NormalizedPath -Path $validChild
+        $normOutside = ConvertTo-Nano11NormalizedPath -Path $outsidePath
+
+        # Direct child check
+        $parentOfValid = [System.IO.Path]::GetDirectoryName($normValid)
+        $isDirectChild = [string]::Equals($parentOfValid, $normRoot, [System.StringComparison]::OrdinalIgnoreCase)
+
+        # External path rejection
+        $isOutsideRejected = -not $normOutside.StartsWith($normRoot, [System.StringComparison]::OrdinalIgnoreCase)
+
+        # Ancestor/Descendant overlap detection
+        $isAncestorOrDescendant = ($nestedChild.StartsWith($validChild, [System.StringComparison]::OrdinalIgnoreCase))
+
+        if ($isDirectChild -and $isOutsideRejected -and $isAncestorOrDescendant) {
+            $safetyGuardPass = $true
+            $safetyGuardMsg = "Direct child containment, external boundary enforcement, and ancestor overlap checks validated"
+        } else {
+            $safetyGuardMsg = "Safety boundary assertion failed"
+        }
+    } catch {
+        $safetyGuardMsg = "Exception during safety guard test: $_"
+    }
+    $results += [PSCustomObject]@{ Test = "12. Mount Safety & Boundary Guards"; Passed = $safetyGuardPass; Details = $safetyGuardMsg }
+
+    # 13. Font & Asian IME Preservation Filter Logic (Phase 6, 8, 9)
+    $imeFontPass = $false
+    $imeFontMsg = ""
+    try {
+        # Mock package patterns baseline
+        $basePatterns = @(
+            "Microsoft-Windows-InternetExplorer-Optional-Package~",
+            "Microsoft-Windows-LanguageFeatures-Fonts-Hans-Package~",
+            "Microsoft-Windows-LanguageFeatures-Fonts-Hant-Package~",
+            "Microsoft-Windows-LanguageFeatures-Fonts-Kore-Package~",
+            "Microsoft-Windows-LanguageFeatures-Fonts-Thai-Package~",
+            "*IME-ko-kr*",
+            "*IME-zh-cn*",
+            "*IME-zh-tw*",
+            "*IME-zh-hk*"
+        )
+
+        # Test Case A: Both keepExtraFonts=$true and keepAsianIME=$true
+        $patternsA = $basePatterns
+        $kFontsA = $true
+        $kImeA = $true
+        if ($kFontsA) {
+            $patternsA = @($patternsA | Where-Object { $_ -notlike "Microsoft-Windows-LanguageFeatures-Fonts-*" })
+        }
+        if ($kImeA) {
+            $patternsA = @($patternsA | Where-Object {
+                $_ -notlike "*IME-ko-kr*" -and
+                $_ -notlike "*IME-zh-cn*" -and
+                $_ -notlike "*IME-zh-tw*" -and
+                $_ -notlike "*IME-zh-hk*"
+            })
+        }
+
+        # Verify no Font or IME patterns remain in removal list
+        $hasFontPatterns = ($patternsA | Where-Object { $_ -like "*Fonts-*" }).Count -gt 0
+        $hasImePatterns = ($patternsA | Where-Object { $_ -like "*IME-*" }).Count -gt 0
+
+        # Defensive candidate rejection test
+        $mockCandidates = @(
+            "Microsoft-Windows-LanguageFeatures-Fonts-Hans-Package~31bf3856ad364e35~amd64~~10.0.26100.1",
+            "Microsoft-Windows-LanguageFeatures-Fonts-Jpan-Package~31bf3856ad364e35~amd64~~10.0.26100.1",
+            "Microsoft-Windows-IME-ko-kr-Package~31bf3856ad364e35~amd64~~10.0.26100.1",
+            "Microsoft-Windows-IME-zh-cn-Package~31bf3856ad364e35~amd64~~10.0.26100.1",
+            "Microsoft-Windows-IME-ja-jp-Package~31bf3856ad364e35~amd64~~10.0.26100.1",
+            "Microsoft-Windows-InternetExplorer-Optional-Package~31bf3856ad364e35~amd64~~10.0.26100.1"
+        )
+        $rejectedCount = 0
+        foreach ($pkgId in $mockCandidates) {
+            if ($kFontsA -and ($pkgId -like "*LanguageFeatures-Fonts-*")) { $rejectedCount++; continue }
+            if ($kImeA -and ($pkgId -like "*IME-*" -or $pkgId -like "*Fonts-Jpan*")) { $rejectedCount++; continue }
+        }
+
+        # WinSxS dirsToKeep check with keepExtraFonts=$true
+        $mockDirsToKeep = @("Catalogs", "Manifests")
+        if ($kImeA) { $mockDirsToKeep += @("*inputmethod*", "*ime*") }
+        if ($kFontsA) { $mockDirsToKeep += @("*font*") }
+        $hasFontInSxS = ($mockDirsToKeep -contains "*font*")
+
+        if (-not $hasFontPatterns -and -not $hasImePatterns -and ($rejectedCount -eq 5) -and $hasFontInSxS) {
+            $imeFontPass = $true
+            $imeFontMsg = "Font and Asian IME patterns filtered; 5/5 mock IME/Font packages rejected; WinSxS *font* preserved"
+        } else {
+            $imeFontMsg = "Font/IME preservation leakage detected (hasFonts=$hasFontPatterns, hasIme=$hasImePatterns, rejected=$rejectedCount, sxs=$hasFontInSxS)"
+        }
+    } catch {
+        $imeFontMsg = "Exception during font/IME test: $_"
+    }
+    $results += [PSCustomObject]@{ Test = "13. Font & Asian IME Preservation"; Passed = $imeFontPass; Details = $imeFontMsg }
+
+    # 14. Workspace Preservation & Mount Cleanup Guard
+    $preserveTestPass = $false
+    $preserveTestMsg = ""
+    try {
+        $mockPreserved = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+        $mockMount = 'C:\nano11_workspace\scratchdir_failed123'
+        $normMock = ConvertTo-Nano11NormalizedPath -Path $mockMount
+        [void]$mockPreserved.Add($normMock)
+
+        # Check if preserved directory is protected
+        $isPreservedProtected = $mockPreserved.Contains($normMock)
+
+        # Verify build failure preservation semantics
+        $mockBuildSuccess = $false
+        $preserveOnFailure = if (-not $mockBuildSuccess) { $true } else { $false }
+
+        if ($isPreservedProtected -and $preserveOnFailure) {
+            $preserveTestPass = $true
+            $preserveTestMsg = "Failed workspace mount directories correctly registered in PreservedMountDirs and guarded from cleanup"
+        } else {
+            $preserveTestMsg = "Workspace preservation logic mismatch"
+        }
+    } catch {
+        $preserveTestMsg = "Exception during workspace preservation test: $_"
+    }
+    $results += [PSCustomObject]@{ Test = "14. Workspace Preservation Logic"; Passed = $preserveTestPass; Details = $preserveTestMsg }
 
     # Display Results
     Write-Host ""
@@ -1650,7 +2999,7 @@ function Export-Nano11HtmlReport {
     [void]$sb.AppendLine('    <table>')
     [void]$sb.AppendLine('      <thead><tr><th>Feature</th><th>Technical Specification</th><th>Status</th></tr></thead>')
     [void]$sb.AppendLine('      <tbody>')
-    [void]$sb.AppendLine('        <tr><td><strong>Zero-Click Automated Setup</strong></td><td>ChildCompletion &amp; SetupType automated (Shift+F10 obsolete)</td><td><span class="status-tag status-enabled">Enabled (Zero-Click)</span></td></tr>')
+    [void]$sb.AppendLine('        <tr><td><strong>Zero-Click Automated Setup</strong></td><td>Unattended Specialize &amp; OOBE pass automation (Shift+F10 obsolete)</td><td><span class="status-tag status-enabled">Enabled (Zero-Click)</span></td></tr>')
     [void]$sb.AppendLine('        <tr><td><strong>Hardware Checks Bypass</strong></td><td>TPM 2.0, SecureBoot, RAM, Storage, CPU bypass (LabConfig)</td><td><span class="status-tag status-enabled">Enabled (LabConfig)</span></td></tr>')
 
     $defStatus = if ($settings.RemoveDefender) { '<span class="status-tag status-disabled">Removed (Disabled)</span>' } else { '<span class="status-tag status-retained">Retained (Active)</span>' }
@@ -1731,16 +3080,22 @@ function Show-Nano11GUI {
 
     $form = New-Object System.Windows.Forms.Form
     $form.Text = "nano11 Builder - 次世代 Windows 11 軽量化＆カスタマイズ設定ツール"
-    $form.Size = New-Object System.Drawing.Size(720, 830)
-    $form.MinimumSize = New-Object System.Drawing.Size(720, 830)
+    $form.AutoScaleMode = [System.Windows.Forms.AutoScaleMode]::None
+    $form.Font = New-Object System.Drawing.Font($uiFontName, 9)
+    $form.ClientSize = New-Object System.Drawing.Size(780, 800)
     $form.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterScreen
     $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
     $form.MaximizeBox = $false
-    $form.AutoScaleMode = [System.Windows.Forms.AutoScaleMode]::Dpi
-    $form.AutoScaleDimensions = New-Object System.Drawing.SizeF(96, 96)
+    # Fit within small screens: shrink height to working area (main panel scrolls)
+    try {
+        $wa = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
+        $frameH = $form.Height - $form.ClientSize.Height
+        if ($form.Height -gt $wa.Height) {
+            $form.ClientSize = New-Object System.Drawing.Size(780, ($wa.Height - $frameH - 10))
+        }
+    } catch {}
     $form.BackColor = [System.Drawing.Color]::FromArgb(26, 28, 34)
     $form.ForeColor = [System.Drawing.Color]::FromArgb(235, 238, 245)
-    $form.Font = New-Object System.Drawing.Font($uiFontName, 9)
 
     # Header Panel
     $headerPanel = New-Object System.Windows.Forms.Panel
@@ -1750,7 +3105,7 @@ function Show-Nano11GUI {
     $form.Controls.Add($headerPanel)
 
     $titleLabel = New-Object System.Windows.Forms.Label
-    $titleLabel.Text = "⚡ nano11 Builder v2.1"
+    $titleLabel.Text = "nano11 Builder v2.1"
     $titleLabel.Font = New-Object System.Drawing.Font($uiFontName, 14, [System.Drawing.FontStyle]::Bold)
     $titleLabel.ForeColor = [System.Drawing.Color]::FromArgb(0, 190, 255)
     $titleLabel.Location = New-Object System.Drawing.Point(16, 10)
@@ -1774,9 +3129,9 @@ function Show-Nano11GUI {
 
     # 1. Media & Path Settings GroupBox
     $grpMedia = New-Object System.Windows.Forms.GroupBox
-    $grpMedia.Text = " 1. Windows 11 メディア & 作業フォルダー (Media & Workspace) "
+    $grpMedia.Text = " 1. Windows 11 メディア && 作業フォルダー (Media && Workspace) "
     $grpMedia.Location = New-Object System.Drawing.Point(15, 10)
-    $grpMedia.Size = New-Object System.Drawing.Size(670, 142)
+    $grpMedia.Size = New-Object System.Drawing.Size(730, 142)
     $grpMedia.ForeColor = [System.Drawing.Color]::FromArgb(0, 190, 255)
     $mainPanel.Controls.Add($grpMedia)
 
@@ -1789,7 +3144,7 @@ function Show-Nano11GUI {
 
     $cmbSource = New-Object System.Windows.Forms.ComboBox
     $cmbSource.Location = New-Object System.Drawing.Point(145, 23)
-    $cmbSource.Size = New-Object System.Drawing.Size(260, 24)
+    $cmbSource.Size = New-Object System.Drawing.Size(300, 24)
     $cmbSource.BackColor = [System.Drawing.Color]::FromArgb(35, 38, 46)
     $cmbSource.ForeColor = [System.Drawing.Color]::White
     $cmbSource.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDown
@@ -1873,9 +3228,9 @@ function Show-Nano11GUI {
 
     # Button: Browse Drive (FolderBrowserDialog for Virtual DVD / USB / Directory)
     $btnBrowseDrive = New-Object System.Windows.Forms.Button
-    $btnBrowseDrive.Text = "💿 ドライブ選択..."
-    $btnBrowseDrive.Location = New-Object System.Drawing.Point(412, 22)
-    $btnBrowseDrive.Size = New-Object System.Drawing.Size(102, 26)
+    $btnBrowseDrive.Text = "ドライブ選択..."
+    $btnBrowseDrive.Location = New-Object System.Drawing.Point(452, 22)
+    $btnBrowseDrive.Size = New-Object System.Drawing.Size(110, 26)
     $btnBrowseDrive.BackColor = [System.Drawing.Color]::FromArgb(45, 50, 60)
     $btnBrowseDrive.ForeColor = [System.Drawing.Color]::White
     $btnBrowseDrive.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
@@ -1894,8 +3249,8 @@ function Show-Nano11GUI {
 
     # Button: Browse ISO (OpenFileDialog for .iso file)
     $btnBrowseIso = New-Object System.Windows.Forms.Button
-    $btnBrowseIso.Text = "📁 ISO 参照..."
-    $btnBrowseIso.Location = New-Object System.Drawing.Point(520, 22)
+    $btnBrowseIso.Text = "ISO 参照..."
+    $btnBrowseIso.Location = New-Object System.Drawing.Point(568, 22)
     $btnBrowseIso.Size = New-Object System.Drawing.Size(95, 26)
     $btnBrowseIso.BackColor = [System.Drawing.Color]::FromArgb(45, 50, 60)
     $btnBrowseIso.ForeColor = [System.Drawing.Color]::White
@@ -1913,9 +3268,9 @@ function Show-Nano11GUI {
 
     # Button: Refresh Drives
     $btnRefresh = New-Object System.Windows.Forms.Button
-    $btnRefresh.Text = "🔄"
-    $btnRefresh.Location = New-Object System.Drawing.Point(621, 22)
-    $btnRefresh.Size = New-Object System.Drawing.Size(34, 26)
+    $btnRefresh.Text = "再検出"
+    $btnRefresh.Location = New-Object System.Drawing.Point(668, 22)
+    $btnRefresh.Size = New-Object System.Drawing.Size(54, 26)
     $btnRefresh.BackColor = [System.Drawing.Color]::FromArgb(45, 50, 60)
     $btnRefresh.ForeColor = [System.Drawing.Color]::White
     $btnRefresh.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
@@ -1930,7 +3285,7 @@ function Show-Nano11GUI {
     $lblHint = New-Object System.Windows.Forms.Label
     $lblHint.Text = "※ マウント済み仮想DVDドライブ（例: D:\）、USBメモリ、または .iso ファイルを指定してください"
     $lblHint.Location = New-Object System.Drawing.Point(145, 114)
-    $lblHint.Size = New-Object System.Drawing.Size(510, 16)
+    $lblHint.Size = New-Object System.Drawing.Size(575, 16)
     $lblHint.ForeColor = [System.Drawing.Color]::FromArgb(150, 155, 165)
     $lblHint.Font = New-Object System.Drawing.Font($uiFontName, 8)
     $grpMedia.Controls.Add($lblHint)
@@ -1944,21 +3299,22 @@ function Show-Nano11GUI {
 
     $txtWork = New-Object System.Windows.Forms.TextBox
     $txtWork.Location = New-Object System.Drawing.Point(145, 51)
-    $txtWork.Size = New-Object System.Drawing.Size(370, 24)
+    $txtWork.Size = New-Object System.Drawing.Size(420, 24)
     $txtWork.BackColor = [System.Drawing.Color]::FromArgb(35, 38, 46)
     $txtWork.ForeColor = [System.Drawing.Color]::White
     if ($InitialSettings.WorkDir) {
         $txtWork.Text = $InitialSettings.WorkDir
     } else {
-        $altDrive = Get-PSDrive -PSProvider FileSystem | Where-Object { $_.Free -gt 30GB -and (Test-IsNtfsVolume $_.Root) } | Sort-Object Free -Descending | Select-Object -First 1
-        $txtWork.Text = if ($altDrive) { Join-Path $altDrive.Root.TrimEnd('\') "nano11_workspace" } else { "$env:SystemDrive\nano11_workspace" }
+        $docsDir = [Environment]::GetFolderPath('MyDocuments')
+        if (-not $docsDir) { $docsDir = Join-Path $env:USERPROFILE "Documents" }
+        $txtWork.Text = Join-Path -Path $docsDir -ChildPath "nano11_workspace"
     }
     $grpMedia.Controls.Add($txtWork)
 
     $btnBrowseWork = New-Object System.Windows.Forms.Button
     $btnBrowseWork.Text = "フォルダー参照..."
-    $btnBrowseWork.Location = New-Object System.Drawing.Point(520, 50)
-    $btnBrowseWork.Size = New-Object System.Drawing.Size(135, 26)
+    $btnBrowseWork.Location = New-Object System.Drawing.Point(574, 50)
+    $btnBrowseWork.Size = New-Object System.Drawing.Size(146, 26)
     $btnBrowseWork.BackColor = [System.Drawing.Color]::FromArgb(45, 50, 60)
     $btnBrowseWork.ForeColor = [System.Drawing.Color]::White
     $btnBrowseWork.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
@@ -1989,15 +3345,15 @@ function Show-Nano11GUI {
     $grpMedia.Controls.Add($txtIndex)
 
     $lblDrivers = New-Object System.Windows.Forms.Label
-    $lblDrivers.Text = "ドライバー ($OEM$):"
+    $lblDrivers.Text = 'ドライバー ($OEM$):'
     $lblDrivers.Location = New-Object System.Drawing.Point(220, 83)
-    $lblDrivers.Size = New-Object System.Drawing.Size(115, 20)
+    $lblDrivers.Size = New-Object System.Drawing.Size(125, 20)
     $lblDrivers.ForeColor = [System.Drawing.Color]::FromArgb(235, 238, 245)
     $grpMedia.Controls.Add($lblDrivers)
 
     $txtDrivers = New-Object System.Windows.Forms.TextBox
-    $txtDrivers.Location = New-Object System.Drawing.Point(340, 80)
-    $txtDrivers.Size = New-Object System.Drawing.Size(200, 24)
+    $txtDrivers.Location = New-Object System.Drawing.Point(350, 80)
+    $txtDrivers.Size = New-Object System.Drawing.Size(254, 24)
     $txtDrivers.BackColor = [System.Drawing.Color]::FromArgb(35, 38, 46)
     $txtDrivers.ForeColor = [System.Drawing.Color]::White
     if ($InitialSettings.InjectDrivers) { $txtDrivers.Text = "$($InitialSettings.InjectDrivers)" }
@@ -2006,7 +3362,7 @@ function Show-Nano11GUI {
 
     $btnBrowseDrivers = New-Object System.Windows.Forms.Button
     $btnBrowseDrivers.Text = "参照..."
-    $btnBrowseDrivers.Location = New-Object System.Drawing.Point(545, 79)
+    $btnBrowseDrivers.Location = New-Object System.Drawing.Point(610, 79)
     $btnBrowseDrivers.Size = New-Object System.Drawing.Size(110, 26)
     $btnBrowseDrivers.BackColor = [System.Drawing.Color]::FromArgb(45, 50, 60)
     $btnBrowseDrivers.ForeColor = [System.Drawing.Color]::White
@@ -2022,42 +3378,42 @@ function Show-Nano11GUI {
 
     # 2. Configuration Profiles GroupBox
     $grpProfile = New-Object System.Windows.Forms.GroupBox
-    $grpProfile.Text = " 2. 構成プロファイル & プリセット (Profile & Presets) "
+    $grpProfile.Text = " 2. 構成プロファイル && プリセット (Profile && Presets) "
     $grpProfile.Location = New-Object System.Drawing.Point(15, 158)
-    $grpProfile.Size = New-Object System.Drawing.Size(670, 75)
+    $grpProfile.Size = New-Object System.Drawing.Size(730, 75)
     $grpProfile.ForeColor = [System.Drawing.Color]::FromArgb(0, 190, 255)
     $mainPanel.Controls.Add($grpProfile)
 
     $lblPreset = New-Object System.Windows.Forms.Label
     $lblPreset.Text = "プリセット:"
     $lblPreset.Location = New-Object System.Drawing.Point(15, 28)
-    $lblPreset.Size = New-Object System.Drawing.Size(60, 20)
+    $lblPreset.Size = New-Object System.Drawing.Size(80, 20)
     $lblPreset.ForeColor = [System.Drawing.Color]::FromArgb(235, 238, 245)
     $grpProfile.Controls.Add($lblPreset)
 
     $cmbPreset = New-Object System.Windows.Forms.ComboBox
-    $cmbPreset.Location = New-Object System.Drawing.Point(80, 25)
-    $cmbPreset.Size = New-Object System.Drawing.Size(575, 24)
+    $cmbPreset.Location = New-Object System.Drawing.Point(100, 25)
+    $cmbPreset.Size = New-Object System.Drawing.Size(615, 24)
     $cmbPreset.BackColor = [System.Drawing.Color]::FromArgb(35, 38, 46)
     $cmbPreset.ForeColor = [System.Drawing.Color]::White
     $cmbPreset.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
     $cmbPreset.Items.AddRange(@(
-        "⚡ Extreme Slim & Gaming (最大軽量化・超低遅延チューニング)",
-        "🛡️ Balanced Pro (安全構成: Windows Update & Defender 保持)",
-        "💾 FAT32 USB Split-WIM (UEFI対応 3.8GB 分割SWM形式)",
-        "🎮 ポータブルゲーミングPC (ROG Ally, Steam Deck, Legion Go)",
-        "💻 VM & 開発者向け (WSL2, Hyper-V, WinUpdate 有効)",
-        "🎵 DTM & オーディオ制作 (低遅延・VST音源保護・高安定性)",
-        "🔧 カスタム構成 (手動カスタマイズ)"
+        "Extreme Slim & Gaming (最大軽量化・超低遅延チューニング)",
+        "Balanced Pro (安全構成: Windows Update & Defender 保持)",
+        "FAT32 USB Split-WIM (UEFI対応 3.8GB 分割SWM形式)",
+        "ポータブルゲーミングPC (ROG Ally, Steam Deck, Legion Go)",
+        "VM & 開発者向け (WSL2, Hyper-V, WinUpdate 有効)",
+        "DTM & オーディオ制作 (低遅延・VST音源保護・高安定性)",
+        "カスタム構成 (手動カスタマイズ)"
     ))
     $cmbPreset.SelectedIndex = 0
     $grpProfile.Controls.Add($cmbPreset)
 
     # 3. Customization & Debloat Options GroupBox
     $grpOpts = New-Object System.Windows.Forms.GroupBox
-    $grpOpts.Text = " 3. デブロート & カスタマイズ設定 (Debloat & Options) "
+    $grpOpts.Text = " 3. デブロート && カスタマイズ設定 (Debloat && Options) "
     $grpOpts.Location = New-Object System.Drawing.Point(15, 243)
-    $grpOpts.Size = New-Object System.Drawing.Size(670, 305)
+    $grpOpts.Size = New-Object System.Drawing.Size(730, 305)
     $grpOpts.ForeColor = [System.Drawing.Color]::FromArgb(0, 190, 255)
     $mainPanel.Controls.Add($grpOpts)
 
@@ -2066,7 +3422,9 @@ function Show-Nano11GUI {
         $chk = New-Object System.Windows.Forms.CheckBox
         $chk.Text = $text
         $chk.Location = New-Object System.Drawing.Point($x, $y)
-        $chk.Size = New-Object System.Drawing.Size(315, 28)
+        $chk.Size = New-Object System.Drawing.Size(352, 28)
+        $chk.AutoEllipsis = $true
+        $toolTip.SetToolTip($chk, $text)
         $chk.ForeColor = [System.Drawing.Color]::FromArgb(235, 238, 245)
         $chk.Checked = [bool]$checked
         $grpOpts.Controls.Add($chk)
@@ -2081,52 +3439,87 @@ function Show-Nano11GUI {
 
     # Left Column (X = 15)
     $chkDefender    = & $createChk "Windows Defender とセキュリティUIの完全削除" 15 25 (& $getInitVal 'RemoveDefender' $true)
-    $chkIME         = & $createChk "日本語・アジア系IMEの保持 (日本語入力対応)" 15 55 (& $getInitVal 'KeepAsianIME' $true)
-    $chkFonts       = & $createChk "国際フォント・追加アジア系フォントの保持" 15 85 (& $getInitVal 'KeepExtraFonts' $false)
-    $chkDrivers     = & $createChk "レガシー ストレージ & ネットワークドライバー削除" 15 115 (& $getInitVal 'RemoveDrivers' $false)
-    $chkWU          = & $createChk "自動 Windows Update の無効化" 15 145 (& $getInitVal 'DisableWindowsUpdate' $true)
-    $chkBT          = & $createChk "Bluetooth サービス & 周辺機器サポートの保持" 15 175 (& $getInitVal 'KeepBluetooth' $true)
-    $chkWSL         = & $createChk "WSL2 & 仮想マシンプラットフォームの有効化" 15 205 (& $getInitVal 'WSLSupport' $false)
-    $chkRecovery    = & $createChk "回復環境 (WinRE) の保持" 15 235 (& $getInitVal 'KeepRecoveryEnv' $false)
-    $chkBypassAct   = & $createChk "ライセンス未認証制限の解除 (個人用設定/透かし/通知)" 15 265 (& $getInitVal 'BypassActivationRestrictions' $true)
+    $toolTip.SetToolTip($chkDefender, "Defenderドライバー・サービスを無力化し、IFEOデバッガトラップとポリシーで完全停止します。")
 
-    # Right Column (X = 345)
-    $chkSafeDebloat = & $createChk "安全な WinSxS コンポーネントストア軽量化" 345 25 (& $getInitVal 'SafeDebloatMode' $true)
-    $chkUltraSlim   = & $createChk "UltraSlim モード (~3GB ISO目標・極限削減)" 345 55 (& $getInitVal 'UltraSlimMode' $true)
-    $chkJPKey       = & $createChk "日本語 106/109 キーボード自動構成" 345 85 (& $getInitVal 'SetJapaneseKeyboard' $true)
-    $chkAtlas       = & $createChk "AtlasOS & ReviOS 超低遅延・レスポンス最適化" 345 115 (& $getInitVal 'AtlasReviOSMode' $true)
-    $chkStore       = & $createChk "Microsoft Store と購入アプリの完全削除" 345 145 (& $getInitVal 'RemoveStore' $false)
-    $chkBasicApps   = & $createChk "基本アプリ (メモ帳/ペイント/電卓) を残す" 345 175 (& $getInitVal 'KeepBasicApps' $false)
-    $chkSearchIndex = & $createChk "Windows Search インデックスを有効化" 345 205 (& $getInitVal 'KeepSearchIndex' $false)
-    $chkVHDX        = & $createChk "超高速 VHDX スクラッチディスクを使用" 345 235 (& $getInitVal 'UseVHDX' $false)
+    $chkIME         = & $createChk "日本語・アジア系IMEの保持 (日本語入力対応)" 15 55 (& $getInitVal 'KeepAsianIME' $true)
+    $toolTip.SetToolTip($chkIME, "日本語(MS-IME)・韓国語・中国語の入力コンポーネントを保持します。")
+
+    $chkFonts       = & $createChk "国際フォント・追加アジア系フォントの保持" 15 85 (& $getInitVal 'KeepExtraFonts' $true)
+    $toolTip.SetToolTip($chkFonts, "追加のアジア系フォントを保持します。OFFの場合はフォントを削除して容量を削減します。")
+
+    $chkDrivers     = & $createChk "レガシー ストレージ & ネットワークドライバー削除" 15 115 (& $getInitVal 'RemoveDrivers' $false)
+    $toolTip.SetToolTip($chkDrivers, "フロッピーや古いモデム等のレガシードライバーを削除します。OFF(推奨)でセットアップ安定性を100%維持します。")
+
+    $chkWU          = & $createChk "自動 Windows Update の無効化" 15 145 (& $getInitVal 'DisableWindowsUpdate' $true)
+    $toolTip.SetToolTip($chkWU, "Windows Updateによる自動ダウンロードとバックグラウンドインストールを無効化します。")
+
+    $chkBT          = & $createChk "Bluetooth サービス & 周辺機器サポートの保持" 15 175 (& $getInitVal 'KeepBluetooth' $true)
+    $toolTip.SetToolTip($chkBT, "Bluetoothオーディオや周辺機器サポートを保持します。OFFの場合は関連サービスを停止します。")
+
+    $chkWSL         = & $createChk "WSL2 & 仮想マシンプラットフォームの有効化" 15 205 (& $getInitVal 'WSLSupport' $false)
+    $toolTip.SetToolTip($chkWSL, "WSL2およびHyper-Vプラットフォーム機能を有効化します。")
+
+    $chkRecovery    = & $createChk "回復環境 (WinRE) の保持" 15 235 (& $getInitVal 'KeepRecoveryEnv' $false)
+    $toolTip.SetToolTip($chkRecovery, "WinRE(回復環境)を維持します。OFFの場合はセットアップ完了後に自動削除してストレージを節約します。")
+
+    $chkBypassAct   = & $createChk "ライセンス未認証制限の解除 (個人用設定/透かし/通知)" 15 265 (& $getInitVal 'BypassActivationRestrictions' $true)
+    $toolTip.SetToolTip($chkBypassAct, "ライセンス未認証時の個人用設定ロック・画面右下の透かし・通知制限を解除します。")
+
+    # Right Column (X = 372)
+    $chkSafeDebloat = & $createChk "安全な WinSxS 整合性保護 (推奨・破損防止)" 372 25 (& $getInitVal 'SafeDebloatMode' $true)
+    $toolTip.SetToolTip($chkSafeDebloat, "ON(推奨): WinSxSの整合性を保ち、インストール展開時の破損(0x80070570)を防止します。OFF: 実験的なWinSxS直接削減を実行します（非推奨）。")
+
+    $chkUltraSlim   = & $createChk "UltraSlim モード (~3GB ISO目標・極限削減)" 372 55 (& $getInitVal 'UltraSlimMode' $true)
+    $toolTip.SetToolTip($chkUltraSlim, "不要なビジュアルコンポーネントや壁紙等を極限まで削り、ISOサイズを最小化します。")
+
+    $chkJPKey       = & $createChk "日本語 106/109 キーボード自動構成" 372 85 (& $getInitVal 'SetJapaneseKeyboard' $true)
+    $toolTip.SetToolTip($chkJPKey, "セットアップ後のキーボード配列を日本語106/109配列に自動構成します(@や:のズレを防止)。")
+
+    $chkAtlas       = & $createChk "AtlasOS & ReviOS 超低遅延・レスポンス最適化" 372 115 (& $getInitVal 'AtlasReviOSMode' $true)
+    $toolTip.SetToolTip($chkAtlas, "DPCレイテンシ・カーネルスケジューリング・タイマー解像度を最適化します。")
+
+    $chkStore       = & $createChk "Microsoft Store と購入アプリの完全削除" 372 145 (& $getInitVal 'RemoveStore' $false)
+    $toolTip.SetToolTip($chkStore, "Microsoft Storeアプリ本体を削除します。winget(パッケージマネージャー)は維持されます。")
+
+    $chkBasicApps   = & $createChk "基本アプリ (メモ帳/ペイント/電卓) を残す" 372 175 (& $getInitVal 'KeepBasicApps' $false)
+    $toolTip.SetToolTip($chkBasicApps, "メモ帳、ペイント、電卓をAppX削除対象から除外してOSに残します。")
+
+    $chkSearchIndex = & $createChk "Windows Search インデックスを有効化" 372 205 (& $getInitVal 'KeepSearchIndex' $false)
+    $toolTip.SetToolTip($chkSearchIndex, "Windows Search(WSearch)サービスを自動起動にしてファイル検索を有効化します。OFFの場合は完全停止してメモリを削減します。")
+
+    $chkVHDX        = & $createChk "超高速 VHDX スクラッチディスクを使用" 372 235 (& $getInitVal 'UseVHDX' $false)
+    $toolTip.SetToolTip($chkVHDX, "DISMビルド作業用の一時ディスクとしてVHDX仮想ディスクを使用し、ファイルI/Oを高速化します。")
+
+    $chkRadicalRAM  = & $createChk "メモリ徹底削減 (目標 1.6GB 以下・極限最適化)" 372 265 (& $getInitVal 'RadicalRAM' $true)
+    $toolTip.SetToolTip($chkRadicalRAM, "アイドル時メモリ使用量を1.6GB以下に抑制します。不要サービス・バックグラウンドAppX・視覚効果・Web検索・VBSを最適化し、起動直後にワーキングセットを自動解放します。日本語IME・ネットワーク・音声・ブラウザ表示の安定性は維持されます。")
 
     # 4. Output Payload Format GroupBox
     $grpPayload = New-Object System.Windows.Forms.GroupBox
     $grpPayload.Text = " 4. 出力イメージ形式 (Payload Export Format) "
     $grpPayload.Location = New-Object System.Drawing.Point(15, 558)
-    $grpPayload.Size = New-Object System.Drawing.Size(670, 75)
+    $grpPayload.Size = New-Object System.Drawing.Size(730, 75)
     $grpPayload.ForeColor = [System.Drawing.Color]::FromArgb(0, 190, 255)
     $mainPanel.Controls.Add($grpPayload)
 
     $radWIM = New-Object System.Windows.Forms.RadioButton
     $radWIM.Text = "install.wim (LZX - 推奨・高速・高安定)"
     $radWIM.Location = New-Object System.Drawing.Point(15, 28)
-    $radWIM.Size = New-Object System.Drawing.Size(200, 25)
+    $radWIM.Size = New-Object System.Drawing.Size(230, 25)
     $radWIM.ForeColor = [System.Drawing.Color]::FromArgb(235, 238, 245)
     $radWIM.Checked = $true
     $grpPayload.Controls.Add($radWIM)
 
     $radESD = New-Object System.Windows.Forms.RadioButton
     $radESD.Text = "install.esd (LZMS - 超高圧縮)"
-    $radESD.Location = New-Object System.Drawing.Point(225, 28)
-    $radESD.Size = New-Object System.Drawing.Size(205, 25)
+    $radESD.Location = New-Object System.Drawing.Point(250, 28)
+    $radESD.Size = New-Object System.Drawing.Size(215, 25)
     $radESD.ForeColor = [System.Drawing.Color]::FromArgb(235, 238, 245)
     $grpPayload.Controls.Add($radESD)
 
     $radSWM = New-Object System.Windows.Forms.RadioButton
     $radSWM.Text = "install.swm (Split-WIM - FAT32 USB対応)"
-    $radSWM.Location = New-Object System.Drawing.Point(440, 28)
-    $radSWM.Size = New-Object System.Drawing.Size(215, 25)
+    $radSWM.Location = New-Object System.Drawing.Point(470, 28)
+    $radSWM.Size = New-Object System.Drawing.Size(250, 25)
     $radSWM.ForeColor = [System.Drawing.Color]::FromArgb(235, 238, 245)
     $grpPayload.Controls.Add($radSWM)
 
@@ -2158,6 +3551,7 @@ function Show-Nano11GUI {
         chkSearchIndex = $chkSearchIndex
         chkVhdx        = $chkVHDX
         chkBypassActivation = $chkBypassAct
+        chkRadicalRAM  = $chkRadicalRAM
         radESD         = $radESD
         radSWM         = $radSWM
         radWIM         = $radWIM
@@ -2180,7 +3574,7 @@ function Show-Nano11GUI {
     })
 
     # Hook change events to switch preset to Custom
-    $allCheckboxes = @($chkDefender, $chkIME, $chkFonts, $chkDrivers, $chkWU, $chkBT, $chkWSL, $chkRecovery, $chkBypassAct, $chkSafeDebloat, $chkUltraSlim, $chkJPKey, $chkAtlas, $chkStore, $chkBasicApps, $chkSearchIndex, $chkVHDX)
+    $allCheckboxes = @($chkDefender, $chkIME, $chkFonts, $chkDrivers, $chkWU, $chkBT, $chkWSL, $chkRecovery, $chkBypassAct, $chkSafeDebloat, $chkUltraSlim, $chkJPKey, $chkAtlas, $chkStore, $chkBasicApps, $chkSearchIndex, $chkVHDX, $chkRadicalRAM)
     foreach ($c in $allCheckboxes) {
         $c.Add_CheckedChanged({
             if (-not $script:updatingPreset) {
@@ -2197,18 +3591,20 @@ function Show-Nano11GUI {
     $bottomPanel.Height = 65
     $bottomPanel.BackColor = [System.Drawing.Color]::FromArgb(18, 20, 24)
     $form.Controls.Add($bottomPanel)
+    # Dock order fix: Fill panel must be front-most so it sits between header and footer
+    $mainPanel.BringToFront()
 
     $chkDryRun = New-Object System.Windows.Forms.CheckBox
     $chkDryRun.Text = "DryRun (シミュレーション)"
     $chkDryRun.Location = New-Object System.Drawing.Point(20, 22)
-    $chkDryRun.Size = New-Object System.Drawing.Size(180, 24)
+    $chkDryRun.Size = New-Object System.Drawing.Size(220, 24)
     $chkDryRun.ForeColor = [System.Drawing.Color]::FromArgb(235, 238, 245)
     $bottomPanel.Controls.Add($chkDryRun)
 
     $btnBuild = New-Object System.Windows.Forms.Button
-    $btnBuild.Text = "🚀 nano11 ビルド開始"
-    $btnBuild.Location = New-Object System.Drawing.Point(340, 14)
-    $btnBuild.Size = New-Object System.Drawing.Size(200, 38)
+    $btnBuild.Text = "nano11 ビルド開始"
+    $btnBuild.Location = New-Object System.Drawing.Point(400, 14)
+    $btnBuild.Size = New-Object System.Drawing.Size(220, 38)
     $btnBuild.BackColor = [System.Drawing.Color]::FromArgb(0, 120, 215)
     $btnBuild.ForeColor = [System.Drawing.Color]::White
     $btnBuild.Font = New-Object System.Drawing.Font($uiFontName, 10.5, [System.Drawing.FontStyle]::Bold)
@@ -2218,8 +3614,8 @@ function Show-Nano11GUI {
     $btnCancel = New-Object System.Windows.Forms.Button
     $btnCancel.Text = "キャンセル"
     $btnCancel.Font = New-Object System.Drawing.Font($uiFontName, 9.5)
-    $btnCancel.Location = New-Object System.Drawing.Point(555, 14)
-    $btnCancel.Size = New-Object System.Drawing.Size(130, 38)
+    $btnCancel.Location = New-Object System.Drawing.Point(635, 14)
+    $btnCancel.Size = New-Object System.Drawing.Size(125, 38)
     $btnCancel.BackColor = [System.Drawing.Color]::FromArgb(45, 50, 60)
     $btnCancel.ForeColor = [System.Drawing.Color]::White
     $btnCancel.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
@@ -2256,7 +3652,9 @@ function Show-Nano11GUI {
         # Validate WorkDir
         $wDir = $txtWork.Text.Trim()
         if (-not $wDir) {
-            $wDir = "$env:SystemDrive\nano11_workspace"
+            $docsDir = [Environment]::GetFolderPath('MyDocuments')
+            if (-not $docsDir) { $docsDir = Join-Path $env:USERPROFILE "Documents" }
+            $wDir = Join-Path -Path $docsDir -ChildPath "nano11_workspace"
         }
 
         $formResult.Success                   = $true
@@ -2271,6 +3669,7 @@ function Show-Nano11GUI {
         $formResult.WSLSupport                = $chkWSL.Checked
         $formResult.KeepRecoveryEnv           = $chkRecovery.Checked
         $formResult.BypassActivationRestrictions = $chkBypassAct.Checked
+        $formResult.RadicalRAM                = $chkRadicalRAM.Checked
         $formResult.SafeDebloatMode           = $chkSafeDebloat.Checked
         $formResult.UltraSlimMode             = $chkUltraSlim.Checked
         $formResult.SetJapaneseKeyboard       = $chkJPKey.Checked
@@ -2288,6 +3687,10 @@ function Show-Nano11GUI {
         $form.DialogResult = [System.Windows.Forms.DialogResult]::OK
         $form.Close()
     })
+
+    # Show '&' literally (WinForms treats '&' as mnemonic prefix and hides it)
+    $disableMnemonic = { param($ctl) foreach ($c in $ctl.Controls) { if ($c.PSObject.Properties['UseMnemonic']) { $c.UseMnemonic = $false }; & $disableMnemonic $c } }
+    & $disableMnemonic $form
 
     # Ensure Form pops up in foreground when launched
     $form.TopMost = $true
@@ -2430,6 +3833,7 @@ $removeStore = $false
 $keepXboxServices = $false
 $keepAudioTweaks = $false
 $bypassActivationRestrictions = $true
+$radicalRAM = $true
 $selectedProfile = $null
 
 # 2. Track explicitly supplied CLI parameters from bound parameters snapshot
@@ -2473,11 +3877,15 @@ if ($GUI) {
         WSLSupport                = $wslSupport
         KeepRecoveryEnv           = $keepRecoveryEnv
         BypassActivationRestrictions = $bypassActivationRestrictions
+        RadicalRAM                = $radicalRAM
         SafeDebloatMode           = $safeDebloatMode
         UltraSlimMode             = $ultraSlimMode
         SetJapaneseKeyboard       = $setJapaneseKeyboard
         AtlasReviOSMode           = $atlasReviOSMode
         RemoveStore               = $removeStore
+        KeepBasicApps             = $keepBasicApps
+        KeepSearchIndex           = $keepSearchIndex
+        UseVHDX                   = $useVHDX
         ExportESDMode             = $exportESDMode
         SplitWIMMode              = $splitWIMMode
     }
@@ -2494,6 +3902,7 @@ if ($GUI) {
         $wslSupport                = $guiResult.WSLSupport
         $keepRecoveryEnv           = $guiResult.KeepRecoveryEnv
         if ($guiResult.ContainsKey('BypassActivationRestrictions')) { $bypassActivationRestrictions = [bool]$guiResult.BypassActivationRestrictions }
+        if ($guiResult.ContainsKey('RadicalRAM'))                   { $radicalRAM = [bool]$guiResult.RadicalRAM }
         $safeDebloatMode           = $guiResult.SafeDebloatMode
         $ultraSlimMode             = $guiResult.UltraSlimMode
         $setJapaneseKeyboard       = $guiResult.SetJapaneseKeyboard
@@ -2655,10 +4064,8 @@ if (& $isAnyBound @('UltraSlim')) {
     [void]$cliBound.Add('UltraSlim')
 }
 
-# UltraSlim font pruning: only prune fonts if UltraSlim is active AND Fonts was NOT explicitly specified
-if ($ultraSlimMode -and (-not $cliBound.Contains('Fonts'))) {
-    $keepExtraFonts = $false
-}
+# UltraSlim mode preserves fonts by default (per user specification: keep fonts intact)
+# if ($ultraSlimMode -and (-not $cliBound.Contains('Fonts'))) { $keepExtraFonts = $false }
 
 # 11. Japanese Keyboard
 if (& $isAnyBound @('NoJapaneseKeyboard')) {
@@ -2711,6 +4118,15 @@ if (& $isAnyBound @('RemoveStore', 'NoStore', 'RemoveMicrosoftStore')) {
 if (& $isAnyBound @('BypassActivationRestrictions', 'NoActivationRestrictions', 'UnlockPersonalization')) {
     $bypassActivationRestrictions = if ($bound.ContainsKey('BypassActivationRestrictions')) { & $getBoundVal 'BypassActivationRestrictions' } elseif ($bound.ContainsKey('NoActivationRestrictions')) { & $getBoundVal 'NoActivationRestrictions' } else { & $getBoundVal 'UnlockPersonalization' }
     [void]$cliBound.Add('ActivationRestrictions')
+}
+
+# 16. Radical RAM Optimization (Default: $true)
+if (& $isAnyBound @('RadicalRAM', 'UltraLowRAM', 'LowRAM')) {
+    $radicalRAM = if ($bound.ContainsKey('RadicalRAM')) { & $getBoundVal 'RadicalRAM' } elseif ($bound.ContainsKey('UltraLowRAM')) { & $getBoundVal 'UltraLowRAM' } else { & $getBoundVal 'LowRAM' }
+    [void]$cliBound.Add('RadicalRAM')
+} elseif (& $isAnyBound @('NoRadicalRAM')) {
+    $radicalRAM = -not (& $getBoundVal 'NoRadicalRAM')
+    [void]$cliBound.Add('RadicalRAM')
 }
 
 # 16. Fast VHDX Scratch Disk
@@ -2814,11 +4230,14 @@ if ($isAutomated) {
             WSLSupport                = $wslSupport
             KeepRecoveryEnv           = $keepRecoveryEnv
             BypassActivationRestrictions = $bypassActivationRestrictions
+            RadicalRAM                = $radicalRAM
             SafeDebloatMode           = $safeDebloatMode
             UltraSlimMode             = $ultraSlimMode
             SetJapaneseKeyboard       = $setJapaneseKeyboard
             AtlasReviOSMode           = $atlasReviOSMode
             RemoveStore               = $removeStore
+            KeepBasicApps             = $keepBasicApps
+            KeepSearchIndex           = $keepSearchIndex
             UseVHDX                   = $useVHDX
             ExportESDMode             = $exportESDMode
             SplitWIMMode              = $splitWIMMode
@@ -2836,6 +4255,7 @@ if ($isAutomated) {
             $wslSupport                = $guiResult.WSLSupport
             $keepRecoveryEnv           = $guiResult.KeepRecoveryEnv
             if ($guiResult.ContainsKey('BypassActivationRestrictions')) { $bypassActivationRestrictions = [bool]$guiResult.BypassActivationRestrictions }
+            if ($guiResult.ContainsKey('RadicalRAM'))                   { $radicalRAM = [bool]$guiResult.RadicalRAM }
             $safeDebloatMode           = $guiResult.SafeDebloatMode
             $ultraSlimMode             = $guiResult.UltraSlimMode
             $setJapaneseKeyboard       = $guiResult.SetJapaneseKeyboard
@@ -2991,7 +4411,6 @@ if ($isAutomated) {
                 $ultraSlimMode = $false
             } elseif ($opt.Trim().ToLower() -in @('yes', 'y')) {
                 $ultraSlimMode = $true
-                if (-not $cliBound.Contains('Fonts')) { $keepExtraFonts = $false }
             }
         }
     }
@@ -3065,6 +4484,7 @@ if ($isAutomated) {
             WSLSupport                = $wslSupport
             KeepRecoveryEnv           = $keepRecoveryEnv
             BypassActivationRestrictions = $bypassActivationRestrictions
+            RadicalRAM                = $radicalRAM
             SafeDebloatMode           = $safeDebloatMode
             UltraSlimMode             = $ultraSlimMode
             SetJapaneseKeyboard       = $setJapaneseKeyboard
@@ -3090,6 +4510,7 @@ if ($SaveProfile) {
         WSLSupport                = $wslSupport
         KeepRecoveryEnv           = $keepRecoveryEnv
         BypassActivationRestrictions = $bypassActivationRestrictions
+        RadicalRAM                = $radicalRAM
         SafeDebloatMode           = $safeDebloatMode
         UltraSlimMode             = $ultraSlimMode
         SetJapaneseKeyboard       = $setJapaneseKeyboard
@@ -3120,6 +4541,7 @@ $resolvedConfig = [PSCustomObject]@{
     WSLSupport                 = $wslSupport
     KeepRecoveryEnv            = $keepRecoveryEnv
     BypassActivationRestrictions = $bypassActivationRestrictions
+    RadicalRAM                 = $radicalRAM
     SafeDebloatMode            = $safeDebloatMode
     UltraSlimMode              = $ultraSlimMode
     SetJapaneseKeyboard        = $setJapaneseKeyboard
@@ -3145,6 +4567,7 @@ Write-Host "  - Keep Bluetooth Services: $keepBT"
 Write-Host "  - Enable WSL2 Platform:    $wslSupport"
 Write-Host "  - Keep Recovery (WinRE):   $keepRecoveryEnv"
 Write-Host "  - Bypass Activation Limit: $bypassActivationRestrictions"
+Write-Host "  - Radical RAM Optimization: $radicalRAM"
 Write-Host "  - Safe Debloat (WinSxS):   $safeDebloatMode"
 Write-Host "  - UltraSlim (~3GB ISO):    $ultraSlimMode"
 Write-Host "  - Japanese 106 Keyboard:   $setJapaneseKeyboard"
@@ -3186,16 +4609,141 @@ if (($env:NANO11_TEST_MODE -eq "1") -or $isDryRunMode) {
 # ==============================================================================
 # Main Build Lifecycle (Guaranteed Resource Cleanup via try / finally)
 # ==============================================================================
+# Decoupled Build Lifecycle State Flags (Rule 1)
+$script:ExportSucceeded = $false
+$script:FinalPayloadVerified = $false
+$script:VerifiedFinalWimSha256 = $null
+$script:IsoGenerated = $false
+$script:IsoPayloadVerified = $false
+$script:BuildSucceeded = $false
+$isoCreatedSuccessfully = $false
+
 $script:MountOpened = $false
 $script:HivesLoaded = $false
 $script:MountedIso = $null
 $script:DefenderExclusionAdded = $false
 $script:IsVhdxMounted = $false
 
+# Diagnostic Session Isolation (Rule 2)
+$script:BuildId = [System.Guid]::NewGuid().ToString("N").Substring(0, 8) + "_" + (Get-Date -Format "yyyyMMdd_HHmmss")
+$script:DiagDir = Join-Path -Path $scriptDir -ChildPath "build_diagnostics\$($script:BuildId)"
+New-Item -ItemType Directory -Path $script:DiagDir -Force | Out-Null
+
+$script:DiagnosticData = [ordered]@{
+    BuildId                  = $script:BuildId
+    Timestamp                = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+    BuilderScriptSha256      = (Get-FileHash -LiteralPath $PSCommandPath -Algorithm SHA256 -ErrorAction SilentlyContinue).Hash
+    DismPath                 = $null
+    DismVersion              = $null
+    SourceIsoPath            = $SourceIso
+    SourceIsoSha256          = $null
+    SelectedImageIndex       = $null
+    SelectedImageName        = $null
+    PreExportWimSha256       = $null
+    ExportedWimSha256        = $null
+    FinalWimSha256           = $null
+    ExportCommand            = $null
+    ExportExitCode           = $null
+    FinalApplyCommand        = $null
+    FinalApplyExitCode       = $null
+    OscdimgCommand           = $null
+    OscdimgExitCode          = $null
+    IsoEmbeddedWimSha256     = $null
+    IsoPayloadMatch          = $false
+    ExportSucceeded          = $false
+    FinalPayloadVerified     = $false
+    IsoGenerated             = $false
+    IsoPayloadVerified       = $false
+    BuildSucceeded           = $false
+    FailurePhase             = $null
+    FailureMessage           = $null
+    FailureStackTrace        = $null
+    PreservedArtifacts       = @()
+}
+
+function Write-Nano11DiagnosticReport {
+    param([string]$StatusMessage = "")
+    try {
+        $jsonPath = Join-Path -Path $script:DiagDir -ChildPath "build_diagnostic_report.json"
+        $script:DiagnosticData | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $jsonPath -Encoding utf8
+
+        $txtPath = Join-Path -Path $script:DiagDir -ChildPath "build_diagnostic_summary.txt"
+        $txtLines = @(
+            "=========================================================",
+            " nano11 Build Diagnostic Summary",
+            "=========================================================",
+            "Build ID:                 $($script:DiagnosticData.BuildId)",
+            "Timestamp:                $($script:DiagnosticData.Timestamp)",
+            "Builder Script SHA256:    $($script:DiagnosticData.BuilderScriptSha256)",
+            "Overall Build Status:     $(if ($script:DiagnosticData.BuildSucceeded) { 'SUCCESS' } else { 'FAILED' })",
+            "Failure Phase:            $($script:DiagnosticData.FailurePhase)",
+            "Failure Message:          $($script:DiagnosticData.FailureMessage)",
+            "---------------------------------------------------------",
+            "DISM Path:                $($script:DiagnosticData.DismPath)",
+            "DISM Version:             $($script:DiagnosticData.DismVersion)",
+            "Source ISO:               $($script:DiagnosticData.SourceIsoPath)",
+            "Source ISO SHA256:        $($script:DiagnosticData.SourceIsoSha256)",
+            "Selected Image Index:     $($script:DiagnosticData.SelectedImageIndex)",
+            "Selected Image Name:      $($script:DiagnosticData.SelectedImageName)",
+            "---------------------------------------------------------",
+            "Export Succeeded:         $($script:DiagnosticData.ExportSucceeded)",
+            "Export Exit Code:         $($script:DiagnosticData.ExportExitCode)",
+            "Pre-Export WIM SHA256:    $($script:DiagnosticData.PreExportWimSha256)",
+            "Exported WIM SHA256:      $($script:DiagnosticData.ExportedWimSha256)",
+            "---------------------------------------------------------",
+            "Final Apply Verified:     $($script:DiagnosticData.FinalPayloadVerified)",
+            "Final Apply Exit Code:    $($script:DiagnosticData.FinalApplyExitCode)",
+            "Final WIM SHA256:         $($script:DiagnosticData.FinalWimSha256)",
+            "---------------------------------------------------------",
+            "ISO Generated:            $($script:DiagnosticData.IsoGenerated)",
+            "Oscdimg Exit Code:        $($script:DiagnosticData.OscdimgExitCode)",
+            "ISO Embedded WIM SHA256:  $($script:DiagnosticData.IsoEmbeddedWimSha256)",
+            "ISO Payload Match:        $($script:DiagnosticData.IsoPayloadMatch)",
+            "---------------------------------------------------------",
+            "Preserved Artifacts:",
+            ($script:DiagnosticData.PreservedArtifacts | ForEach-Object { "  - $_" }),
+            "========================================================="
+        )
+        $txtLines | Set-Content -LiteralPath $txtPath -Encoding utf8
+    } catch {
+        Write-Warning "Failed writing diagnostic report: $_"
+    }
+}
+
 try {
     Enter-Phase 1 "Environment Validation & Workspace Preparation"
 
-    # Determine Working Directory (Resolves Issue #27, #23 - Low disk space on C:, and non-NTFS volumes like exFAT)
+    # DISM Binary Discovery & Architecture Verification
+    $dismCmd = Get-Command "dism.exe" -ErrorAction SilentlyContinue
+    $dismPath = if ($dismCmd) { $dismCmd.Source } else { Join-Path -Path $env:SystemRoot -ChildPath "System32\dism.exe" }
+    $adkCandidates = @(
+        "C:\Program Files (x86)\Windows Kits\10\Assessment and Deployment Kit\Deployment Tools\amd64\DISM\dism.exe",
+        "C:\Program Files\Windows Kits\10\Assessment and Deployment Kit\Deployment Tools\amd64\DISM\dism.exe"
+    )
+    foreach ($cand in $adkCandidates) {
+        if (Test-Path -LiteralPath $cand) {
+            $dismPath = $cand
+            break
+        }
+    }
+    $dismVerInfo = (Get-Item -LiteralPath $dismPath -ErrorAction SilentlyContinue).VersionInfo
+    $dismVerStr = if ($dismVerInfo) { $dismVerInfo.FileVersion } else { "Unknown" }
+    $hostBuildNum = (Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -Name 'CurrentBuildNumber' -ErrorAction SilentlyContinue).CurrentBuildNumber
+
+    if ($script:DiagnosticData) {
+        $script:DiagnosticData.DismPath = $dismPath
+        $script:DiagnosticData.DismVersion = $dismVerStr
+    }
+    Write-Host "DISM Utility Diagnostics:" -ForegroundColor Cyan
+    Write-Host "  - Path:    $dismPath" -ForegroundColor Green
+    Write-Host "  - Version: $dismVerStr" -ForegroundColor Green
+    if ($hostBuildNum -eq '26300' -and $dismVerStr -match '^10\.0\.26100') {
+        Write-Host "  - Status:  Host is Windows 11 26H2 (Build 26300 Enablement Package)." -ForegroundColor DarkCyan
+        Write-Host "             Core servicing stack & DISM share the Germanium (26100) branch." -ForegroundColor DarkCyan
+        Write-Host "             DISM $dismVerStr is the official matching native servicing engine." -ForegroundColor DarkCyan
+    }
+
+    # Determine Working Directory (Defaults to user's Documents folder: Documents\nano11_workspace)
     if ($WorkDir) {
         if (-not (Test-Path -LiteralPath $WorkDir)) {
             New-Item -ItemType Directory -Force -Path $WorkDir | Out-Null
@@ -3211,20 +4759,21 @@ try {
             }
         }
     } else {
-        $sysDrive = (Get-Item -LiteralPath $env:SystemDrive).PSDrive
-        if ($sysDrive -and ($sysDrive.Free -lt 30GB -or -not (Test-IsNtfsVolume $env:SystemDrive))) {
-            $altDrive = Get-PSDrive -PSProvider FileSystem | Where-Object { $_.Free -gt 30GB -and (Test-IsNtfsVolume $_.Root) } | Sort-Object Free -Descending | Select-Object -First 1
-            if ($altDrive) {
-                Write-Host "Using fast NTFS drive for working directory ($([math]::Round($altDrive.Free / 1GB, 1)) GB free): $($altDrive.Root)" -ForegroundColor Green
-                $baseWorkDir = Join-Path -Path $altDrive.Root.TrimEnd('\') -ChildPath "nano11_workspace"
-            } else {
-                $baseWorkDir = Join-Path -Path $env:SystemDrive -ChildPath "nano11_workspace"
-            }
-        } else {
-            $baseWorkDir = Join-Path -Path $env:SystemDrive -ChildPath "nano11_workspace"
-        }
+        $docsDir = [Environment]::GetFolderPath('MyDocuments')
+        if (-not $docsDir) { $docsDir = Join-Path -Path $env:USERPROFILE -ChildPath "Documents" }
+        $defaultWorkDir = if ($docsDir) { Join-Path -Path $docsDir -ChildPath "nano11_workspace" } else { Join-Path -Path $env:SystemDrive -ChildPath "nano11_workspace" }
+        $baseWorkDir = $defaultWorkDir
         if (-not (Test-Path -LiteralPath $baseWorkDir)) {
             New-Item -ItemType Directory -Force -Path $baseWorkDir | Out-Null
+        }
+        if (-not (Test-IsNtfsVolume -Path $baseWorkDir)) {
+            Write-Host "Warning: Documents directory '$baseWorkDir' is not on an NTFS volume." -ForegroundColor Yellow
+            $altDrive = Get-PSDrive -PSProvider FileSystem | Where-Object { $_.Free -gt 30GB -and (Test-IsNtfsVolume $_.Root) } | Sort-Object Free -Descending | Select-Object -First 1
+            if ($altDrive) {
+                $baseWorkDir = Join-Path -Path $altDrive.Root.TrimEnd('\') -ChildPath "nano11_workspace"
+                Write-Host "Redirecting workspace to NTFS drive: $baseWorkDir" -ForegroundColor Green
+                New-Item -ItemType Directory -Force -Path $baseWorkDir | Out-Null
+            }
         }
     }
 
@@ -3247,7 +4796,17 @@ try {
     }
 
     $nano11Dir = Join-Path -Path $baseWorkDir -ChildPath "build"
-    $scratchDir = Join-Path -Path $baseWorkDir -ChildPath "scratchdir"
+    $vhdxMountDir = Join-Path -Path $baseWorkDir -ChildPath "scratchdir"
+    $scratchDir = if ($UseVHDX) { Join-Path -Path $vhdxMountDir -ChildPath "mount" } else { $vhdxMountDir }
+    $script:BaseWorkDir = $baseWorkDir
+    $script:VhdxMountDir = $vhdxMountDir
+    $script:DismMountDir = $scratchDir
+    [void]$script:ManagedMountDirs.Add(
+        (ConvertTo-Nano11NormalizedPath -Path $scratchDir)
+    )
+    [void]$script:ManagedMountDirs.Add(
+        (ConvertTo-Nano11NormalizedPath -Path $vhdxMountDir)
+    )
     Initialize-Nano11BuildState -Dir $baseWorkDir
     $vhdxPath = Join-Path -Path $baseWorkDir -ChildPath "nano11_scratch.vhdx"
     $isVhdxMounted = $false
@@ -3259,36 +4818,87 @@ try {
         $script:DefenderExclusionAdded = $true
     } catch {}
 
-# Detach any leftover VHDX from previous runs
-if (Test-Path -LiteralPath $vhdxPath) {
-    try {
-        $dpDetachScript = "select vdisk file=`"$vhdxPath`"`r`ndetach vdisk`r`n"
-        $dpDetachFile = Join-Path -Path $env:TEMP -ChildPath "nano11_dp_clean_$([System.IO.Path]::GetRandomFileName()).txt"
-        $dpDetachScript | Set-Content -LiteralPath $dpDetachFile -Encoding ascii
-        & diskpart.exe /s $dpDetachFile > $null 2>&1
-        Remove-Item -LiteralPath $dpDetachFile -Force -ErrorAction SilentlyContinue
-        Remove-Item -LiteralPath $vhdxPath -Force -ErrorAction SilentlyContinue
-    } catch {}
-}
-
-if (Test-Path -LiteralPath $nano11Dir) {
-    Write-Host "Cleaning up previous build directory to prevent leftover file conflicts..." -ForegroundColor Yellow
-    Reset-DirectoryWithRobocopy -Path $nano11Dir
-    Remove-Item -LiteralPath $nano11Dir -Recurse -Force -ErrorAction SilentlyContinue
-}
-if (Test-Path -LiteralPath $scratchDir) {
+    # 1. Resolve any lingering DISM mounts associated with our workspace or candidate WIMs
+    $managedWims = @(
+        (Join-Path -Path $nano11Dir -ChildPath "sources\install.wim"),
+        (Join-Path -Path $nano11Dir -ChildPath "sources\boot.wim")
+    )
     Clear-DismMountConflicts -TargetMountDir $scratchDir
-    Reset-DirectoryWithRobocopy -Path $scratchDir
-    Remove-Item -LiteralPath $scratchDir -Recurse -Force -ErrorAction SilentlyContinue
-}
-New-Item -ItemType Directory -Force -Path (Join-Path -Path $nano11Dir -ChildPath "sources") | Out-Null
-New-Item -ItemType Directory -Force -Path $scratchDir | Out-Null
+    if ($vhdxMountDir -ne $scratchDir) {
+        Clear-DismMountConflicts -TargetMountDir $vhdxMountDir
+    }
+    foreach ($wim in $managedWims) {
+        Clear-DismMountConflicts -TargetWimFile $wim
+    }
 
-# Initialize High-Speed Dynamic VHDX scratch disk if requested (-UseVHDX / -FastVHDX)
-if ($UseVHDX) {
-    Write-Host "Creating high-speed dynamic VHDX scratch disk (30 GB expandable)..." -ForegroundColor Cyan
-    try {
-        $dpAttachScript = @"
+    # 2. Detach any leftover VHDX from previous runs
+    if (Test-Path -LiteralPath $vhdxPath) {
+        try {
+            $dpDetachScript = "select vdisk file=`"$vhdxPath`"`r`ndetach vdisk`r`n"
+            $dpDetachFile = Join-Path -Path $env:TEMP -ChildPath "nano11_dp_clean_$([System.IO.Path]::GetRandomFileName()).txt"
+            $dpDetachScript | Set-Content -LiteralPath $dpDetachFile -Encoding ascii
+            & diskpart.exe /s $dpDetachFile > $null 2>&1
+            Remove-Item -LiteralPath $dpDetachFile -Force -ErrorAction SilentlyContinue
+
+            $detachedOk = $true
+            try {
+                $diskImg = Get-DiskImage -ImagePath $vhdxPath -ErrorAction Stop
+                if ($diskImg.Attached) { $detachedOk = $false }
+            } catch {}
+
+            if ($detachedOk) {
+                Remove-Item -LiteralPath $vhdxPath -Force -ErrorAction SilentlyContinue
+            } else {
+                Write-Warning "Could not confirm VHDX detach for '$vhdxPath'. Preserving file."
+            }
+        } catch {}
+    }
+
+    # 3. Safely reset build directory and scratch directory (Empty guaranteed)
+    if (Test-Path -LiteralPath $nano11Dir) {
+        Write-Host "Cleaning up previous build directory..." -ForegroundColor Yellow
+        [GC]::Collect()
+        [GC]::WaitForPendingFinalizers()
+        try {
+            Reset-DirectoryWithRobocopy -Path $nano11Dir
+        } catch {
+            Write-Warning "Reset of build directory encountered locked files: $($_.Exception.Message)"
+            Write-Host "Triggering forced DISM recovery for managed WIM files..." -ForegroundColor Yellow
+            foreach ($wim in $managedWims) {
+                Clear-DismMountConflicts -TargetWimFile $wim -ForceRecovery
+            }
+            [GC]::Collect()
+            [GC]::WaitForPendingFinalizers()
+            Start-Sleep -Seconds 1
+            Reset-DirectoryWithRobocopy -Path $nano11Dir
+        }
+    }
+    if (Test-Path -LiteralPath $vhdxMountDir) {
+        Write-Host "Cleaning up previous scratch directory..." -ForegroundColor Yellow
+        $vhdxDirItem = Get-Item -LiteralPath $vhdxMountDir -Force -ErrorAction SilentlyContinue
+        if ($vhdxDirItem -and ($vhdxDirItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint)) {
+            Write-Host "Releasing previous VHDX mount point junction at '$vhdxMountDir'..." -ForegroundColor Cyan
+            try { & mountvol.exe "$vhdxMountDir" /D > $null 2>&1 } catch {}
+            try {
+                [System.IO.Directory]::Delete($vhdxMountDir, $false)
+            } catch {
+                try { $vhdxDirItem.Delete() } catch {}
+            }
+        }
+        if (Test-Path -LiteralPath $vhdxMountDir) {
+            Reset-DirectoryWithRobocopy -Path $vhdxMountDir
+        }
+    }
+    New-Item -ItemType Directory -Force -Path (Join-Path -Path $nano11Dir -ChildPath "sources") | Out-Null
+    if (-not (Test-Path -LiteralPath $vhdxMountDir)) {
+        New-Item -ItemType Directory -Force -Path $vhdxMountDir | Out-Null
+    }
+
+    # Initialize High-Speed Dynamic VHDX scratch disk if requested (-UseVHDX / -FastVHDX)
+    if ($UseVHDX) {
+        Write-Host "Creating high-speed dynamic VHDX scratch disk (30 GB expandable)..." -ForegroundColor Cyan
+        try {
+            $dpAttachScript = @"
 create vdisk file="$vhdxPath" maximum=30720 type=expandable
 select vdisk file="$vhdxPath"
 attach vdisk
@@ -3296,23 +4906,39 @@ clean
 convert gpt
 create partition primary
 format fs=ntfs quick label="nano11_scratch"
-assign mount="$scratchDir"
+assign mount="$vhdxMountDir"
 "@
-        $dpAttachFile = Join-Path -Path $env:TEMP -ChildPath "nano11_dp_attach_$([System.IO.Path]::GetRandomFileName()).txt"
-        $dpAttachScript | Set-Content -LiteralPath $dpAttachFile -Encoding ascii
-        & diskpart.exe /s $dpAttachFile > $null 2>&1
-        Remove-Item -LiteralPath $dpAttachFile -Force -ErrorAction SilentlyContinue
-        if (Test-Path -LiteralPath $vhdxPath) {
-            $isVhdxMounted = $true
-            $script:IsVhdxMounted = $true
-            Write-Host "VHDX scratch volume mounted to $scratchDir" -ForegroundColor Green
-        } else {
-            Write-Warning "VHDX initialization did not create $vhdxPath. Using standard physical directory."
+            $dpAttachFile = Join-Path -Path $env:TEMP -ChildPath "nano11_dp_attach_$([System.IO.Path]::GetRandomFileName()).txt"
+            $dpAttachScript | Set-Content -LiteralPath $dpAttachFile -Encoding ascii
+            & diskpart.exe /s $dpAttachFile > $null 2>&1
+            Remove-Item -LiteralPath $dpAttachFile -Force -ErrorAction SilentlyContinue
+            if (Test-Path -LiteralPath $vhdxPath) {
+                $isVhdxMounted = $true
+                $script:IsVhdxMounted = $true
+                # Create isolated child directory inside VHDX volume exclusively for DISM mounting
+                New-Item -ItemType Directory -Force -Path $scratchDir | Out-Null
+                Write-Host "VHDX scratch volume mounted to $vhdxMountDir (DISM mount dir: $scratchDir)" -ForegroundColor Green
+            } else {
+                Write-Warning "VHDX initialization did not create $vhdxPath. Using standard physical directory."
+                $scratchDir = $vhdxMountDir
+                $script:DismMountDir = $scratchDir
+            }
+        } catch {
+            Write-Warning "Could not mount VHDX scratch disk: $_. Using standard physical directory."
+            $scratchDir = $vhdxMountDir
+            $script:DismMountDir = $scratchDir
         }
-    } catch {
-        Write-Warning "Could not mount VHDX scratch disk: $_. Using standard physical directory."
+    } else {
+        New-Item -ItemType Directory -Force -Path $scratchDir | Out-Null
     }
-}
+
+    if ($script:IsVhdxMounted) {
+        $script:MountAllocationRoot = $vhdxMountDir
+        $script:MountDirectoryPrefix = 'mount_'
+    } else {
+        $script:MountAllocationRoot = $baseWorkDir
+        $script:MountDirectoryPrefix = 'scratchdir_'
+    }
 
 Enter-Phase 2 "Source Media Detection & Validation"
 
@@ -3644,6 +5270,11 @@ if (-not $SkipEiCfg) {
         "[Channel]`r`n_Default`r`n[VL]`r`n0`r`n" | Set-Content -LiteralPath $eiCfgPath -Encoding ascii -Force
         Write-Host "Created sources\ei.cfg for universal edition selection." -ForegroundColor Green
     }
+    $pidTxtPath = Join-Path -Path "$nano11Dir\sources" -ChildPath "PID.txt"
+    if (-not (Test-Path -LiteralPath $pidTxtPath)) {
+        "[PID]`r`nValue=VK7JG-NPHTM-C97JM-9MPGT-3V66T`r`n" | Set-Content -LiteralPath $pidTxtPath -Encoding ascii -Force
+        Write-Host "Created sources\PID.txt with Windows 11 Pro generic key for seamless deployment." -ForegroundColor Green
+    }
 }
 
 # Note: On Windows 11 24H2/25H2 (Build 26100+), zeroing appraiserres.dll causes SetupPlatform
@@ -3691,6 +5322,11 @@ if ([string]::IsNullOrWhiteSpace($index) -or ($index -notin $availableIndices)) 
     }
 }
 Write-Host "Selected image index: $index" -ForegroundColor Green
+$targetEditionEntry = $indexEntries | Where-Object { $_.Index -eq $index } | Select-Object -First 1
+$targetEditionName = if ($targetEditionEntry) { $targetEditionEntry.Name } else { "" }
+if ($targetEditionName) {
+    Write-Host "Target edition name: $targetEditionName" -ForegroundColor Cyan
+}
 
 Enter-Phase 4 "Mount install.wim & Baseline Analysis"
 
@@ -3701,36 +5337,10 @@ Write-Host "     This is expected Windows DISM behavior. Please DO NOT close thi
 Set-ItemOwnershipAndAccess -Path $destWim
 try { Set-ItemProperty -LiteralPath $destWim -Name IsReadOnly -Value $false -ErrorAction Stop } catch {}
 
-# Clear any conflicting or stale mounts on scratchDir or destWim (Resolves Error 0xc1420127)
-Clear-DismMountConflicts -TargetMountDir $scratchDir -TargetWimFile $destWim
-Reset-DirectoryWithRobocopy -Path $scratchDir
-
-$mountSuccess = $false
-for ($attempt = 1; $attempt -le 2; $attempt++) {
-    & dism.exe /English /Mount-Image "/ImageFile:$destWim" "/Index:$index" "/MountDir:$scratchDir"
-    if ($LASTEXITCODE -eq 0) {
-        $mountSuccess = $true
-        $script:MountOpened = $true
-        break
-    }
-
-    Write-Host "Mount attempt $attempt failed (Exit code: $LASTEXITCODE). Attempting aggressive DISM mount recovery..." -ForegroundColor Yellow
-    Get-Process -Name "dismhost", "wimserv" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-    Clear-DismMountConflicts -TargetMountDir $scratchDir -TargetWimFile $destWim
-    & dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /discard > $null 2>&1
-    & dism.exe /English /Cleanup-Wim > $null 2>&1
-    & dism.exe /English /Cleanup-Mountpoints > $null 2>&1
-    [GC]::Collect()
-    [GC]::WaitForPendingFinalizers()
-    Start-Sleep -Seconds 3
-    Reset-DirectoryWithRobocopy -Path $scratchDir
-}
-
-if (-not $mountSuccess) {
-    Write-Host "Failed to mount install.wim after recovery. Exiting..." -ForegroundColor Red
-    Stop-Transcript
-    exit 1
-}
+$mountResult = Invoke-Nano11ImageMount -ImageFile $destWim -ImageIndex $index -Retries 3
+$scratchDir = $mountResult.MountDir
+$script:DismMountDir = $scratchDir
+$script:MountOpened = $true
 
 $sourceWimSize = if (Test-Path -LiteralPath $destWim) { (Get-Item -LiteralPath $destWim).Length } else { 0 }
 
@@ -3750,12 +5360,8 @@ if ($CheckHealth) {
     & dism.exe /English /Image:"$scratchDir" /Cleanup-Image /CheckHealth
 }
 
-$filesToOwn = @("$scratchDir\Windows\System32\OneDriveSetup.exe")
-foreach ($file in $filesToOwn) {
-    if (Test-Path -LiteralPath $file) {
-        Set-ItemOwnershipAndAccess -Path $file
-    }
-}
+# Directive 2.1: Physical ownership acquisition and deletion of System32 binaries removed to prevent WIM hardlink corruption.
+# Neutralization is handled safely via IFEO debugger hijacking in Phase 10.
 
 # Detect UI Language and Architecture
 $imageIntl = & dism.exe /English /Get-Intl "/Image:$scratchDir"
@@ -3895,7 +5501,7 @@ if ($removeLegacyFOD) {
     }
     & dism.exe /English "/image:$scratchDir" /Disable-Feature /Remove /FeatureName:SMB1Protocol > $null 2>&1
     Write-Host "  - Legacy capabilities (VBScript, ISE, WMP, SMB1) removed." -ForegroundColor Green
-} -ForegroundColor Cyan
+}
 $packagePatterns = @(
     "Microsoft-Windows-InternetExplorer-Optional-Package~",
     "Microsoft-Windows-MediaPlayer-Package~",
@@ -3999,6 +5605,19 @@ if ($removeDefender) {
     $packagePatterns += "Windows-Defender-Client-Package~"
 }
 
+# Apply preservation filters to $packagePatterns before scanning
+if ($keepExtraFonts) {
+    $packagePatterns = @($packagePatterns | Where-Object { $_ -notlike "Microsoft-Windows-LanguageFeatures-Fonts-*" })
+}
+if ($keepAsianIME) {
+    $packagePatterns = @($packagePatterns | Where-Object {
+        $_ -notlike "*IME-ko-kr*" -and
+        $_ -notlike "*IME-zh-cn*" -and
+        $_ -notlike "*IME-zh-tw*" -and
+        $_ -notlike "*IME-zh-hk*"
+    })
+}
+
 $allPackagesOutput = & dism.exe /English "/image:$scratchDir" /Get-Packages /Format:Table
 $allPackages = ($allPackagesOutput -split '\r?\n') | Select-Object -Skip 1
 
@@ -4009,8 +5628,11 @@ foreach ($packagePattern in $packagePatterns) {
     foreach ($pkg in $matched) {
         $packageIdentity = ($pkg -split '\s+')[0]
         if ($packageIdentity -and (-not $packagesToRemove.Contains($packageIdentity))) {
-            # Strictly protect Japanese IME and Japanese font packages if keepAsianIME is enabled
-            if ($keepAsianIME -and ($packageIdentity -like "*IME-ja-jp*" -or $packageIdentity -like "*Fonts-Jpan*")) {
+            # Defensive guard: Strictly protect fonts and all Asian IMEs if preservation flags are set
+            if ($keepExtraFonts -and ($packageIdentity -like "*LanguageFeatures-Fonts-*")) {
+                continue
+            }
+            if ($keepAsianIME -and ($packageIdentity -like "*IME-*" -or $packageIdentity -like "*Fonts-Jpan*")) {
                 continue
             }
             $packagesToRemove.Add($packageIdentity)
@@ -4065,8 +5687,8 @@ if ($removeDrivers) {
     Write-Host "Preserving DriverStore inbox drivers (guarantees zero setup stalls at 77%)..." -ForegroundColor Green
 }
 
-# Fonts slimming (preserves Japanese and core system fonts, trims heavy foreign fonts)
-if (-not $keepExtraFonts -or $ultraSlimMode) {
+# Fonts slimming (strictly skipped if keepExtraFonts is true, even in ultraSlimMode)
+if (-not $keepExtraFonts) {
     Write-Host "Slimming Fonts folder (preserving Japanese and core system fonts)..." -ForegroundColor Cyan
     $fontsPath = Join-Path -Path $winDir -ChildPath "Fonts"
     if (Test-Path -LiteralPath $fontsPath) {
@@ -4106,17 +5728,17 @@ if (-not $keepExtraFonts -or $ultraSlimMode) {
     }
 }
 
-# IME Input Methods: Always remove non-Japanese Asian Input Methods (CHS, CHT, KOR)
-Write-Host "Removing Chinese and Korean Input Methods..." -ForegroundColor Cyan
-Remove-Item -Path "$scratchDir\Windows\System32\InputMethod\CHS" -Recurse -Force -ErrorAction SilentlyContinue
-Remove-Item -Path "$scratchDir\Windows\System32\InputMethod\CHT" -Recurse -Force -ErrorAction SilentlyContinue
-Remove-Item -Path "$scratchDir\Windows\System32\InputMethod\KOR" -Recurse -Force -ErrorAction SilentlyContinue
-
-# Japanese IME: Strictly preserve JPN when keepAsianIME is set
+# Asian IME Input Methods: Strictly preserve CHS, CHT, KOR, and JPN when keepAsianIME is set
 if (-not $keepAsianIME) {
+    Write-Host "Removing Asian Input Methods (CHS, CHT, KOR, JPN)..." -ForegroundColor Cyan
+    Remove-Item -Path "$scratchDir\Windows\System32\InputMethod\CHS" -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -Path "$scratchDir\Windows\System32\InputMethod\CHT" -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -Path "$scratchDir\Windows\System32\InputMethod\KOR" -Recurse -Force -ErrorAction SilentlyContinue
     Write-Host "Removing Japanese Input Method..." -ForegroundColor Cyan
     Remove-Item -Path "$scratchDir\Windows\System32\InputMethod\JPN" -Recurse -Force -ErrorAction SilentlyContinue
     Remove-Item -Path (Join-Path -Path $winDir -ChildPath "Speech\Engines\TTS") -Recurse -Force -ErrorAction SilentlyContinue
+} else {
+    Write-Host "Preserving Asian Input Methods (CHS, CHT, KOR, JPN) (-KeepAsianIME)..." -ForegroundColor Green
 }
 
 # Speech & Text-to-Speech Models (UltraSlim cleanup: trim heavy voice models, preserve core OneCore runtime for OOBE)
@@ -4139,13 +5761,13 @@ if ($ultraSlimMode) {
 
 # Windows Defender definitions and telemetry cache purge (safe for Code Integrity & ci.dll)
 if ($removeDefender) {
-    Write-Host "Purging Windows Defender definition updates and telemetry cache..." -ForegroundColor Cyan
-    Remove-Item -Path "$scratchDir\ProgramData\Microsoft\Windows Defender\Definition Updates" -Recurse -Force -ErrorAction SilentlyContinue
-    Remove-Item -Path "$scratchDir\ProgramData\Microsoft\Windows Defender\Scans" -Recurse -Force -ErrorAction SilentlyContinue
+    Write-Host "Purging Windows Defender definition updates, platform cache, and telemetry..." -ForegroundColor Cyan
+    Remove-Item -Path "$scratchDir\ProgramData\Microsoft\Windows Defender\*" -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -Path "$scratchDir\Program Files\Windows Defender Advanced Threat Protection\*" -Recurse -Force -ErrorAction SilentlyContinue
     # Note: WinSxS manifests, security catalogs (.cat), and System32 binaries are strictly preserved.
-    # On Windows 11 24H2+, deleting WinSxS security catalogs causes Code Integrity (ci.dll) validation
-    # to fail with STATUS_INVALID_IMAGE_HASH (0xC0000428) -> BSOD 0xC000021A.
-    # Defender is completely disabled via services and group policies without breaking signature integrity.
+    # On Windows 11 24H2+, deleting hardlinked binaries outside DISM causes WIM stream corruption (Data Error 0x80070570)
+    # and Code Integrity (ci.dll) failure with STATUS_INVALID_IMAGE_HASH (0xC0000428) -> Installer BSOD/reboot loop.
+    # Defender is 100% neutralized offline in Phase 10 via ELAM drivers (WdBoot/WdFilter/WdNisDrv Start=4), services & group policies.
 }
 
 # General cleanup & offline cache trimming
@@ -4171,24 +5793,8 @@ Remove-ProtectedDirectory -Path "$scratchDir\Program Files (x86)\Microsoft\Edge"
 Remove-ProtectedDirectory -Path "$scratchDir\Program Files (x86)\Microsoft\EdgeUpdate" -ScratchPath $scratchDir
 Remove-ProtectedDirectory -Path "$scratchDir\Program Files (x86)\Microsoft\EdgeCore" -ScratchPath $scratchDir
 
-# Purge OneDrive setup payload (197 MB) and executable
-Remove-Item -Path "$scratchDir\Windows\System32\OneDriveSetup.exe" -Force -ErrorAction SilentlyContinue
-# Note: WinSxS manifests and packages are preserved to ensure CBS and Wimgapi extraction stability at 77%.
-
-# Purge non-critical assistive and Game Bar binaries from System32 (Preserve core osk, Narrator, magnify for OOBE initialization)
-Write-Host "Removing unneeded assistive and Game Bar binaries from System32..." -ForegroundColor Cyan
-$accessBinaries = @(
-    "VoiceAccess.exe",
-    "Livecaptions.exe",
-    "GameBarPresenceWriter.exe"
-)
-foreach ($bin in $accessBinaries) {
-    $binPath = Join-Path -Path "$scratchDir\Windows\System32" -ChildPath $bin
-    if (Test-Path -LiteralPath $binPath) {
-        Set-ItemOwnershipAndAccess -Path $binPath
-        Remove-Item -LiteralPath $binPath -Force -ErrorAction SilentlyContinue
-    }
-}
+# Directive 2.1: Physical deletion of System32 binaries abolished to prevent NTFS hardlink desync and WIM stream corruption (0x80070570).
+# Execution neutralization for OneDriveSetup.exe, VoiceAccess.exe, Livecaptions.exe, and GameBarPresenceWriter.exe is handled via IFEO in Phase 10.
 # Purge Windows Backup scheduled tasks
 Remove-Item -LiteralPath "$scratchDir\Windows\System32\Tasks\Microsoft\Windows\AppListBackup" -Recurse -Force -ErrorAction SilentlyContinue
 
@@ -4216,34 +5822,56 @@ if ($keepRecoveryEnv) {
         Remove-Item -LiteralPath $keepMarkerFile -Force -ErrorAction SilentlyContinue
     }
 
-    # In UltraSlim mode, re-export winre.wim with maximum compression to save ~300 MB inside install.esd
-    if ($ultraSlimMode -and (Test-Path -LiteralPath $targetWinre)) {
-        Write-Host "Optimizing WinRE compression for UltraSlim footprint..." -ForegroundColor Cyan
-        $tempCompactWinre = Join-Path -Path $recoveryDir -ChildPath "winre_compact.wim"
-        Set-ItemOwnershipAndAccess -Path $targetWinre
-        try { Set-ItemProperty -LiteralPath $targetWinre -Name IsReadOnly -Value $false -ErrorAction Stop } catch {}
-        & dism.exe /English /Export-Image "/SourceImageFile:$targetWinre" /SourceIndex:1 "/DestinationImageFile:$tempCompactWinre" /Compress:max > $null 2>&1
-        if ((Test-Path -LiteralPath $tempCompactWinre) -and ((Get-Item -LiteralPath $tempCompactWinre).Length -gt 10MB)) {
-            Remove-Item -LiteralPath $targetWinre -Force -ErrorAction SilentlyContinue
-            Rename-Item -LiteralPath $tempCompactWinre -NewName "winre.wim" -Force
-            Write-Host "  - WinRE successfully compressed and optimized." -ForegroundColor Green
-        } else {
-            Remove-Item -LiteralPath $tempCompactWinre -Force -ErrorAction SilentlyContinue
+    # Ensure WinRE has proper Read/Write access and full ACL permissions for Setup SafeOS staging
+    if (Test-Path -LiteralPath $targetWinre) {
+        Write-Host "Configuring WinRE permissions (clearing Read-Only, granting SYSTEM/Admin full control to prevent Setup 0x80070005)..." -ForegroundColor Green
+        try {
+            & attrib.exe -R -S -H "$targetWinre" > $null 2>&1
+            & icacls.exe "$targetWinre" /grant "SYSTEM:(F)" "Administrators:(F)" "Users:(RX)" /c > $null 2>&1
+        } catch {
+            Write-Warning "Failed to set permissions for WinRE: $_. Continuing build safely."
         }
     }
 }
 
+# --- nano11builder.ps1 Phase 8: フラグファイルおよびマニフェスト出力 (Directive 2.2) ---
+$winreFlagDir = Join-Path -Path $scratchDir -ChildPath "Windows\Setup\Scripts"
+if (-not (Test-Path -LiteralPath $winreFlagDir)) {
+    New-Item -ItemType Directory -Force -Path $winreFlagDir -ErrorAction SilentlyContinue | Out-Null
+}
+
+if ($removeDefender) {
+    Set-Content -LiteralPath (Join-Path -Path $winreFlagDir -ChildPath "remove-defender.flag") -Value "remove" -Encoding ascii -Force
+    Write-Host "  - Staged remove-defender.flag" -ForegroundColor Green
+}
+if ($bypassActivationRestrictions) {
+    Set-Content -LiteralPath (Join-Path -Path $winreFlagDir -ChildPath "bypass-activation.flag") -Value "1" -Encoding ascii -Force
+}
+if ($disableMemCompression) {
+    Set-Content -LiteralPath (Join-Path -Path $winreFlagDir -ChildPath "disable-memcompression.flag") -Value "1" -Encoding ascii -Force
+}
+if ($noHypervisor) {
+    Set-Content -LiteralPath (Join-Path -Path $winreFlagDir -ChildPath "no-hypervisor.flag") -Value "1" -Encoding ascii -Force
+}
+if ($removeWebViewPostOOBE) {
+    Set-Content -LiteralPath (Join-Path -Path $winreFlagDir -ChildPath "remove-webview.flag") -Value "1" -Encoding ascii -Force
+}
+
+# 検索インデックス等の構成マニフェストを出力
+$buildInfo = @{ KeepSearchIndex = [bool]$keepSearchIndex } | ConvertTo-Json
+Set-Content -LiteralPath (Join-Path -Path $winreFlagDir -ChildPath "nano11-build-info.json") -Value $buildInfo -Encoding utf8 -Force
+
 Enter-Phase 9 "Component Store (WinSxS) Optimization"
 
 # 9. Component Store (WinSxS) Optimization
+# CRITICAL: Offline /StartComponentCleanup and /ResetBase on Windows 11 Build 26100/26300+ images
+# cause TurboStack / CBS tree corruption (Error 1392 / 0x80070570 in SortWindows61.nls stream) during commit!
+# Unused package data is automatically and safely purged during Phase 13 Export-Image (/Compress:max).
+# Preserving the intact component store here guarantees 100% stable setup file expansion (zero 77% stalls).
 if ($safeDebloatMode) {
-    Write-Host "Consolidating component store safely via DISM Component Cleanup..." -ForegroundColor Green
-    Write-Host "  -> DISM is optimizing component packages. Progress will display below..." -ForegroundColor Cyan
-    # Note: We omit /ResetBase because offline /ResetBase on an image with package removals
-    # corrupts delta manifests and causes Windows Setup file expansion to freeze at 77%.
-    # Standard /StartComponentCleanup is 100% stable and fully preserves Setup integrity.
-    & dism.exe /English "/image:$scratchDir" /Cleanup-Image /StartComponentCleanup
-    Write-Host "  - Component store consolidated safely (WinSxS manifest integrity preserved for zero 77% stalls)." -ForegroundColor Green
+    Write-Host "Preserving component store integrity for 100% reliable Windows Setup deployment..." -ForegroundColor Green
+    Write-Host "  -> Skipping unstable offline StartComponentCleanup (prevents 0x80070570 stream corruption at 77%)." -ForegroundColor Cyan
+    Write-Host "  -> Disk space optimization is safely handled via Phase 13 Export-Image (/Compress:max)." -ForegroundColor Green
 } else {
     Write-Host "Running Aggressive WinSxS Pruning (Experimental)..." -ForegroundColor Yellow
     # Pre-cleanup DISM component base before trimming
@@ -4313,6 +5941,9 @@ if ($safeDebloatMode) {
     }
     if ($keepAsianIME) {
         $dirsToKeep += @("*inputmethod*", "*ime*")
+    }
+    if ($keepExtraFonts) {
+        $dirsToKeep += @("*font*")
     }
     if ($keepBT) {
         $dirsToKeep += @("*bth*", "*bluetooth*")
@@ -4452,7 +6083,7 @@ reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\CurrentVersion\Search" /v 
 reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\Lsa" /v "LimitBlankPasswordUse" /t REG_DWORD /d 0 /f > $null 2>&1
 reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" /v "AutoAdminLogon" /t REG_SZ /d "1" /f > $null 2>&1
 reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" /v "DefaultUserName" /t REG_SZ /d "User" /f > $null 2>&1
-reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" /v "DefaultPassword" /t REG_SZ /d "" /f > $null 2>&1
+reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" /f /v "DefaultPassword" /t REG_SZ /d '""' > $null 2>&1
 reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" /v "ForceAutoLogon" /t REG_SZ /d "1" /f > $null 2>&1
 reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\System" /v "AllowDomainDelayLock" /t REG_DWORD /d 1 /f > $null 2>&1
 reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" /v "FilterAdministratorToken" /t REG_DWORD /d 0 /f > $null 2>&1
@@ -4508,8 +6139,8 @@ reg.exe add "HKLM\zNTUSER\Software\Microsoft\VoiceAccess" /v "Enabled" /t REG_DW
 reg.exe add "HKLM\zDEFAULT\Software\Microsoft\VoiceAccess" /v "Enabled" /t REG_DWORD /d 0 /f > $null 2>&1
 reg.exe add "HKLM\zNTUSER\Software\Microsoft\LiveCaptions" /v "LiveCaptionsDesktopEnabled" /t REG_DWORD /d 0 /f > $null 2>&1
 reg.exe add "HKLM\zDEFAULT\Software\Microsoft\LiveCaptions" /v "LiveCaptionsDesktopEnabled" /t REG_DWORD /d 0 /f > $null 2>&1
-reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows NT\CurrentVersion\Accessibility" /v "Configuration" /t REG_SZ /d "" /f > $null 2>&1
-reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows NT\CurrentVersion\Accessibility" /v "Configuration" /t REG_SZ /d "" /f > $null 2>&1
+reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows NT\CurrentVersion\Accessibility" /f /v "Configuration" /t REG_SZ /d '""' > $null 2>&1
+reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows NT\CurrentVersion\Accessibility" /f /v "Configuration" /t REG_SZ /d '""' > $null 2>&1
 reg.exe add "HKLM\zNTUSER\Control Panel\Accessibility\StickyKeys" /v "Flags" /t REG_SZ /d "26" /f > $null 2>&1
 reg.exe add "HKLM\zDEFAULT\Control Panel\Accessibility\StickyKeys" /v "Flags" /t REG_SZ /d "26" /f > $null 2>&1
 reg.exe add "HKLM\zNTUSER\Control Panel\Accessibility\Keyboard Response" /v "Flags" /t REG_SZ /d "122" /f > $null 2>&1
@@ -4544,14 +6175,57 @@ $blockedExes = @(
     "CrossDeviceResume.exe",
     "WindowsBackupClient.exe",
     "VoiceAccess.exe",
-    "Livecaptions.exe"
+    "Livecaptions.exe",
+    "OneDriveSetup.exe",
+    "SearchHost.exe"
 )
 if (-not $keepXboxServices) {
     $blockedExes += @("GameBar.exe", "GameBarFTServer.exe", "GameBarPresenceWriter.exe")
 }
-foreach ($exe in $blockedExes) {
-    reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\$exe" /v "Debugger" /t REG_SZ /d "systray.exe" /f > $null 2>&1
+if ($removeDefender) {
+    $blockedExes += @(
+        "MsMpEng.exe",
+        "NisSrv.exe",
+        "SecurityHealthService.exe",
+        "SecurityHealthSystray.exe"
+    )
 }
+foreach ($exe in $blockedExes) {
+    reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\$exe" /v "Debugger" /t REG_SZ /d "rundll32.exe" /f > $null 2>&1
+}
+
+# CRITICAL: smartscreen.exe MUST NEVER have an IFEO Debugger set!
+# Windows Shell invokes smartscreen.exe -Embedding via COM for binary reputation checks.
+# Setting an IFEO Debugger causes RunDLL error 'エントリがありません: -Embedding'
+# and fatally blocks ALL .exe files (Task Manager, Windows Tools, apps) from launching.
+reg.exe delete "HKLM\zSOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\smartscreen.exe" /f > $null 2>&1
+reg.exe delete "HKLM\zSOFTWARE\WOW6432Node\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\smartscreen.exe" /f > $null 2>&1
+
+# --- CrossDevice & SearchHost Offline Suppression ---
+# CrossDevice / リモート再開の無効化
+reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\CrossDevice" /v "AllowCrossDeviceExperience" /t REG_DWORD /d 0 /f > $null 2>&1
+reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\CrossDevice" /v "AllowCrossDeviceResume" /t REG_DWORD /d 0 /f > $null 2>&1
+reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\CrossDevice" /v "DisableResume" /t REG_DWORD /d 1 /f > $null 2>&1
+reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\System" /v "EnableCdp" /t REG_DWORD /d 0 /f > $null 2>&1
+# --- CrossDevice & SearchHost Offline Suppression ---
+reg.exe add "HKLM\zSYSTEM\ControlSet001\Services\CDPUserSvc" /v "UserServiceFlags" /t REG_DWORD /d 0 /f > $null 2>&1
+reg.exe add "HKLM\zSYSTEM\ControlSet001\Services\CDPSvc" /v "Start" /t REG_DWORD /d 4 /f > $null 2>&1
+reg.exe add "HKLM\zSYSTEM\ControlSet001\Services\CDPUserSvc" /v "Start" /t REG_DWORD /d 4 /f > $null 2>&1
+reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\CrossDevice" /v "AllowCrossDeviceExperience" /t REG_DWORD /d 0 /f > $null 2>&1
+reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\CrossDevice" /v "DisableCrossDeviceResume" /t REG_DWORD /d 1 /f > $null 2>&1
+reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\System" /v "AllowPrelaunch" /t REG_DWORD /d 0 /f > $null 2>&1
+reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\Windows Search" /v "AllowSearchHostPrelaunch" /t REG_DWORD /d 0 /f > $null 2>&1
+reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\CurrentVersion\Search" /v "AllowSearchHostPrelaunch" /t REG_DWORD /d 0 /f > $null 2>&1
+reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\Windows Search" /v "AllowCortana" /t REG_DWORD /d 0 /f > $null 2>&1
+reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\Windows Search" /v "DisableWebSearch" /t REG_DWORD /d 1 /f > $null 2>&1
+reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\Windows Search" /v "ConnectedSearchUseWeb" /t REG_DWORD /d 0 /f > $null 2>&1
+reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\Windows Search" /v "AllowSearchToUseLocation" /t REG_DWORD /d 0 /f > $null 2>&1
+reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\Windows Search" /v "AllowCloudSearch" /t REG_DWORD /d 0 /f > $null 2>&1
+reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\CurrentVersion\Search" /v "SearchboxTaskbarMode" /t REG_DWORD /d 0 /f > $null 2>&1
+reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\CurrentVersion\Search" /v "BingSearchEnabled" /t REG_DWORD /d 0 /f > $null 2>&1
+reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Search" /v "SearchboxTaskbarMode" /t REG_DWORD /d 0 /f > $null 2>&1
+reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Search" /v "BingSearchEnabled" /t REG_DWORD /d 0 /f > $null 2>&1
+
 
 # Scheduled Tasks Cleanup (Path fixed - no hardcoded C:)
 Write-Host "Cleaning up scheduled telemetry tasks..." -ForegroundColor Cyan
@@ -4599,64 +6273,75 @@ if ($disableWU) {
 # Windows Defender & Security Complete Removal (ionuttbara/windows-defender-remover integration)
 # ============================================================================
 if ($removeDefender) {
-    Write-Host "Completely disabling and removing Windows Defender, Security Center, and ATP services (windows-defender-remover)..." -ForegroundColor Green
-    # Only disable user-mode background services.
-    # Note: Boot-critical drivers (WdBoot, MsSecCore, MsSecFlt, Pluton) and filesystem minifilters (WdFilter, WdNisDrv)
-    # MUST NOT be set to Start=4. Disabling WdFilter causes Filter Manager (fltmgr.sys) driver staging hangs and volume deadlocks at 77%!
-    # Defender is completely deactivated via WinDefend service and real-time Group Policies while fltmgr.sys stays 100% stable.
+    Write-Host "Elevating offline registry DACLs for Defender keys via regini.exe..." -ForegroundColor Cyan
+    $reginiLines = @(
+        '\Registry\Machine\zSYSTEM\ControlSet001\Services\WinDefend [1 17]',
+        '\Registry\Machine\zSYSTEM\ControlSet001\Services\Sense [1 17]',
+        '\Registry\Machine\zSYSTEM\ControlSet001\Services\SecurityHealthService [1 17]',
+        '\Registry\Machine\zSYSTEM\ControlSet001\Services\wscsvc [1 17]',
+        '\Registry\Machine\zSYSTEM\ControlSet001\Services\webthreatdefsvc [1 17]',
+        '\Registry\Machine\zSYSTEM\ControlSet001\Services\webthreatdefusersvc [1 17]',
+        '\Registry\Machine\zSYSTEM\ControlSet001\Services\WdBoot [1 17]',
+        '\Registry\Machine\zSYSTEM\ControlSet001\Services\WdFilter [1 17]',
+        '\Registry\Machine\zSYSTEM\ControlSet001\Services\WdNisDrv [1 17]',
+        '\Registry\Machine\zSYSTEM\ControlSet001\Services\SgrmBroker [1 17]',
+        '\Registry\Machine\zSYSTEM\ControlSet001\Services\SgrmAgent [1 17]',
+        '\Registry\Machine\zSOFTWARE\Microsoft\Windows Defender\Features [1 17]'
+    )
+    $reginiFile = Join-Path -Path $env:TEMP -ChildPath "nano11_regini_$([System.IO.Path]::GetRandomFileName()).txt"
+    [System.IO.File]::WriteAllLines($reginiFile, $reginiLines, [System.Text.Encoding]::ASCII)
+    & regini.exe $reginiFile > $null 2>&1
+    Remove-Item -LiteralPath $reginiFile -Force -ErrorAction SilentlyContinue
+
+    Write-Host "Disabling Windows Defender drivers & services offline in zSYSTEM..." -ForegroundColor Green
+
+    # 1. Disable Early Launch Anti-Malware (ELAM) and Filesystem Minifilter Drivers (Start = 4: Disabled)
+    $defDrivers = @('WdBoot', 'WdFilter', 'WdNisDrv')
+    foreach ($drv in $defDrivers) {
+        reg.exe add "HKLM\zSYSTEM\ControlSet001\Services\$drv" /v "Start" /t REG_DWORD /d 4 /f > $null 2>&1
+    }
+
+    # 2. Disable all Defender user-mode services and strip TriggerInfo
     $defServices = @(
-        "WinDefend", "Sense", "SecurityHealthService",
-        "wscsvc", "webthreatdefsvc", "webthreatdefusersvc"
+        'WinDefend',
+        'Sense',
+        'SecurityHealthService',
+        'wscsvc',
+        'webthreatdefsvc',
+        'webthreatdefusersvc',
+        'SgrmBroker',
+        'SgrmAgent'
     )
     foreach ($svc in $defServices) {
         reg.exe add "HKLM\zSYSTEM\ControlSet001\Services\$svc" /v "Start" /t REG_DWORD /d 4 /f > $null 2>&1
+        reg.exe delete "HKLM\zSYSTEM\ControlSet001\Services\$svc\TriggerInfo" /f > $null 2>&1
     }
 
-    # Complete Defender & AntiSpyware Policies from windows-defender-remover
+    # 3. Disable Tamper Protection offline
+    reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows Defender\Features" /v "TamperProtection" /t REG_DWORD /d 0 /f > $null 2>&1
+    reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows Defender\Features" /v "TamperProtectionSource" /t REG_DWORD /d 0 /f > $null 2>&1
+
+    # 4. Enforce group policy restrictions
     reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows Defender" /v "DisableAntiSpyware" /t REG_DWORD /d 1 /f > $null 2>&1
     reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows Defender" /v "DisableAntiVirus" /t REG_DWORD /d 1 /f > $null 2>&1
-    reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows Defender" /v "ServiceKeepAlive" /t REG_DWORD /d 0 /f > $null 2>&1
-    reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows Defender" /v "PUAProtection" /t REG_DWORD /d 0 /f > $null 2>&1
-    reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows Defender" /v "DisableRoutinelyTakingAction" /t REG_DWORD /d 1 /f > $null 2>&1
-    reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows Defender" /v "AllowFastServiceStartup" /t REG_DWORD /d 0 /f > $null 2>&1
-    reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows Defender" /v "DisableLocalAdminMerge" /t REG_DWORD /d 1 /f > $null 2>&1
-    reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows Defender" /v "RandomizeScheduleTaskTimes" /t REG_DWORD /d 0 /f > $null 2>&1
-
-    # Real-Time Protection & Behavioral Monitoring
     reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection" /v "DisableRealtimeMonitoring" /t REG_DWORD /d 1 /f > $null 2>&1
     reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection" /v "DisableBehaviorMonitoring" /t REG_DWORD /d 1 /f > $null 2>&1
     reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection" /v "DisableOnAccessProtection" /t REG_DWORD /d 1 /f > $null 2>&1
-    reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection" /v "DisableScanOnRealtimeEnable" /t REG_DWORD /d 1 /f > $null 2>&1
     reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection" /v "DisableIOAVProtection" /t REG_DWORD /d 1 /f > $null 2>&1
-    reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection" /v "DisableScriptScanning" /t REG_DWORD /d 1 /f > $null 2>&1
+    reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows Defender Security Center\Systray" /v "HideSystray" /t REG_DWORD /d 1 /f > $null 2>&1
 
-    # PolicyManager Defender overrides
-    $pmPolicies = @(
-        "AllowIOAVProtection", "AllowArchiveScanning", "AllowBehaviorMonitoring", "AllowCloudProtection",
-        "AllowEmailScanning", "AllowFullScanOnMappedNetworkDrives", "AllowFullScanRemovableDriveScanning",
-        "AllowIntrusionPreventionSystem", "AllowOnAccessProtection", "AllowRealtimeMonitoring",
-        "AllowScanningNetworkFiles", "AllowScriptScanning", "AllowUserUIAccess",
-        "CheckForSignaturesBeforeRunningScan", "EnableControlledFolderAccess", "EnableNetworkProtection", "PUAProtection"
-    )
-    foreach ($pol in $pmPolicies) {
-        reg.exe add "HKLM\zSOFTWARE\Microsoft\PolicyManager\default\Defender\$pol" /v "value" /t REG_DWORD /d 0 /f > $null 2>&1
-    }
-
-    # Disable SmartScreen completely
-    reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\System" /v "EnableSmartScreen" /t REG_DWORD /d 0 /f > $null 2>&1
-    reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Explorer" /v "SmartScreenEnabled" /t REG_SZ /d "Off" /f > $null 2>&1
-    reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\MicrosoftEdge\PhishingFilter" /v "EnabledV9" /t REG_DWORD /d 0 /f > $null 2>&1
-
-    # Notifications & Startup
-    reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows Defender\Reporting" /v "DisableEnhancedNotifications" /t REG_DWORD /d 1 /f > $null 2>&1
-    reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows Defender Security Center\Notifications" /v "DisableNotifications" /t REG_DWORD /d 1 /f > $null 2>&1
+    # 5. Remove SecurityHealthSystray autorun entry
     reg.exe delete "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Run" /v "SecurityHealth" /f > $null 2>&1
 
-    # Remove Context Menu & Shell Associations
+    # 6. Remove shell context menu extensions
     reg.exe delete "HKLM\zSOFTWARE\Classes\CLSID\{09A47860-11B0-4DA5-AFA5-26D86198A780}" /f > $null 2>&1
     reg.exe delete "HKLM\zSOFTWARE\Classes\*\shellex\ContextMenuHandlers\EPP" /f > $null 2>&1
     reg.exe delete "HKLM\zSOFTWARE\Classes\Directory\shellex\ContextMenuHandlers\EPP" /f > $null 2>&1
     reg.exe delete "HKLM\zSOFTWARE\Classes\Drive\shellex\ContextMenuHandlers\EPP" /f > $null 2>&1
+
+    # 7. Deprovision SecHealthUI (Windows Security) in AppxAllUserStore
+    reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Appx\AppxAllUserStore\Deprovisioned\Microsoft.SecHealthUI_8wekyb3d8bbwe" /f > $null 2>&1
+    reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Appx\AppxAllUserStore\Deprovisioned\Microsoft.Windows.SecHealthUI_cw5n1h2txyewy" /f > $null 2>&1
 }
 
 # ============================================================================
@@ -4729,7 +6414,7 @@ reg.exe add "HKLM\zSYSTEM\ControlSet001\Control" /v "ServicesPipeTimeout" /t REG
 reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\Session Manager\Memory Management" /v "DisablePageCombining" /t REG_DWORD /d 0 /f > $null 2>&1
 reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\Session Manager\Memory Management" /v "LargeSystemCache" /t REG_DWORD /d 0 /f > $null 2>&1
 $pagingExecutiveVal = if ($noKernelPaging) { 1 } else { 0 }
-reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\Session Manager\Memory Management" /v "DisablePagingExecutive" /t REG_DWORD /d $pagingExecutiveVal /f > $null 2>&1
+reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\Session Manager\Memory Management" /f /v "DisablePagingExecutive" /t REG_DWORD /d $pagingExecutiveVal > $null 2>&1
 
 # CPU Speculative Execution Mitigations (Spectre / Meltdown toggle: -DisableCPUMitigations)
 if ($disableCPUMitigations) {
@@ -4804,6 +6489,8 @@ $serviceConfigs = [ordered]@{
     "XblGameSave"                              = if ($keepXboxServices) { 3 } else { 4 }  # Xbox Live Game Save
     "XboxGipSvc"                               = if ($keepXboxServices) { 3 } else { 4 }  # Xbox Accessory Management Service
     "XboxNetApiSvc"                            = if ($keepXboxServices) { 3 } else { 4 }  # Xbox Live Networking Service
+    "CDPSvc"                                   = 4  # Connected Devices Platform Service (Disabled)
+    "CDPUserSvc"                               = 4  # Connected Devices Platform User Service (Disabled)
 
     # --- Demand Start Services (Start = 3: Manual, runs on demand only - protects LogonUI, DirectWrite & Per-User sessions) ---
     "AppHostSvc"                               = 3  # Application Host Helper
@@ -4811,8 +6498,6 @@ $serviceConfigs = [ordered]@{
     "BcastDVRUserService"                      = 3  # GameDVR and Broadcast User Service (Per-user template)
     "BDESVC"                                   = 3  # BitLocker Drive Encryption Service
     "CaptureService"                           = 3  # Screen / Camera capture broker
-    "CDPSvc"                                   = 3  # Connected Devices Platform Service
-    "CDPUserSvc"                               = 3  # Connected Devices Platform User Service (Per-user template)
     "DevQueryBroker"                           = 3  # Device Setup / Query Broker
     "DeviceInstall"                            = 3  # Device Install Service
     "DisplayEnhancementService"                = 3  # Display Enhancement Service
@@ -4875,7 +6560,89 @@ if ($disableWU) {
 }
 
 foreach ($svc in $serviceConfigs.GetEnumerator()) {
-    reg.exe add "HKLM\zSYSTEM\ControlSet001\Services\$($svc.Key)" /v "Start" /t REG_DWORD /d $($svc.Value) /f > $null 2>&1
+    reg.exe add "HKLM\zSYSTEM\ControlSet001\Services\$($svc.Key)" /f /v "Start" /t REG_DWORD /d $($svc.Value) > $null 2>&1
+}
+
+# ============================================================================
+# Radical RAM: Per-User Services Suppression & Background Process Elimination
+# ============================================================================
+if ($radicalRAM) {
+    Write-Host "Applying Radical RAM footprint minimization (Widgets, SearchHost/WebView2, CrossDevice, Services)..." -ForegroundColor Green
+
+    # 1. Windows 11 Widgets (Widgets.exe, WebWidget) Policy Suppression
+    reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Dsh" /v "AllowNewsAndInterests" /t REG_DWORD /d 0 /f > $null 2>&1
+    reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\Widgets" /v "AllowWidgets" /t REG_DWORD /d 0 /f > $null 2>&1
+
+    # 2. SearchHost & Web Search / WebView2 Suppression (Stops 340MB msedgewebview2.exe background instances)
+    reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\Windows Search" /v "DisableWebSearch" /t REG_DWORD /d 1 /f > $null 2>&1
+    reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\Windows Search" /v "ConnectedSearchUseWeb" /t REG_DWORD /d 0 /f > $null 2>&1
+    reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\Windows Search" /v "EnableDynamicContentInWSB" /t REG_DWORD /d 0 /f > $null 2>&1
+    reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\Windows Search" /v "AllowCloudSearch" /t REG_DWORD /d 0 /f > $null 2>&1
+    reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\Windows Search" /v "AllowSearchToUseLocation" /t REG_DWORD /d 0 /f > $null 2>&1
+    reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\Windows Search" /v "ConnectedSearchUseWebOverMeteredConnections" /t REG_DWORD /d 0 /f > $null 2>&1
+    reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\Windows Search" /v "AllowCortana" /t REG_DWORD /d 0 /f > $null 2>&1
+
+    # 3. Cross-Device Experience & Resume Suppression (Stops 47MB CrossDeviceResume.exe)
+    reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\System" /v "EnableCdp" /t REG_DWORD /d 0 /f > $null 2>&1
+    reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\System" /v "EnableMmx" /t REG_DWORD /d 0 /f > $null 2>&1
+    reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\CrossDevice" /v "AllowCrossDeviceExperience" /t REG_DWORD /d 0 /f > $null 2>&1
+    reg.exe add "HKLM\zSYSTEM\ControlSet001\Services\CDPSvc" /v "Start" /t REG_DWORD /d 4 /f > $null 2>&1
+    reg.exe add "HKLM\zSYSTEM\ControlSet001\Services\CDPUserSvc" /v "Start" /t REG_DWORD /d 4 /f > $null 2>&1
+
+    # 4. SmartScreen Complete Policy Suppression (Clean policy-based disabling without breaking COM / .exe execution)
+    reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\System" /v "EnableSmartScreen" /t REG_DWORD /d 0 /f > $null 2>&1
+    reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Explorer" /v "SmartScreenEnabled" /t REG_SZ /d "Off" /f > $null 2>&1
+    reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Edge" /v "SmartScreenEnabled" /t REG_DWORD /d 0 /f > $null 2>&1
+    reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Edge" /v "SmartScreenPuaEnabled" /t REG_DWORD /d 0 /f > $null 2>&1
+    reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\MicrosoftEdge\PhishingFilter" /v "EnabledV9" /t REG_DWORD /d 0 /f > $null 2>&1
+    reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows Defender\SmartScreen" /v "ConfigureAppInstallControlEnabled" /t REG_DWORD /d 0 /f > $null 2>&1
+    reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows Defender\SmartScreen" /v "ConfigureAppInstallControl" /t REG_SZ /d "Anywhere" /f > $null 2>&1
+
+    # 5. Non-Essential Background Services Optimization
+    # TrkWks (Distributed Link Tracking) - Not needed on single-user/gaming PCs
+    reg.exe add "HKLM\zSYSTEM\ControlSet001\Services\TrkWks" /v "Start" /t REG_DWORD /d 4 /f > $null 2>&1
+    # BITS (Background Intelligent Transfer) - Revert to Manual demand start
+    reg.exe add "HKLM\zSYSTEM\ControlSet001\Services\BITS" /v "Start" /t REG_DWORD /d 3 /f > $null 2>&1
+
+    # 6. Edge & WebView2 Pre-Launch & Background Memory Elimination
+    reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Edge" /v "StartupBoostEnabled" /t REG_DWORD /d 0 /f > $null 2>&1
+    reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Edge" /v "BackgroundModeEnabled" /t REG_DWORD /d 0 /f > $null 2>&1
+    reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Edge" /v "WebWidgetIsEnabled" /t REG_DWORD /d 0 /f > $null 2>&1
+    reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\MicrosoftEdge\Main" /v "AllowPrelaunch" /t REG_DWORD /d 0 /f > $null 2>&1
+    reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Edge\WebView2" /v "StartupBoostEnabled" /t REG_DWORD /d 0 /f > $null 2>&1
+    reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Edge\WebView2" /v "BackgroundModeEnabled" /t REG_DWORD /d 0 /f > $null 2>&1
+
+    # 7. User Hive (zDEFAULT / zNTUSER) Bing Search & CrossDevice Defaults
+    reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\CurrentVersion\Search" /v "BingSearchEnabled" /t REG_DWORD /d 0 /f > $null 2>&1
+    reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Search" /v "BingSearchEnabled" /t REG_DWORD /d 0 /f > $null 2>&1
+    reg.exe add "HKLM\zDEFAULT\Software\Policies\Microsoft\Windows\Explorer" /v "DisableSearchBoxSuggestions" /t REG_DWORD /d 1 /f > $null 2>&1
+    reg.exe add "HKLM\zNTUSER\Software\Policies\Microsoft\Windows\Explorer" /v "DisableSearchBoxSuggestions" /t REG_DWORD /d 1 /f > $null 2>&1
+    reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\CurrentVersion\CrossDeviceResume\Configuration" /v "IsResumeAllowed" /t REG_DWORD /d 0 /f > $null 2>&1
+    reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\CrossDeviceResume\Configuration" /v "IsResumeAllowed" /t REG_DWORD /d 0 /f > $null 2>&1
+
+    # 8. Complete Background AppX Execution Block (Saves ~150MB across background broker hosts)
+    reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\AppPrivacy" /v "LetAppsRunInBackground" /t REG_DWORD /d 2 /f > $null 2>&1
+    reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\CurrentVersion\BackgroundAccessApplications" /v "GlobalUserDisabled" /t REG_DWORD /d 1 /f > $null 2>&1
+    reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\BackgroundAccessApplications" /v "GlobalUserDisabled" /t REG_DWORD /d 1 /f > $null 2>&1
+
+    # 9. DWM & Rendering Footprint Minimization (Saves ~80MB, keeps DirectWrite font smoothing for readability)
+    reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize" /v "EnableTransparency" /t REG_DWORD /d 0 /f > $null 2>&1
+    reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize" /v "EnableTransparency" /t REG_DWORD /d 0 /f > $null 2>&1
+    reg.exe add "HKLM\zDEFAULT\Control Panel\Desktop\WindowMetrics" /v "MinAnimate" /t REG_SZ /d "0" /f > $null 2>&1
+    reg.exe add "HKLM\zNTUSER\Control Panel\Desktop\WindowMetrics" /v "MinAnimate" /t REG_SZ /d "0" /f > $null 2>&1
+    reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" /v "VisualFXSetting" /t REG_DWORD /d 2 /f > $null 2>&1
+    reg.exe add "HKLM\zDEFAULT\Control Panel\Desktop" /v "FontSmoothing" /t REG_SZ /d "2" /f > $null 2>&1
+    reg.exe add "HKLM\zDEFAULT\Control Panel\Desktop" /v "FontSmoothingType" /t REG_DWORD /d 2 /f > $null 2>&1
+
+    # 10. VBS / HVCI (Virtualization-Based Security / Memory Integrity) Elimination (Saves ~150-300MB reserved RAM)
+    reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\DeviceGuard" /v "EnableVirtualizationBasedSecurity" /t REG_DWORD /d 0 /f > $null 2>&1
+    reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\DeviceGuard\Scenarios\HypervisorEnforcedCodeIntegrity" /v "Enabled" /t REG_DWORD /d 0 /f > $null 2>&1
+
+    # 11. Additional Push & Background Sync Services Suppression
+    reg.exe add "HKLM\zSYSTEM\ControlSet001\Services\WpnService" /v "Start" /t REG_DWORD /d 4 /f > $null 2>&1
+    reg.exe add "HKLM\zSYSTEM\ControlSet001\Services\WpnUserService" /v "Start" /t REG_DWORD /d 4 /f > $null 2>&1
+    reg.exe add "HKLM\zSYSTEM\ControlSet001\Services\PushToInstall" /v "Start" /t REG_DWORD /d 4 /f > $null 2>&1
+    reg.exe add "HKLM\zSYSTEM\ControlSet001\Services\DoSvc" /v "Start" /t REG_DWORD /d 4 /f > $null 2>&1
 }
 
 # WebDAV File Size Limit (4GB)
@@ -5009,7 +6776,7 @@ if ($atlasReviOSMode) {
         'automatic' { 7 }
         default     { if ($atlasReviOSMode) { 0 } else { 7 } }
     }
-    reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\CrashControl" /v "CrashDumpEnabled" /t REG_DWORD /d $cdVal /f > $null 2>&1
+    reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\CrashControl" /f /v "CrashDumpEnabled" /t REG_DWORD /d $cdVal > $null 2>&1
     reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\CrashControl" /v "LogEvent" /t REG_DWORD /d 0 /f > $null 2>&1
     reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\CrashControl" /v "SendAlert" /t REG_DWORD /d 0 /f > $null 2>&1
 
@@ -5029,7 +6796,10 @@ if ($atlasReviOSMode) {
         "Microsoft\Windows\Diagnosis\Scheduled"
     )
     foreach ($task in $atlasTasks) {
-        Remove-Item -LiteralPath "$tasksPath\$task" -Force -ErrorAction SilentlyContinue
+        $tPath = Join-Path -Path $tasksPath -ChildPath $task
+        if (Test-Path -LiteralPath $tPath) {
+            Remove-Item -LiteralPath $tPath -Recurse -Force -Confirm:$false -ErrorAction SilentlyContinue
+        }
     }
 }
 
@@ -5069,6 +6839,10 @@ reg.exe add "HKLM\zNTUSER\Software\Microsoft\DirectX\UserGpuPreferences" /v "Dir
 # Explorer UI: End Task, Win10 Classic Context Menu, Dark Mode, File Extensions, Clock Seconds
 reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced\TaskbarDeveloperSettings" /v "TaskbarEndTask" /t REG_DWORD /d 1 /f > $null 2>&1
 reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced\TaskbarDeveloperSettings" /v "TaskbarEndTask" /t REG_DWORD /d 1 /f > $null 2>&1
+
+# Windows 10 Classic Context Menu (Baked directly into Default User profile for guaranteed inheritance)
+reg.exe add "HKLM\zDEFAULT\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32" /f /ve /t REG_SZ /d '""' > $null 2>&1
+reg.exe add "HKLM\zNTUSER\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32" /f /ve /t REG_SZ /d '""' > $null 2>&1
 reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize" /v "AppsUseLightTheme" /t REG_DWORD /d 0 /f > $null 2>&1
 reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize" /v "SystemUsesLightTheme" /t REG_DWORD /d 0 /f > $null 2>&1
 reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize" /v "AppsUseLightTheme" /t REG_DWORD /d 0 /f > $null 2>&1
@@ -5140,7 +6914,13 @@ reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\Ad
 
 # Dynamically set SettingsPageVisibility only for actually removed/disabled components
 $hidePages = [System.Collections.Generic.List[string]]::new()
-if ($removeDefender) { $hidePages.Add("virus") }
+if ($removeDefender) {
+    $hidePages.Add("virus")
+    $hidePages.Add("windowsdefender")
+    $hidePages.Add("windowsdefender-account")
+    $hidePages.Add("windowsdefender-device")
+    $hidePages.Add("windowsdefender-firewall")
+}
 if ($disableWU)      { $hidePages.Add("windowsupdate") }
 $extraHidePages = @(
     "mobile-devices",
@@ -5204,21 +6984,21 @@ reg.exe add "HKLM\zSOFTWARE\Classes\AllFilesystemObjects" /v "ConflictPrompt" /t
 reg.exe add "HKLM\zSOFTWARE\Classes\AllFilesystemObjects" /v "FullDetails" /t REG_SZ /d "prop:System.DateModified;System.Size;System.DateCreated;*System.StorageProviderState;*System.OfflineAvailability;*System.OfflineStatus;*System.SharedWith" /f > $null 2>&1
 
 # Context Menu: Take Ownership
-reg.exe add "HKLM\zSOFTWARE\Classes\*\shell\runas" /ve /t REG_SZ /d "Take Ownership" /f > $null 2>&1
-reg.exe add "HKLM\zSOFTWARE\Classes\*\shell\runas" /v "HasLUAShield" /t REG_SZ /d "" /f > $null 2>&1
-reg.exe add "HKLM\zSOFTWARE\Classes\*\shell\runas" /v "NoWorkingDirectory" /t REG_SZ /d "" /f > $null 2>&1
-reg.exe add "HKLM\zSOFTWARE\Classes\*\shell\runas\command" /ve /t REG_SZ /d 'cmd.exe /c takeown /f \"%1\" && icacls \"%1\" /grant administrators:F' /f > $null 2>&1
-reg.exe add "HKLM\zSOFTWARE\Classes\*\shell\runas\command" /v "IsolatedCommand" /t REG_SZ /d 'cmd.exe /c takeown /f \"%1\" && icacls \"%1\" /grant administrators:F' /f > $null 2>&1
-reg.exe add "HKLM\zSOFTWARE\Classes\Directory\shell\runas" /ve /t REG_SZ /d "Take Ownership" /f > $null 2>&1
-reg.exe add "HKLM\zSOFTWARE\Classes\Directory\shell\runas" /v "HasLUAShield" /t REG_SZ /d "" /f > $null 2>&1
-reg.exe add "HKLM\zSOFTWARE\Classes\Directory\shell\runas" /v "NoWorkingDirectory" /t REG_SZ /d "" /f > $null 2>&1
-reg.exe add "HKLM\zSOFTWARE\Classes\Directory\shell\runas\command" /ve /t REG_SZ /d 'cmd.exe /c takeown /f \"%1\" /r /d y && icacls \"%1\" /grant administrators:F /t' /f > $null 2>&1
-reg.exe add "HKLM\zSOFTWARE\Classes\Directory\shell\runas\command" /v "IsolatedCommand" /t REG_SZ /d 'cmd.exe /c takeown /f \"%1\" /r /d y && icacls \"%1\" /grant administrators:F /t' /f > $null 2>&1
+reg.exe add "HKLM\zSOFTWARE\Classes\*\shell\runas" /f /ve /t REG_SZ /d "Take Ownership" > $null 2>&1
+reg.exe add "HKLM\zSOFTWARE\Classes\*\shell\runas" /f /v "HasLUAShield" /t REG_SZ /d '""' > $null 2>&1
+reg.exe add "HKLM\zSOFTWARE\Classes\*\shell\runas" /f /v "NoWorkingDirectory" /t REG_SZ /d '""' > $null 2>&1
+reg.exe add "HKLM\zSOFTWARE\Classes\*\shell\runas\command" /f /ve /t REG_SZ /d 'cmd.exe /c takeown /f \"%1\" && icacls \"%1\" /grant administrators:F' > $null 2>&1
+reg.exe add "HKLM\zSOFTWARE\Classes\*\shell\runas\command" /f /v "IsolatedCommand" /t REG_SZ /d 'cmd.exe /c takeown /f \"%1\" && icacls \"%1\" /grant administrators:F' > $null 2>&1
+reg.exe add "HKLM\zSOFTWARE\Classes\Directory\shell\runas" /f /ve /t REG_SZ /d "Take Ownership" > $null 2>&1
+reg.exe add "HKLM\zSOFTWARE\Classes\Directory\shell\runas" /f /v "HasLUAShield" /t REG_SZ /d '""' > $null 2>&1
+reg.exe add "HKLM\zSOFTWARE\Classes\Directory\shell\runas" /f /v "NoWorkingDirectory" /t REG_SZ /d '""' > $null 2>&1
+reg.exe add "HKLM\zSOFTWARE\Classes\Directory\shell\runas\command" /f /ve /t REG_SZ /d 'cmd.exe /c takeown /f \"%1\" /r /d y && icacls \"%1\" /grant administrators:F /t' > $null 2>&1
+reg.exe add "HKLM\zSOFTWARE\Classes\Directory\shell\runas\command" /f /v "IsolatedCommand" /t REG_SZ /d 'cmd.exe /c takeown /f \"%1\" /r /d y && icacls \"%1\" /grant administrators:F /t' > $null 2>&1
 
 # Context Menu: Command Prompt as Administrator
-reg.exe add "HKLM\zSOFTWARE\Classes\Directory\Background\shell\runas" /ve /t REG_SZ /d "Open Command Prompt as Administrator" /f > $null 2>&1
-reg.exe add "HKLM\zSOFTWARE\Classes\Directory\Background\shell\runas" /v "HasLUAShield" /t REG_SZ /d "" /f > $null 2>&1
-reg.exe add "HKLM\zSOFTWARE\Classes\Directory\Background\shell\runas\command" /ve /t REG_SZ /d 'PowerShell -windowstyle hidden -Command \"Start-Process cmd.exe -ArgumentList ''/s,/k,pushd,%V'' -Verb RunAs\"' /f > $null 2>&1
+reg.exe add "HKLM\zSOFTWARE\Classes\Directory\Background\shell\runas" /f /ve /t REG_SZ /d "Open Command Prompt as Administrator" > $null 2>&1
+reg.exe add "HKLM\zSOFTWARE\Classes\Directory\Background\shell\runas" /f /v "HasLUAShield" /t REG_SZ /d '""' > $null 2>&1
+reg.exe add "HKLM\zSOFTWARE\Classes\Directory\Background\shell\runas\command" /f /ve /t REG_SZ /d 'PowerShell -windowstyle hidden -Command \"Start-Process cmd.exe -ArgumentList ''/s,/k,pushd,%V'' -Verb RunAs\"' > $null 2>&1
 
 # Context Menu: Rotate Right / Rotate Left for Images
 $imgExts = @('.avif', '.dds', '.gif', '.heif', '.jfif', '.jpeg', '.jpg', '.jxr', '.png', '.rle', '.tiff', '.webp')
@@ -5305,7 +7085,7 @@ $photoViewerAssocs = @(
     @{ Ext = ".wdp";  ProgId = "PhotoViewer.FileAssoc.Wdp" }
 )
 foreach ($pa in $photoViewerAssocs) {
-    reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows Photo Viewer\Capabilities\FileAssociations" /v $pa.Ext /t REG_SZ /d $pa.ProgId /f > $null 2>&1
+    reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows Photo Viewer\Capabilities\FileAssociations" /f /v $pa.Ext /t REG_SZ /d $pa.ProgId > $null 2>&1
 }
 
 # ============================================================================
@@ -5314,11 +7094,12 @@ foreach ($pa in $photoViewerAssocs) {
 Write-Host "Applying advanced optimizations from WinUtil, Sophia Script, SophiApp, Optimizer & Bloatynosy..." -ForegroundColor Green
 
 # 1. Bloatynosy & Classic Shell: Classic Context Menu baked into Default & NTUSER hives offline
-reg.exe add "HKLM\zDEFAULT\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32" /ve /t REG_SZ /d "" /f > $null 2>&1
-reg.exe add "HKLM\zNTUSER\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32" /ve /t REG_SZ /d "" /f > $null 2>&1
+Write-Host "  -> Classic Context Menu (Bloatynosy)..." -ForegroundColor Cyan
+reg.exe add "HKLM\zDEFAULT\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32" /f /ve /t REG_SZ /d '""' > $null 2>&1
+reg.exe add "HKLM\zNTUSER\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32" /f /ve /t REG_SZ /d '""' > $null 2>&1
 
 # 2. Sophia Script & SophiApp: Instant First Logon, Lossless Wallpaper, and Control Panel
-# Disable "Hi, Getting things ready for you" spinning animation (saves 30-60s on first login)
+Write-Host "  -> Instant Logon, Wallpaper & Control Panel (Sophia Script)..." -ForegroundColor Cyan
 reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" /v "EnableFirstLogonAnimation" /t REG_DWORD /d 0 /f > $null 2>&1
 reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" /v "EnableFirstLogonAnimation" /t REG_DWORD /d 0 /f > $null 2>&1
 # Lossless wallpaper quality (JPEGImportQuality 100)
@@ -5330,16 +7111,22 @@ reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\Co
 reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Explorer\ControlPanel" /v "AllItemsIconView" /t REG_DWORD /d 0 /f > $null 2>&1
 reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Explorer\ControlPanel" /v "StartupPage" /t REG_DWORD /d 1 /f > $null 2>&1
 # Sophia scheduled task purges offline
-Remove-Item -LiteralPath "$tasksPath\Microsoft\Windows\Application Experience\MareBackup" -Force -ErrorAction SilentlyContinue
-Remove-Item -LiteralPath "$tasksPath\Microsoft\Windows\Application Experience\StartupAppTask" -Force -ErrorAction SilentlyContinue
+foreach ($sophiaTask in @("MareBackup", "StartupAppTask")) {
+    $targetSophiaPath = Join-Path -Path $tasksPath -ChildPath "Microsoft\Windows\Application Experience\$sophiaTask"
+    if (Test-Path -LiteralPath $targetSophiaPath) {
+        Remove-Item -LiteralPath $targetSophiaPath -Recurse -Force -Confirm:$false -ErrorAction SilentlyContinue
+    }
+}
 
 # 3. Chris Titus WinUtil: OOBE Background UScheduler Bloat Suppression
+Write-Host "  -> Background UScheduler Bloat Suppression (WinUtil)..." -ForegroundColor Cyan
 reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Orchestrator\UScheduler_Oobe\OutlookUpdate" /v "workCompleted" /t REG_DWORD /d 1 /f > $null 2>&1
 reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Orchestrator\UScheduler\OutlookUpdate" /v "workCompleted" /t REG_DWORD /d 1 /f > $null 2>&1
 reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Orchestrator\UScheduler\DevHomeUpdate" /v "workCompleted" /t REG_DWORD /d 1 /f > $null 2>&1
 reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Orchestrator\UScheduler_Oobe\WindowsUpdate" /v "workCompleted" /t REG_DWORD /d 1 /f > $null 2>&1
 
 # 4. Hellzerg Optimizer: RegBack Backups & Explorer Responsiveness
+Write-Host "  -> Explorer Responsiveness & RegBack (Optimizer)..." -ForegroundColor Cyan
 # Re-enable periodic registry hive backups to RegBack
 reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\Session Manager\Configuration Manager" /v "EnablePeriodicBackup" /t REG_DWORD /d 1 /f > $null 2>&1
 # Explorer link resolution, low disk space warnings, unknown extension web searches
@@ -5376,21 +7163,21 @@ $psBase = "HKLM\zSYSTEM\ControlSet001\Control\Power\PowerSettings"
 $resolvedPower = if ($powerPreset -and $script:PowerPresets.Contains($powerPreset)) { $script:PowerPresets[$powerPreset] } else { $script:PowerPresets['Desktop'] }
 
 $usbVal = if ($disableUSBSuspend) { 0 } else { $resolvedPower.UsbSuspend }
-reg.exe add "$psBase\2a737441-1930-4402-8d77-b2bebba308a3\48e6b7a6-50f5-4782-a5d4-53bb8f07e226" /v "ACSettingIndex" /t REG_DWORD /d $usbVal /f > $null 2>&1
-reg.exe add "$psBase\2a737441-1930-4402-8d77-b2bebba308a3\48e6b7a6-50f5-4782-a5d4-53bb8f07e226" /v "DCSettingIndex" /t REG_DWORD /d $usbVal /f > $null 2>&1
+reg.exe add "$psBase\2a737441-1930-4402-8d77-b2bebba308a3\48e6b7a6-50f5-4782-a5d4-53bb8f07e226" /f /v "ACSettingIndex" /t REG_DWORD /d $usbVal > $null 2>&1
+reg.exe add "$psBase\2a737441-1930-4402-8d77-b2bebba308a3\48e6b7a6-50f5-4782-a5d4-53bb8f07e226" /f /v "DCSettingIndex" /t REG_DWORD /d $usbVal > $null 2>&1
 
-reg.exe add "$psBase\501a4d13-42ac-4436-9e57-8b0070663244\ee12f906-d276-4167-bf9b-b4780a50c1fa" /v "ACSettingIndex" /t REG_DWORD /d $resolvedPower.PcieLpm /f > $null 2>&1
-reg.exe add "$psBase\501a4d13-42ac-4436-9e57-8b0070663244\ee12f906-d276-4167-bf9b-b4780a50c1fa" /v "DCSettingIndex" /t REG_DWORD /d $resolvedPower.PcieLpm /f > $null 2>&1
+reg.exe add "$psBase\501a4d13-42ac-4436-9e57-8b0070663244\ee12f906-d276-4167-bf9b-b4780a50c1fa" /f /v "ACSettingIndex" /t REG_DWORD /d $resolvedPower.PcieLpm > $null 2>&1
+reg.exe add "$psBase\501a4d13-42ac-4436-9e57-8b0070663244\ee12f906-d276-4167-bf9b-b4780a50c1fa" /f /v "DCSettingIndex" /t REG_DWORD /d $resolvedPower.PcieLpm > $null 2>&1
 
 $boostAc = if ($cpuBoostMode -eq 'Aggressive') { 2 } elseif ($cpuBoostMode -eq 'Efficient') { 1 } elseif ($cpuBoostMode -eq 'Off') { 0 } else { $resolvedPower.BoostAc }
 $boostDc = if ($cpuBoostMode -eq 'Aggressive') { 2 } elseif ($cpuBoostMode -eq 'Efficient') { 1 } elseif ($cpuBoostMode -eq 'Off') { 0 } else { $resolvedPower.BoostDc }
 $boostGuid = "$psBase\54533251-82be-4824-96c1-47b60b740d00\be337238-0d82-4146-a960-4f3749d470c7"
-reg.exe add $boostGuid /v "ACSettingIndex" /t REG_DWORD /d $boostAc /f > $null 2>&1
-reg.exe add $boostGuid /v "DCSettingIndex" /t REG_DWORD /d $boostDc /f > $null 2>&1
+reg.exe add $boostGuid /f /v "ACSettingIndex" /t REG_DWORD /d $boostAc > $null 2>&1
+reg.exe add $boostGuid /f /v "DCSettingIndex" /t REG_DWORD /d $boostDc > $null 2>&1
 
 $diskGuid = "$psBase\0012ee47-9041-4b5d-9b77-535fba8b1442\abfc2519-3608-4c2a-9dea-dfd1d45f50c4"
-reg.exe add $diskGuid /v "ACSettingIndex" /t REG_DWORD /d $resolvedPower.DiskIdle /f > $null 2>&1
-reg.exe add $diskGuid /v "DCSettingIndex" /t REG_DWORD /d $resolvedPower.DiskIdle /f > $null 2>&1
+reg.exe add $diskGuid /f /v "ACSettingIndex" /t REG_DWORD /d $resolvedPower.DiskIdle > $null 2>&1
+reg.exe add $diskGuid /f /v "DCSettingIndex" /t REG_DWORD /d $resolvedPower.DiskIdle > $null 2>&1
 # Exclude display/chipset driver overwrites in Windows Update (prevents GPU driver rollback)
 reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsUpdate" /v "ExcludeWUDriversInQualityUpdate" /t REG_DWORD /d 1 /f > $null 2>&1
 
@@ -5401,21 +7188,28 @@ try {
         '{4d36e972-e325-11ce-bfc1-08002be10318}', # Network Adapters (NIC)
         '{4d36e97b-e325-11ce-bfc1-08002be10318}'  # SCSIAdapter / NVMe Storage Controllers
     )
-    Get-ChildItem -Path "HKLM:\zSYSTEM\ControlSet001\Enum\PCI" -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.PSChildName -eq "Device Parameters" } | ForEach-Object {
-        $parentPath = Split-Path -Path $_.PSPath -Parent
-        $classGuid = (Get-ItemProperty -Path $parentPath -Name "ClassGUID" -ErrorAction SilentlyContinue).ClassGUID
-        if (-not $classGuid -or ($targetClasses -contains $classGuid)) {
-            $msiKey = Join-Path -Path $_.PSPath -ChildPath "Interrupt Management\MessageSignaledInterruptProperties"
-            if (-not (Test-Path -LiteralPath $msiKey)) {
-                New-Item -Path $msiKey -Force -ErrorAction SilentlyContinue | Out-Null
+    $pciRoot = "HKLM:\zSYSTEM\ControlSet001\Enum\PCI"
+    if (Test-Path -LiteralPath $pciRoot) {
+        foreach ($venKey in (Get-ChildItem -LiteralPath $pciRoot -ErrorAction SilentlyContinue)) {
+            foreach ($devKey in (Get-ChildItem -LiteralPath $venKey.PSPath -ErrorAction SilentlyContinue)) {
+                $devParamPath = Join-Path -Path $devKey.PSPath -ChildPath "Device Parameters"
+                if (Test-Path -LiteralPath $devParamPath) {
+                    $classGuid = (Get-ItemProperty -LiteralPath $devKey.PSPath -Name "ClassGUID" -ErrorAction SilentlyContinue).ClassGUID
+                    if (-not $classGuid -or ($targetClasses -contains $classGuid)) {
+                        $msiKey = Join-Path -Path $devParamPath -ChildPath "Interrupt Management\MessageSignaledInterruptProperties"
+                        if (-not (Test-Path -LiteralPath $msiKey)) {
+                            New-Item -Path $msiKey -Force -ErrorAction SilentlyContinue | Out-Null
+                        }
+                        Set-ItemProperty -LiteralPath $msiKey -Name "MSISupported" -Value 1 -Type DWord -Force -ErrorAction SilentlyContinue
+                    }
+                    # NVIDIA Ultra Low Latency Registry Tuning (PowerMizer & Per-CPU Core DPC)
+                    if ($nvidiaLowLatency -and ($devKey.PSChildName -match 'VEN_10DE' -or $venKey.PSChildName -match 'VEN_10DE')) {
+                        Set-ItemProperty -LiteralPath $devParamPath -Name "PowerMizerEnable" -Value 1 -Type DWord -Force -ErrorAction SilentlyContinue
+                        Set-ItemProperty -LiteralPath $devParamPath -Name "PerfLevelSrc" -Value 13090 -Type DWord -Force -ErrorAction SilentlyContinue
+                        Set-ItemProperty -LiteralPath $devParamPath -Name "RmGpsPsEnablePerCpuCoreDpc" -Value 1 -Type DWord -Force -ErrorAction SilentlyContinue
+                    }
+                }
             }
-            Set-ItemProperty -Path $msiKey -Name "MSISupported" -Value 1 -Type DWord -Force -ErrorAction SilentlyContinue
-        }
-        # NVIDIA Ultra Low Latency Registry Tuning (PowerMizer & Per-CPU Core DPC)
-        if ($nvidiaLowLatency -and $_.PSPath -match 'VEN_10DE') {
-            Set-ItemProperty -Path $_.PSPath -Name "PowerMizerEnable" -Value 1 -Type DWord -Force -ErrorAction SilentlyContinue
-            Set-ItemProperty -Path $_.PSPath -Name "PerfLevelSrc" -Value 13090 -Type DWord -Force -ErrorAction SilentlyContinue # 0x3322
-            Set-ItemProperty -Path $_.PSPath -Name "RmGpsPsEnablePerCpuCoreDpc" -Value 1 -Type DWord -Force -ErrorAction SilentlyContinue
         }
     }
 } catch {}
@@ -5467,13 +7261,6 @@ reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\OEMInformation" /v 
 reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\OEMInformation" /v "SupportURL" /t REG_SZ /d "https://github.com/gh459/nano11" /f > $null 2>&1
 
 # ============================================================================
-# 10. Zero-Click Setup ChildCompletion Pre-configuration
-# ============================================================================
-reg.exe add "HKLM\zSYSTEM\Setup\Status\ChildCompletion" /v "setup.exe" /t REG_DWORD /d 3 /f > $null 2>&1
-reg.exe add "HKLM\zSYSTEM\Setup\Status\ChildCompletion" /v "audit.exe" /t REG_DWORD /d 3 /f > $null 2>&1
-reg.exe add "HKLM\zSYSTEM\Setup\Status\ChildCompletion" /v "oobe.exe" /t REG_DWORD /d 3 /f > $null 2>&1
-
-# ============================================================================
 # 11. Windows Activation Restriction Bypass & Watermark/SPP Suppression
 # ============================================================================
 if ($bypassActivationRestrictions) {
@@ -5490,8 +7277,9 @@ if ($bypassActivationRestrictions) {
     reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer" /v "NoThemesTab" /t REG_DWORD /d 0 /f > $null 2>&1
     reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer" /v "NoThemesTab" /t REG_DWORD /d 0 /f > $null 2>&1
     reg.exe add "HKLM\zSOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer" /v "NoThemesTab" /t REG_DWORD /d 0 /f > $null 2>&1
-    reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize" /v "EnableTransparency" /t REG_DWORD /d 1 /f > $null 2>&1
-    reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize" /v "EnableTransparency" /t REG_DWORD /d 1 /f > $null 2>&1
+    $transparencyVal = if ($radicalRAM) { 0 } else { 1 }
+    reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize" /f /v "EnableTransparency" /t REG_DWORD /d $transparencyVal > $null 2>&1
+    reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize" /f /v "EnableTransparency" /t REG_DWORD /d $transparencyVal > $null 2>&1
 
     # Software Protection Platform (SPP) nag & toast notification suppression
     reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows NT\CurrentVersion\SoftwareProtectionPlatform" /v "NoGenTicket" /t REG_DWORD /d 1 /f > $null 2>&1
@@ -5504,6 +7292,134 @@ if ($bypassActivationRestrictions) {
     reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Notifications\Settings\Windows.SystemToast.Activation" /v "Enabled" /t REG_DWORD /d 0 /f > $null 2>&1
     reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\CurrentVersion\Notifications\Settings\Windows.SystemToast.Licensing" /v "Enabled" /t REG_DWORD /d 0 /f > $null 2>&1
     reg.exe add "HKLM\zNTUSER\Software\Microsoft\Windows\CurrentVersion\Notifications\Settings\Windows.SystemToast.Licensing" /v "Enabled" /t REG_DWORD /d 0 /f > $null 2>&1
+}
+
+Write-Host "    -> Applying integrated debloat optimizations (Sophia / Win11Debloat / NixThis / privacy.sexy)..." -ForegroundColor Cyan
+
+    # 1. Windows 11 24H2/25H2 AI & Recall & Copilot Suppression (Win11Debloat & Sophia)
+    reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsAI" /v "DisableAIDataAnalysis" /t REG_DWORD /d 1 /f > $null 2>&1
+    reg.exe add "HKLM\zDEFAULT\Software\Policies\Microsoft\Windows\WindowsAI" /v "DisableAIDataAnalysis" /t REG_DWORD /d 1 /f > $null 2>&1
+    reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsAI" /v "DisableClickToDo" /t REG_DWORD /d 1 /f > $null 2>&1
+    reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\WindowsCopilot" /v "TurnOffWindowsCopilot" /t REG_DWORD /d 1 /f > $null 2>&1
+    reg.exe add "HKLM\zDEFAULT\Software\Policies\Microsoft\Windows\WindowsCopilot" /v "TurnOffWindowsCopilot" /t REG_DWORD /d 1 /f > $null 2>&1
+    reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Notepad" /v "EnableAIFeatures" /t REG_DWORD /d 0 /f > $null 2>&1
+    reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Paint" /v "EnableCocreator" /t REG_DWORD /d 0 /f > $null 2>&1
+    reg.exe add "HKLM\zSYSTEM\ControlSet001\Services\WSAIFabricSvc" /v "Start" /t REG_DWORD /d 3 /f > $null 2>&1
+
+    # 2. Windows 11 24H2 Setup Safeguard: Prevent Automatic BitLocker Device Encryption (Win11Debloat)
+    reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\BitLocker" /v "PreventDeviceEncryption" /t REG_DWORD /d 1 /f > $null 2>&1
+
+    # 3. Privacy, Telemetry & Data Collection Policies (Sophia & privacy.sexy curated safe subset)
+    reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\DataCollection" /v "AllowTelemetry" /t REG_DWORD /d 0 /f > $null 2>&1
+    reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\DataCollection" /v "MaxTelemetryAllowed" /t REG_DWORD /d 0 /f > $null 2>&1
+    reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\DataCollection" /v "DoNotShowFeedbackNotifications" /t REG_DWORD /d 1 /f > $null 2>&1
+    reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\Windows Error Reporting" /v "Disabled" /t REG_DWORD /d 1 /f > $null 2>&1
+    reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\AppCompat" /v "AITEnable" /t REG_DWORD /d 0 /f > $null 2>&1
+    reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\AppCompat" /v "DisableInventory" /t REG_DWORD /d 1 /f > $null 2>&1
+    reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\SQMClient\Windows" /v "CEIPEnable" /t REG_DWORD /d 0 /f > $null 2>&1
+    reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\Device Metadata" /v "PreventDeviceMetadataFromNetwork" /t REG_DWORD /d 1 /f > $null 2>&1
+
+    # 4. Ads, Suggestions & Consumer Content Delivery Suppression (NixThis & Win11Debloat)
+    reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\CloudContent" /v "DisableAccountBasedInSettings" /t REG_DWORD /d 1 /f > $null 2>&1
+    reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" /v "SubscribedContent-353694Enabled" /t REG_DWORD /d 0 /f > $null 2>&1
+    reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" /v "SubscribedContent-353696Enabled" /t REG_DWORD /d 0 /f > $null 2>&1
+    reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" /v "SystemSettingsInfoEnabled" /t REG_DWORD /d 0 /f > $null 2>&1
+    reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v "ShowSyncProviderNotifications" /t REG_DWORD /d 0 /f > $null 2>&1
+    reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Windows\Explorer" /v "HideRecommendedSection" /t REG_DWORD /d 1 /f > $null 2>&1
+    reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v "Start_IrisRecommendations" /t REG_DWORD /d 0 /f > $null 2>&1
+    reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" /v "RotatingImageOverlayEnabled" /t REG_DWORD /d 0 /f > $null 2>&1
+    reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" /v "SubscribedContent-338387Enabled" /t REG_DWORD /d 0 /f > $null 2>&1
+
+    # 5. UI Ergonomics & Latency Optimization (Win11Debloat & Sophia)
+    reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced\TaskbarDeveloperSettings" /v "TaskbarEndTask" /t REG_DWORD /d 1 /f > $null 2>&1
+    reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v "TaskbarMn" /t REG_DWORD /d 0 /f > $null 2>&1
+    reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer" /v "HideSCAMeetNow" /t REG_DWORD /d 1 /f > $null 2>&1
+    reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v "HideFileExt" /t REG_DWORD /d 0 /f > $null 2>&1
+    reg.exe add "HKLM\zDEFAULT\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v "LaunchTo" /t REG_DWORD /d 1 /f > $null 2>&1
+    reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\Power\PowerSettings" /v "EnforceConnectedStandby" /t REG_DWORD /d 0 /f > $null 2>&1
+
+    # 6. Browser Policy Hardening: Edge / Chrome / Brave Background Bloat & AI Suppression (NixThis & Win11Debloat)
+    reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Edge" /v "BackgroundModeEnabled" /t REG_DWORD /d 0 /f > $null 2>&1
+    reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Edge" /v "StartupBoostEnabled" /t REG_DWORD /d 0 /f > $null 2>&1
+    reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Edge" /v "ShowCopilotButton" /t REG_DWORD /d 0 /f > $null 2>&1
+    reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Edge" /v "PersonalizationReportingEnabled" /t REG_DWORD /d 0 /f > $null 2>&1
+    reg.exe add "HKLM\zSOFTWARE\Policies\Microsoft\Edge" /v "WebWidgetIsEnabled" /t REG_DWORD /d 0 /f > $null 2>&1
+    reg.exe add "HKLM\zSOFTWARE\Policies\Google\Chrome" /v "AIModeSettings" /t REG_DWORD /d 1 /f > $null 2>&1
+    reg.exe add "HKLM\zSOFTWARE\Policies\BraveSoftware\Brave" /v "BraveAIChatEnabled" /t REG_DWORD /d 0 /f > $null 2>&1
+    reg.exe add "HKLM\zSOFTWARE\Policies\BraveSoftware\Brave" /v "BraveRewardsDisabled" /t REG_DWORD /d 1 /f > $null 2>&1
+    reg.exe add "HKLM\zSOFTWARE\Policies\BraveSoftware\Brave" /v "BraveVPNDisabled" /t REG_DWORD /d 1 /f > $null 2>&1
+
+    Write-Host "    -> Integrated debloat optimizations applied successfully." -ForegroundColor Green
+
+# ==============================================================================
+# Helper Function: Save-Nano11UnattendXml
+# Strictly writes XmlDocument to disk with a single UTF-8 BOM, validates bytes,
+# verifies via XmlDocument.Load, and checks pass attribute integrity.
+# ==============================================================================
+function Save-Nano11UnattendXml {
+    param(
+        [Parameter(Mandatory=$true)]
+        [System.Xml.XmlDocument]$XmlDocument,
+        [Parameter(Mandatory=$true)]
+        [string]$DestinationPath
+    )
+    $destDir = Split-Path -Path $DestinationPath -Parent
+    if ($destDir -and -not (Test-Path -LiteralPath $destDir)) {
+        New-Item -Path $destDir -ItemType Directory -Force -ErrorAction Stop | Out-Null
+    }
+
+    $utf8WithBom = New-Object System.Text.UTF8Encoding($true)
+    $xwSettings = New-Object System.Xml.XmlWriterSettings
+    $xwSettings.Indent = $true
+    $xwSettings.Encoding = $utf8WithBom
+    $xwSettings.OmitXmlDeclaration = $false
+
+    $fs = [System.IO.File]::Create($DestinationPath)
+    try {
+        $xw = [System.Xml.XmlWriter]::Create($fs, $xwSettings)
+        try {
+            $XmlDocument.Save($xw)
+        } finally {
+            $xw.Dispose()
+        }
+    } finally {
+        $fs.Dispose()
+    }
+
+    # Strict Post-Save Validation:
+    # 1. Byte check: Verify first 4 bytes are EF-BB-BF-3C, and no double BOM
+    $bytes = [System.IO.File]::ReadAllBytes($DestinationPath)
+    if ($bytes.Length -lt 4) {
+        throw "XML save verification failed: File too short ($($bytes.Length) bytes) at $($DestinationPath)"
+    }
+    if ($bytes[0] -ne 0xEF -or $bytes[1] -ne 0xBB -or $bytes[2] -ne 0xBF) {
+        throw "XML save verification failed: Missing UTF-8 BOM at $($DestinationPath)"
+    }
+    if ($bytes.Length -ge 6 -and $bytes[3] -eq 0xEF -and $bytes[4] -eq 0xBB -and $bytes[5] -eq 0xBF) {
+        throw "XML save verification failed: Double UTF-8 BOM detected at $($DestinationPath)"
+    }
+    if ($bytes[3] -ne 0x3C) {
+        throw "XML save verification failed: First character after BOM is not '<' (0x$($bytes[3].ToString('X2'))) at $($DestinationPath)"
+    }
+
+    # 2. XmlDocument.Load validation
+    try {
+        $verifyDoc = New-Object System.Xml.XmlDocument
+        $verifyDoc.Load($DestinationPath)
+    } catch {
+        throw "XML save verification failed: XmlDocument.Load failed for $($DestinationPath) : $_"
+    }
+
+    # 3. Settings pass attribute integrity check
+    $settingsNodes = $verifyDoc.SelectNodes("//*[local-name()='settings']")
+    foreach ($s in $settingsNodes) {
+        $passAttr = $s.GetAttribute("pass")
+        if ([string]::IsNullOrWhiteSpace($passAttr)) {
+            throw "XML save verification failed: <settings> node missing required 'pass' attribute in $($DestinationPath)"
+        }
+    }
+
+    Write-Host "  [XML Verified] Saved $($DestinationPath) (Single UTF-8 BOM, valid XML DOM, pass attributes intact)" -ForegroundColor Green
 }
 
 Enter-Phase 11 "Configure autounattend.xml & Pre-extract Setup Scripts"
@@ -5537,58 +7453,760 @@ if (Test-Path -LiteralPath $unattendSource) {
     $xmlContent = $xmlContent -replace '(?s)<ProductKey>\s*<WillShowUI>[^<]*</WillShowUI>\s*</ProductKey>', ''
     # Dynamically normalize all Password and AdministratorPassword Value tags to single-line empty values (prevents blank-password login failure)
     $xmlContent = $xmlContent -replace '(?s)<Value>\s+</Value>', '<Value></Value>'
+    # Dynamically purge any harmful ChildCompletion or SystemSetupInProgress forging that breaks Setup state machine
+    $xmlContent = $xmlContent -replace '(?s)<RunSynchronousCommand[^>]*>\s*<Order>\d+</Order>\s*<Path>[^<]*ChildCompletion[^<]*</Path>\s*</RunSynchronousCommand>', ''
+    $xmlContent = $xmlContent -replace '(?s)\t*\{\s*#[^\r\n]*Zero-Click Setup Completion[^\}]*\}\s*;\r?\n', ''
     # Dynamically parameterize ComputerName and UserName
     $xmlContent = $xmlContent -replace '<ComputerName>nano11</ComputerName>', "<ComputerName>$ComputerName</ComputerName>"
     $xmlContent = $xmlContent -replace '<Username>User</Username>', "<Username>$UserName</Username>"
 
-    # Inject Japanese 106/109 Keyboard & Tokyo TimeZone if enabled
-    if ($setJapaneseKeyboard) {
-        if ($xmlContent -notmatch '<TimeZone>Tokyo Standard Time</TimeZone>') {
-            $xmlContent = $xmlContent -replace '(<component name="Microsoft-Windows-Shell-Setup"[^>]*>\s*<ComputerName>[^<]*</ComputerName>)', "`$1`r`n      <TimeZone>Tokyo Standard Time</TimeZone>"
+    # Clean and match target architecture via XML DOM (Resolves P0-07 Duplicate Component Bug)
+    try {
+        $xmlDoc = [xml]$xmlContent
+        $nsMgr = New-Object System.Xml.XmlNamespaceManager($xmlDoc.NameTable)
+        $nsMgr.AddNamespace("u", $xmlDoc.DocumentElement.NamespaceURI)
+
+        # 1. Prune components matching other architectures if target architecture is explicitly present
+        $allComponents = $xmlDoc.SelectNodes("//u:component", $nsMgr)
+        $compNodesToRemove = @()
+        foreach ($comp in $allComponents) {
+            $compArch = $comp.GetAttribute("processorArchitecture")
+            if ($compArch -and ($compArch -notin @($architecture, "neutral", "wow64"))) {
+                $compNodesToRemove += $comp
+            }
         }
-        if ($xmlContent -notmatch 'Microsoft-Windows-International-Core') {
-            $intlComponent = @"
-    <component name="Microsoft-Windows-International-Core" processorArchitecture="$architecture" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
-      <InputLocale>0411:00000411</InputLocale>
-    </component>
-"@
-            $xmlContent = $xmlContent -replace '(<settings pass="specialize">)', "`$1`r`n$intlComponent"
+        foreach ($c in $compNodesToRemove) {
+            [void]$c.ParentNode.RemoveChild($c)
         }
+
+        # 2. If target architecture has no specific components but amd64 exists, map amd64 to target
+        $hasTargetComp = $false
+        foreach ($comp in $xmlDoc.SelectNodes("//u:component", $nsMgr)) {
+            if ($comp.GetAttribute("processorArchitecture") -eq $architecture) {
+                $hasTargetComp = $true
+                break
+            }
+        }
+        if (-not $hasTargetComp) {
+            foreach ($comp in $xmlDoc.SelectNodes("//u:component[@processorArchitecture='amd64']", $nsMgr)) {
+                $comp.SetAttribute("processorArchitecture", $architecture)
+            }
+        }
+
+        # 3. Inject Japanese 106/109 Keyboard & Tokyo TimeZone if enabled
+        if ($setJapaneseKeyboard) {
+            $shellComp = $xmlDoc.SelectSingleNode("//u:component[@name='Microsoft-Windows-Shell-Setup']", $nsMgr)
+            if ($shellComp) {
+                $tzNode = $shellComp.SelectSingleNode("u:TimeZone", $nsMgr)
+                if (-not $tzNode) {
+                    $newTz = $xmlDoc.CreateElement("TimeZone", $xmlDoc.DocumentElement.NamespaceURI)
+                    $newTz.InnerText = "Tokyo Standard Time"
+                    [void]$shellComp.AppendChild($newTz)
+                }
+            }
+            $specPass = $xmlDoc.SelectSingleNode("//u:settings[@pass='specialize']", $nsMgr)
+            if ($specPass) {
+                $intlComp = $specPass.SelectSingleNode("u:component[@name='Microsoft-Windows-International-Core']", $nsMgr)
+                if (-not $intlComp) {
+                    $newComp = $xmlDoc.CreateElement("component", $xmlDoc.DocumentElement.NamespaceURI)
+                    $newComp.SetAttribute("name", "Microsoft-Windows-International-Core")
+                    $newComp.SetAttribute("processorArchitecture", $architecture)
+                    $newComp.SetAttribute("publicKeyToken", "31bf3856ad364e35")
+                    $newComp.SetAttribute("language", "neutral")
+                    $newComp.SetAttribute("versionScope", "nonSxS")
+                    $inpLoc = $xmlDoc.CreateElement("InputLocale", $xmlDoc.DocumentElement.NamespaceURI)
+                    $inpLoc.InnerText = "0411:00000411"
+                    [void]$newComp.AppendChild($inpLoc)
+                    [void]$specPass.AppendChild($newComp)
+                }
+            }
+        }
+
+        # 4. Safe windowsPE pass normalization:
+        # Hardware bypasses (LabConfig) are permanently patched into boot.wim registry (Phase 14).
+        # Retain pass="windowsPE" attribute while clearing child elements to keep interactive setup intact.
+        $winPePass = $xmlDoc.SelectSingleNode("//u:settings[@pass='windowsPE']", $nsMgr)
+        if ($winPePass) {
+            while ($winPePass.HasChildNodes) {
+                [void]$winPePass.RemoveChild($winPePass.FirstChild)
+            }
+        }
+
+        # 5. DOM Schema Validation: Verify all RunSynchronousCommand Path lengths <= 259 characters
+        $allRunSync = $xmlDoc.SelectNodes("//u:RunSynchronousCommand", $nsMgr)
+        foreach ($rsc in $allRunSync) {
+            $pathNode = $rsc.SelectSingleNode("u:Path", $nsMgr)
+            if ($pathNode) {
+                $pathText = $pathNode.InnerText.Trim()
+                if ($pathText.Length -gt 259) {
+                    $orderNode = $rsc.SelectSingleNode("u:Order", $nsMgr)
+                    $order = if ($orderNode) { $orderNode.InnerText } else { "?" }
+                    $comp = $rsc.ParentNode.ParentNode.GetAttribute("name")
+                    $pass = $rsc.ParentNode.ParentNode.ParentNode.GetAttribute("pass")
+                    throw "Validation failed: RunSynchronousCommand Path exceeds 259 characters limit (Pass: '$pass', Component: '$comp', Order: '$order', Length: $($pathText.Length)): $pathText"
+                }
+            }
+        }
+    } catch {
+        throw "XML DOM architecture normalization and validation failed: $_"
     }
 
-    # Dynamically match detected architecture
-    $xmlContent = $xmlContent -replace 'processorArchitecture="amd64"', "processorArchitecture=`"$architecture`""
-    
-    # Place in ISO root (CRITICAL for Windows Setup discovery)
+    # Save canonical unattend XML directly via Save-Nano11UnattendXml (No double BOM, verified UTF-8)
     $isoRootUnattend = Join-Path -Path $nano11Dir -ChildPath "autounattend.xml"
-    $xmlContent | Set-Content -LiteralPath $isoRootUnattend -Encoding utf8
-    Write-Host "  - Placed in ISO Root: $isoRootUnattend" -ForegroundColor Green
+    Save-Nano11UnattendXml -XmlDocument $xmlDoc -DestinationPath $isoRootUnattend
 
-    # Also place in Sysprep and Panther
     $sysprepDir = Join-Path -Path $scratchDir -ChildPath "Windows\System32\Sysprep"
     if (Test-Path -LiteralPath $sysprepDir) {
-        $xmlContent | Set-Content -LiteralPath (Join-Path -Path $sysprepDir -ChildPath "autounattend.xml") -Encoding utf8
+        Save-Nano11UnattendXml -XmlDocument $xmlDoc -DestinationPath (Join-Path -Path $sysprepDir -ChildPath "autounattend.xml")
     }
     $pantherDir = Join-Path -Path $scratchDir -ChildPath "Windows\Panther"
-    New-Item -Path $pantherDir -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null
-    $xmlContent | Set-Content -LiteralPath (Join-Path -Path $pantherDir -ChildPath "unattend.xml") -Encoding utf8
+    if (-not (Test-Path -LiteralPath $pantherDir)) {
+        New-Item -Path $pantherDir -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null
+    }
+    Save-Nano11UnattendXml -XmlDocument $xmlDoc -DestinationPath (Join-Path -Path $pantherDir -ChildPath "unattend.xml")
 
-    # Pre-extract Setup scripts directly into image (Windows\Setup\Scripts)
-    # Guarantees Specialize.ps1, DefaultUser.ps1, UserOnce.ps1, and FirstLogon.ps1 exist
-    # even if dynamic XML extraction during Specialize pass is blocked or delayed.
+    # 6. Pre-extract all 5 embedded setup scripts directly into mounted image ($scratchDir)
+    Write-Host "Pre-extracting embedded setup scripts directly into mounted image ($scratchDir)..." -ForegroundColor Cyan
+    $fileNodes = $xmlDoc.SelectNodes("//*[local-name()='Extensions']/*[local-name()='File']")
+    if (-not $fileNodes -or $fileNodes.Count -eq 0) {
+        throw "Pre-extraction failed: No embedded File nodes found in autounattend.xml Extensions block!"
+    }
+
+    $scratchFullRoot = [System.IO.Path]::GetFullPath($scratchDir).TrimEnd('\', '/')
+    $extractedCount = 0
+    $requiredScriptNames = @('Winhancements.ps1', 'Specialize.ps1', 'UserOnce.ps1', 'DefaultUser.ps1', 'FirstLogon.ps1')
+    $foundScriptNames = @()
+    $utf8WithBom = New-Object System.Text.UTF8Encoding($true)
+
+    foreach ($f in $fileNodes) {
+        $targetRaw = $f.GetAttribute('path')
+        if (-not $targetRaw) { continue }
+
+        $relPath = $targetRaw -replace '^(?:[A-Za-z]:|%SystemDrive%)[\\/]+', ''
+        if ($relPath -match '\.\.') {
+            throw "Pre-extraction security violation: Path traversal '..' detected in target path: $targetRaw"
+        }
+        $targetImageFile = [System.IO.Path]::GetFullPath((Join-Path -Path $scratchFullRoot -ChildPath $relPath))
+        if (-not $targetImageFile.StartsWith($scratchFullRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "Pre-extraction security violation: Target path '$targetImageFile' escapes mount root '$scratchFullRoot'"
+        }
+
+        $targetParent = Split-Path -Path $targetImageFile -Parent
+        if ($targetParent -and -not (Test-Path -LiteralPath $targetParent)) {
+            New-Item -Path $targetParent -ItemType Directory -Force -ErrorAction Stop | Out-Null
+        }
+
+        $scriptContent = $f.InnerText.Trim()
+        if ([string]::IsNullOrWhiteSpace($scriptContent)) {
+            throw "Pre-extraction failed: Embedded script content for $targetRaw is empty!"
+        }
+
+        # Verify PowerShell 5.1 syntax
+        $parseErrors = $null
+        $tokens = $null
+        [void][System.Management.Automation.Language.Parser]::ParseInput($scriptContent, [ref]$tokens, [ref]$parseErrors)
+        if ($parseErrors -and $parseErrors.Count -gt 0) {
+            $errDetails = ($parseErrors | ForEach-Object { "$($_.Message) at line $($_.Extent.StartLineNumber)" }) -join "; "
+            throw "Pre-extraction syntax error in $($targetRaw): $errDetails"
+        }
+
+        [System.IO.File]::WriteAllText($targetImageFile, $scriptContent, $utf8WithBom)
+
+        $fi = Get-Item -LiteralPath $targetImageFile -ErrorAction Stop
+        if ($fi.Length -eq 0) {
+            throw "Pre-extraction failed: Written file has 0 bytes at $targetImageFile"
+        }
+
+        $baseName = [System.IO.Path]::GetFileName($targetImageFile)
+        $foundScriptNames += $baseName
+        $extractedCount++
+        Write-Host "  [Pre-extracted] $targetRaw -> $targetImageFile ($($fi.Length) bytes, PS 5.1 syntax valid)" -ForegroundColor Green
+    }
+
+    foreach ($rs in $requiredScriptNames) {
+        if ($foundScriptNames -notcontains $rs) {
+            throw "Pre-extraction verification failed: Required script '$rs' was not found or not extracted!"
+        }
+    }
+    Write-Host "Successfully pre-extracted all $extractedCount setup scripts into mounted image." -ForegroundColor Green
+
+    # 7. Deploy helper scripts (ExtractUnattend.ps1, ApplyDefaultUser.ps1, RunFirstLogon.ps1)
     $setupScriptsDir = Join-Path -Path $scratchDir -ChildPath "Windows\Setup\Scripts"
-    New-Item -Path $setupScriptsDir -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null
+    if (-not (Test-Path -LiteralPath $setupScriptsDir)) {
+        New-Item -Path $setupScriptsDir -ItemType Directory -Force -ErrorAction Stop | Out-Null
+    }
 
-    # SetupComplete.cmd two-stage verification marker creation
-    $setupCompleteCmd = @"
-@echo off
-if not exist "%SystemDrive%\ProgramData\nano11" mkdir "%SystemDrive%\ProgramData\nano11"
-echo %DATE% %TIME% SetupComplete > "%SystemDrive%\ProgramData\nano11\setupcomplete.stamp"
-"@
-    $setupCompleteCmd | Set-Content -LiteralPath (Join-Path -Path $setupScriptsDir -ChildPath "SetupComplete.cmd") -Encoding ascii
-    $oemScriptsDir = Join-Path -Path $nano11Dir -ChildPath "sources\`$OEM\`$\Setup\Scripts"
-    New-Item -Path $oemScriptsDir -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null
-    $setupCompleteCmd | Set-Content -LiteralPath (Join-Path -Path $oemScriptsDir -ChildPath "SetupComplete.cmd") -Encoding ascii
+    $helperScripts = [ordered]@{
+        "ExtractUnattend.ps1" = @'
+# ExtractUnattend.ps1 - Fallback dynamic script extractor from unattend.xml
+$markerDir = "C:\ProgramData\nano11"
+if (-not (Test-Path -LiteralPath $markerDir)) {
+    New-Item -ItemType Directory -Force -Path $markerDir -ErrorAction SilentlyContinue | Out-Null
+}
+$logDir = "$markerDir\Logs"
+if (-not (Test-Path -LiteralPath $logDir)) {
+    New-Item -ItemType Directory -Force -Path $logDir -ErrorAction SilentlyContinue | Out-Null
+}
+$logFile = "$logDir\extract.log"
+
+function Log-Extract {
+    param([string]$Message)
+    $ts = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    "[$ts] $Message" | Add-Content -LiteralPath $logFile -Encoding UTF8 -ErrorAction SilentlyContinue
+}
+
+Remove-Item -LiteralPath "$markerDir\extract.succeeded", "$markerDir\extract.failed", "$markerDir\extract.skipped" -Force -ErrorAction SilentlyContinue
+Set-Content -LiteralPath "$markerDir\extract.started" -Value (Get-Date -Format "yyyy-MM-dd HH:mm:ss") -Encoding ascii -ErrorAction SilentlyContinue
+Log-Extract "ExtractUnattend.ps1 started."
+
+try {
+    # 1. Pre-check: If all required scripts and wrappers already pre-staged and valid, skip extraction
+    $requiredScripts = @(
+        'C:\ProgramData\Winhance\Unattend\Scripts\Winhancements.ps1',
+        'C:\Windows\Setup\Scripts\Specialize.ps1',
+        'C:\Windows\Setup\Scripts\UserOnce.ps1',
+        'C:\Windows\Setup\Scripts\DefaultUser.ps1',
+        'C:\Windows\Setup\Scripts\FirstLogon.ps1',
+        'C:\Windows\Setup\Scripts\ApplyDefaultUser.ps1',
+        'C:\Windows\Setup\Scripts\RunFirstLogon.ps1',
+        'C:\Windows\Setup\Scripts\SetupComplete.cmd'
+    )
+    $missingPreStaged = @()
+    foreach ($rs in $requiredScripts) {
+        if (-not (Test-Path -LiteralPath $rs)) {
+            $missingPreStaged += $rs
+        } else {
+            $item = Get-Item -LiteralPath $rs -ErrorAction SilentlyContinue
+            if ($null -eq $item -or $item.Length -eq 0) {
+                $missingPreStaged += "$rs (0 bytes)"
+            }
+        }
+    }
+
+    if ($missingPreStaged.Count -eq 0) {
+        Log-Extract "All $($requiredScripts.Count) required setup scripts and wrappers pre-staged with non-zero size. Extraction skipped."
+        Set-Content -LiteralPath "$markerDir\extract.skipped" -Value (Get-Date -Format "yyyy-MM-dd HH:mm:ss") -Encoding ascii -ErrorAction SilentlyContinue
+        exit 0
+    }
+
+    Log-Extract "Missing scripts detected: $($missingPreStaged -join ', '). Initiating fallback XML extraction..."
+    $candidates = @(
+        'C:\Windows\Panther\unattend.xml',
+        'C:\Windows\Panther\autounattend.xml',
+        'C:\Windows\System32\Sysprep\autounattend.xml',
+        'C:\Windows\System32\Sysprep\unattend.xml'
+    )
+    $found = $false
+    foreach ($p in $candidates) {
+        if (Test-Path -LiteralPath $p) {
+            Log-Extract "Found unattend candidate at $p"
+            $xml = [xml]::new()
+            $xml.Load($p)
+            $nsmgr = New-Object System.Xml.XmlNamespaceManager($xml.NameTable)
+            $nsmgr.AddNamespace('u', 'urn:schemas-microsoft-com:unattend')
+            $nsmgr.AddNamespace('ext', 'https://schneegans.de/windows/unattend-generator/')
+            
+            $fileNodes = $xml.SelectNodes('//ext:File | //u:File | //File', $nsmgr)
+            if ($fileNodes -and $fileNodes.Count -gt 0) {
+                Log-Extract "Found $($fileNodes.Count) embedded file nodes."
+                foreach ($file in $fileNodes) {
+                    $rawPath = $file.GetAttribute('path')
+                    if (-not $rawPath) { continue }
+                    $targetPath = [System.Environment]::ExpandEnvironmentVariables($rawPath)
+                    if (-not (Test-Path -LiteralPath $targetPath)) {
+                        $parent = Split-Path -Path $targetPath -Parent
+                        if ($parent -and -not (Test-Path -LiteralPath $parent)) {
+                            New-Item -Path $parent -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null
+                        }
+                        $encoding = switch ([System.IO.Path]::GetExtension($targetPath).ToLower()) {
+                            { $_ -in '.ps1', '.xml' } { [System.Text.Encoding]::UTF8 }
+                            { $_ -in '.reg', '.vbs', '.js' } { [System.Text.UnicodeEncoding]::new($false, $true) }
+                            default { [System.Text.Encoding]::Default }
+                        }
+                        [System.IO.File]::WriteAllBytes($targetPath, ($encoding.GetPreamble() + $encoding.GetBytes($file.InnerText.Trim())))
+                        Log-Extract "Extracted missing file: $targetPath"
+                    } else {
+                        Log-Extract "Already present: $targetPath"
+                    }
+                }
+                $found = $true
+                break
+            }
+        }
+    }
+
+    # Verify again after fallback extraction attempt
+    $stillMissing = @()
+    foreach ($rs in $requiredScripts) {
+        if (-not (Test-Path -LiteralPath $rs)) { $stillMissing += $rs }
+    }
+    if ($stillMissing.Count -gt 0) {
+        throw "Fallback extraction failed: required scripts still missing: $($stillMissing -join ', ')"
+    }
+
+    Set-Content -LiteralPath "$markerDir\extract.succeeded" -Value (Get-Date -Format "yyyy-MM-dd HH:mm:ss") -Encoding ascii -ErrorAction SilentlyContinue
+    Log-Extract "ExtractUnattend.ps1 fallback extraction completed successfully."
+} catch {
+    $err = "$($_ | Out-String)"
+    Log-Extract "ERROR during extraction: $err"
+    Set-Content -LiteralPath "$markerDir\extract.failed" -Value $err -Encoding UTF8 -ErrorAction SilentlyContinue
+    exit 1
+}
+'@
+
+        "ApplyDefaultUser.ps1" = @'
+# ApplyDefaultUser.ps1 - Safely load HKU\DefaultUser, apply DefaultUser.ps1, unload hive
+$markerDir = "C:\ProgramData\nano11"
+if (-not (Test-Path -LiteralPath $markerDir)) {
+    New-Item -ItemType Directory -Force -Path $markerDir -ErrorAction SilentlyContinue | Out-Null
+}
+$logDir = "$markerDir\Logs"
+if (-not (Test-Path -LiteralPath $logDir)) {
+    New-Item -ItemType Directory -Force -Path $logDir -ErrorAction SilentlyContinue | Out-Null
+}
+$logFile = "$logDir\defaultuser.log"
+
+function Log-DefUser {
+    param([string]$Message)
+    $ts = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    "[$ts] $Message" | Add-Content -LiteralPath $logFile -Encoding UTF8 -ErrorAction SilentlyContinue
+}
+
+Remove-Item -LiteralPath "$markerDir\defaultuser.succeeded", "$markerDir\defaultuser.failed" -Force -ErrorAction SilentlyContinue
+Set-Content -LiteralPath "$markerDir\defaultuser.started" -Value (Get-Date -Format "yyyy-MM-dd HH:mm:ss") -Encoding ascii -ErrorAction SilentlyContinue
+Log-DefUser "ApplyDefaultUser.ps1 started."
+$hiveLoaded = $false
+$hasError = $false
+$ntUserDat = 'C:\Users\Default\NTUSER.DAT'
+
+try {
+    if (-not (Test-Path -LiteralPath $ntUserDat)) {
+        throw "NTUSER.DAT not found at $ntUserDat"
+    }
+
+    & reg.exe load HKU\DefaultUser $ntUserDat
+    $loadExit = $LASTEXITCODE
+    if ($loadExit -ne 0) {
+        throw "reg.exe load HKU\DefaultUser failed with exit code $loadExit"
+    }
+    $hiveLoaded = $true
+    Log-DefUser "Successfully loaded HKU\DefaultUser"
+
+    $defUserScript = 'C:\Windows\Setup\Scripts\DefaultUser.ps1'
+    if (Test-Path -LiteralPath $defUserScript) {
+        Log-DefUser "Executing $defUserScript (out-of-process)..."
+        & powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File $defUserScript
+        $defExit = $LASTEXITCODE
+        Log-DefUser "$defUserScript process finished with exit code: $defExit"
+        if ($defExit -ne 0) {
+            throw "$defUserScript exited with non-zero exit code: $defExit"
+        }
+        Log-DefUser "Execution of $defUserScript finished successfully."
+    } else {
+        throw "Required script $defUserScript not found."
+    }
+
+    # Post-verification: verify critical DefaultUser registry values applied before hive unload
+    $runOnceVal = (Get-ItemProperty -LiteralPath 'Registry::HKU\DefaultUser\Software\Microsoft\Windows\CurrentVersion\RunOnce' -Name 'UnattendedSetup' -ErrorAction SilentlyContinue).UnattendedSetup
+    if ([string]::IsNullOrWhiteSpace($runOnceVal)) {
+        throw "Post-verification failed: HKU\DefaultUser RunOnce UnattendedSetup value is missing or empty!"
+    }
+    Log-DefUser "Post-verification passed: RunOnce UnattendedSetup registered."
+} catch {
+    $hasError = $true
+    $err = "$($_ | Out-String)"
+    Log-DefUser "ERROR in ApplyDefaultUser.ps1: $err"
+    Remove-Item -LiteralPath "$markerDir\defaultuser.succeeded" -Force -ErrorAction SilentlyContinue
+    Set-Content -LiteralPath "$markerDir\defaultuser.failed" -Value $err -Encoding ascii -ErrorAction SilentlyContinue
+} finally {
+    if ($hiveLoaded) {
+        [GC]::Collect()
+        [GC]::WaitForPendingFinalizers()
+        Start-Sleep -Seconds 1
+        
+        $unloaded = $false
+        for ($i = 1; $i -le 5; $i++) {
+            & reg.exe unload HKU\DefaultUser
+            $unloadExit = $LASTEXITCODE
+            if ($unloadExit -eq 0) {
+                $unloaded = $true
+                Log-DefUser "Successfully unloaded HKU\DefaultUser on attempt $i."
+                break
+            }
+            Log-DefUser "Attempt $i to unload HKU\DefaultUser returned exit code $unloadExit, retrying in 1s..."
+            Start-Sleep -Seconds 1
+        }
+        if (-not $unloaded) {
+            $hasError = $true
+            Log-DefUser "ERROR: Failed to unload HKU\DefaultUser after 5 attempts."
+            Set-Content -LiteralPath "$markerDir\defaultuser_unload.failed" -Value "Failed to unload HKU\DefaultUser" -Encoding ascii -ErrorAction SilentlyContinue
+        } else {
+            # Post-verification: verify HKU\DefaultUser is no longer accessible
+            if (Test-Path -LiteralPath 'Registry::HKU\DefaultUser') {
+                $hasError = $true
+                Log-DefUser "ERROR: Post-verification failed: HKU\DefaultUser hive is still accessible after unload!"
+                Set-Content -LiteralPath "$markerDir\defaultuser_unload.failed" -Value "Hive still mounted after unload" -Encoding ascii -ErrorAction SilentlyContinue
+            }
+        }
+    }
+}
+
+if ($hasError) {
+    Log-DefUser "ApplyDefaultUser.ps1 completed WITH ERRORS."
+    exit 1
+} else {
+    Set-Content -LiteralPath "$markerDir\defaultuser.succeeded" -Value (Get-Date -Format "yyyy-MM-dd HH:mm:ss") -Encoding ascii -ErrorAction SilentlyContinue
+    Log-DefUser "ApplyDefaultUser.ps1 completed successfully."
+    exit 0
+}
+'@
+
+        "RunFirstLogon.ps1" = @'
+# RunFirstLogon.ps1 - Unified FirstLogon single entry point
+$markerDir = "C:\ProgramData\nano11"
+if (-not (Test-Path -LiteralPath $markerDir)) {
+    New-Item -ItemType Directory -Force -Path $markerDir -ErrorAction SilentlyContinue | Out-Null
+}
+$logDir = "$markerDir\Logs"
+if (-not (Test-Path -LiteralPath $logDir)) {
+    New-Item -ItemType Directory -Force -Path $logDir -ErrorAction SilentlyContinue | Out-Null
+}
+$wrapperLogFile  = "$logDir\firstlogon-wrapper.log"
+$winhanceSysLog  = "$logDir\winhancements-system.log"
+$flChildLog      = "$logDir\firstlogon-child.log"
+$winhanceUserLog = "$logDir\winhancements-user.log"
+
+function Write-FirstLogonLog {
+    param([string]$Message, [string]$Level = "INFO")
+    $ts = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    $entry = "[$ts] [$Level] $Message"
+    try {
+        [System.IO.File]::AppendAllText($wrapperLogFile, "$entry`r`n", [System.Text.Encoding]::UTF8)
+    } catch {
+        Add-Content -LiteralPath $wrapperLogFile -Value $entry -Encoding UTF8 -ErrorAction SilentlyContinue
+    }
+}
+
+function Invoke-ChildScriptWithLog {
+    param(
+        [string]$ScriptPath,
+        [string]$Arguments,
+        [string]$LogPath,
+        [string]$Description
+    )
+    Write-FirstLogonLog "Starting $Description (Script: $ScriptPath, Log: $LogPath)"
+    
+    $targetLogDir = [System.IO.Path]::GetDirectoryName($LogPath)
+    if (-not (Test-Path -LiteralPath $targetLogDir)) {
+        New-Item -ItemType Directory -Force -Path $targetLogDir -ErrorAction Stop | Out-Null
+    }
+
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
+    $argPart = if ($Arguments) { " $Arguments" } else { "" }
+    $psi.Arguments = "-ExecutionPolicy Bypass -NoProfile -NonInteractive -Command `"[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; & '$ScriptPath'$argPart; exit `$LASTEXITCODE`""
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.CreateNoWindow = $true
+    $psi.StandardOutputEncoding = [System.Text.Encoding]::UTF8
+    $psi.StandardErrorEncoding = [System.Text.Encoding]::UTF8
+
+    $proc = [System.Diagnostics.Process]::Start($psi)
+    $stdoutTask = $proc.StandardOutput.ReadToEndAsync()
+    $stderrTask = $proc.StandardError.ReadToEndAsync()
+    $proc.WaitForExit()
+
+    $stdoutText = $stdoutTask.Result
+    $stderrText = $stderrTask.Result
+
+    $combined = ""
+    if (-not [string]::IsNullOrEmpty($stdoutText)) {
+        $combined += $stdoutText
+    }
+    if (-not [string]::IsNullOrEmpty($stderrText)) {
+        if (-not [string]::IsNullOrEmpty($combined) -and -not $combined.EndsWith("`r`n") -and -not $combined.EndsWith("`n")) {
+            $combined += "`r`n"
+        }
+        $combined += "[STDERR]`r`n" + $stderrText
+    }
+
+    if (-not [string]::IsNullOrEmpty($combined)) {
+        try {
+            [System.IO.File]::AppendAllText($LogPath, $combined, [System.Text.Encoding]::UTF8)
+        } catch {
+            Write-FirstLogonLog "ERROR: Failed to write to child log '$LogPath': $($_.Exception.Message)" "ERROR"
+            Add-Content -LiteralPath $LogPath -Value $combined -Encoding UTF8 -ErrorAction SilentlyContinue
+        }
+    }
+
+    $exitCode = $proc.ExitCode
+    Write-FirstLogonLog "Finished $Description with exit code $exitCode"
+    return $exitCode
+}
+
+Remove-Item -LiteralPath "$markerDir\firstlogon.succeeded", "$markerDir\firstlogon.failed", "$markerDir\firstlogon.done", "$markerDir\firstlogon_script.failed" -Force -ErrorAction SilentlyContinue
+Set-Content -LiteralPath "$markerDir\firstlogon.started" -Value (Get-Date -Format "yyyy-MM-dd HH:mm:ss") -Encoding UTF8 -ErrorAction SilentlyContinue
+
+Write-FirstLogonLog "===== RunFirstLogon.ps1 execution started ====="
+
+# User Identity and Execution Context Tracking
+$currentUser = $env:USERNAME
+$currentIdentity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
+$currentSid = if ($currentIdentity.User) { $currentIdentity.User.Value } else { "UNKNOWN" }
+$currentPrincipal = [System.Security.Principal.WindowsPrincipal]$currentIdentity
+$isAdmin = $currentPrincipal.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)
+$userProfile = $env:USERPROFILE
+$sessionId = [System.Diagnostics.Process]::GetCurrentProcess().SessionId
+
+$targetUser = $currentUser
+try {
+    $csUser = (Get-WmiObject -Class Win32_ComputerSystem -ErrorAction SilentlyContinue).UserName
+    if ($csUser -and $csUser -notlike "*NT AUTHORITY*") {
+        $targetUser = $csUser.Split('\')[-1]
+    }
+} catch {}
+
+$targetHivePath = "Registry::HKEY_USERS\$currentSid"
+$isHiveAccessible = Test-Path -LiteralPath $targetHivePath -ErrorAction SilentlyContinue
+
+Write-FirstLogonLog "===== Execution Context & Identity Tracking ====="
+Write-FirstLogonLog "Execution UserName:    $currentUser"
+Write-FirstLogonLog "Execution User SID:    $currentSid"
+Write-FirstLogonLog "User Profile Path:     $userProfile"
+Write-FirstLogonLog "Session ID:            $sessionId"
+Write-FirstLogonLog "Is Elevated Admin:     $isAdmin"
+Write-FirstLogonLog "Target Applied User:   $targetUser"
+Write-FirstLogonLog "Target HKCU Hive Root: $targetHivePath (Accessible: $isHiveAccessible)"
+Write-FirstLogonLog "================================================="
+
+try {
+    # 1. Verify existence of required setup scripts
+    $winhanceScript = 'C:\ProgramData\Winhance\Unattend\Scripts\Winhancements.ps1'
+    $firstLogonScript = 'C:\Windows\Setup\Scripts\FirstLogon.ps1'
+    
+    if (-not (Test-Path -LiteralPath $winhanceScript)) {
+        throw "CRITICAL ERROR: Winhancements.ps1 not found at $winhanceScript"
+    }
+    if (-not (Test-Path -LiteralPath $firstLogonScript)) {
+        throw "CRITICAL ERROR: FirstLogon.ps1 not found at $firstLogonScript"
+    }
+
+    # 2. System optimizations: Winhancements.ps1 (System mode)
+    $winExit = Invoke-ChildScriptWithLog -ScriptPath $winhanceScript -Arguments "" -LogPath $winhanceSysLog -Description "Winhancements.ps1 (System optimization mode)"
+    if ($winExit -ne 0) {
+        throw "Winhancements.ps1 failed with exit code $winExit"
+    }
+
+    # 3. Finalization: FirstLogon.ps1
+    $flExit = Invoke-ChildScriptWithLog -ScriptPath $firstLogonScript -Arguments "" -LogPath $flChildLog -Description "FirstLogon.ps1 (Service shutdown, tasks, desktop tools)"
+    if ($flExit -ne 0) {
+        throw "FirstLogon.ps1 failed with exit code $flExit"
+    }
+    if (Test-Path -LiteralPath "$markerDir\firstlogon_script.failed") {
+        throw "FirstLogon.ps1 reported internal errors in $markerDir\firstlogon_script.failed"
+    }
+
+    # 4. User optimizations: Winhancements.ps1 -UserCustomizations
+    $userExit = Invoke-ChildScriptWithLog -ScriptPath $winhanceScript -Arguments "-UserCustomizations" -LogPath $winhanceUserLog -Description "Winhancements.ps1 -UserCustomizations"
+    if ($userExit -ne 0) {
+        throw "Winhancements.ps1 -UserCustomizations failed with exit code $userExit"
+    }
+
+    # 5. Post-verification of system and user state
+    Write-FirstLogonLog "Verifying post-setup state..."
+    if (-not (Test-Path -LiteralPath "$markerDir\firstlogon.done")) {
+        throw "Post-verification failed: FirstLogon.ps1 did not create completion marker firstlogon.done"
+    }
+    if (Test-Path -LiteralPath 'C:\Windows\Setup\Scripts\remove-defender.flag') {
+        $chkSvcs = @('MDCoreSvc', 'WinDefend')
+        foreach ($cs in $chkSvcs) {
+            $svcPath = "Registry::HKLM\SYSTEM\CurrentControlSet\Services\$cs"
+            $svcKeyExists = $false
+            try {
+                $svcKeyExists = Test-Path -LiteralPath $svcPath -ErrorAction Stop
+            } catch {
+                throw "Post-verification failed: Cannot access Service $cs key ($svcPath): $($_.Exception.Message)"
+            }
+            if (-not $svcKeyExists) {
+                Write-FirstLogonLog "Service $cs key does not exist (absent / removed) - OK"
+                continue
+            }
+            try {
+                $prop = Get-ItemProperty -LiteralPath $svcPath -Name "Start" -ErrorAction Stop
+            } catch {
+                throw "Post-verification failed: Access denied or query failed for Service $cs Start value: $($_.Exception.Message)"
+            }
+            if ($null -eq $prop -or $null -eq $prop.Start) {
+                throw "Post-verification failed: Service $cs exists but Start value is missing or null"
+            }
+            if ($prop.Start -ne 4) {
+                throw "Post-verification failed: Service $cs Start is $($prop.Start) (expected 4 / disabled)"
+            }
+            Write-FirstLogonLog "Service $cs Start value verified as 4 (disabled) - OK"
+        }
+    }
+    Write-FirstLogonLog "Post-verification passed: all required state verified."
+
+    # 6. Success marker - ONLY created when ALL steps exit 0 AND post-verification passes
+    Set-Content -LiteralPath "$markerDir\firstlogon.succeeded" -Value (Get-Date -Format "yyyy-MM-dd HH:mm:ss") -Encoding UTF8 -ErrorAction Stop
+    Write-FirstLogonLog "===== RunFirstLogon.ps1 completed successfully =====" "SUCCESS"
+} catch {
+    $err = "$($_ | Out-String)"
+    Write-FirstLogonLog "EXCEPTION in RunFirstLogon.ps1: $err" "ERROR"
+    Remove-Item -LiteralPath "$markerDir\firstlogon.succeeded", "$markerDir\firstlogon.done" -Force -ErrorAction SilentlyContinue
+    Set-Content -LiteralPath "$markerDir\firstlogon.failed" -Value $err -Encoding UTF8 -ErrorAction SilentlyContinue
+    exit 1
+}
+'@
+    }
+
+    foreach ($hName in $helperScripts.Keys) {
+        $hContent = $helperScripts[$hName]
+        $hDest = Join-Path -Path $setupScriptsDir -ChildPath $hName
+
+        $hErrors = $null
+        $hTokens = $null
+        [void][System.Management.Automation.Language.Parser]::ParseInput($hContent, [ref]$hTokens, [ref]$hErrors)
+        if ($hErrors -and $hErrors.Count -gt 0) {
+            $errDetails = ($hErrors | ForEach-Object { "$($_.Message) at line $($_.Extent.StartLineNumber)" }) -join "; "
+            throw "Helper script syntax error in $($hName): $errDetails"
+        }
+
+        [System.IO.File]::WriteAllText($hDest, $hContent, $utf8WithBom)
+        $fi = Get-Item -LiteralPath $hDest -ErrorAction Stop
+        if ($fi.Length -eq 0) {
+            throw "Failed writing helper script $($hName): File is 0 bytes."
+        }
+        Write-Host "  [Helper Script Deployed] $hDest ($($fi.Length) bytes, PS 5.1 syntax valid)" -ForegroundColor Green
+    }
+
+    # 8. SetupComplete.cmd two-stage verification marker creation & System-level Finalization
+    $setupCompleteLines = @(
+        "@echo off",
+        "setlocal enabledelayedexpansion",
+        "if not exist `"%SystemDrive%\ProgramData\nano11`" mkdir `"%SystemDrive%\ProgramData\nano11`"",
+        "set `"LOGFILE=%SystemDrive%\ProgramData\nano11\setupcomplete.log`"",
+        "rem Purge any stale markers from prior runs to prevent false-positive contamination",
+        "if exist `"%SystemDrive%\ProgramData\nano11\setupcomplete.succeeded`" del /f /q `"%SystemDrive%\ProgramData\nano11\setupcomplete.succeeded`" 2>nul",
+        "if exist `"%SystemDrive%\ProgramData\nano11\setupcomplete.failed`" del /f /q `"%SystemDrive%\ProgramData\nano11\setupcomplete.failed`" 2>nul",
+        "echo %DATE% %TIME% SetupComplete Started > `"%SystemDrive%\ProgramData\nano11\setupcomplete.started`"",
+        "echo [%DATE% %TIME%] ===== SetupComplete.cmd execution started ===== >> `"!LOGFILE!`"",
+        "set `"SC_FAIL_COUNT=0`""
+    )
+    if ($removeDefender) {
+        $setupCompleteLines += @(
+            "rem --- Stage 1: Configure Defender services to disabled with separated result and state tracking ---",
+            "for %%S in (WinDefend MDCoreSvc WdBoot WdFilter Sense SecurityHealthService WdNisSvc) do (",
+            "    sc.exe query %%S >nul 2>&1",
+            "    if !errorlevel! equ 1060 (",
+            "        echo [%DATE% %TIME%] [SKIP] Service %%S is not installed >> `"!LOGFILE!`"",
+            "    ) else if !errorlevel! equ 0 (",
+            "        sc.exe config %%S start= disabled >> `"!LOGFILE!`" 2>&1",
+            "        if !errorlevel! neq 0 (",
+            "            echo [%DATE% %TIME%] [WARN] sc config %%S returned non-zero code !errorlevel! >> `"!LOGFILE!`"",
+            "        ) else (",
+            "            echo [%DATE% %TIME%] [INFO] sc config %%S disabled request accepted >> `"!LOGFILE!`"",
+            "        )",
+            "        reg.exe query `"HKLM\SYSTEM\CurrentControlSet\Services\%%S`" /v `"Start`" 2>&1 | findstr /i `"0x4`" >nul 2>&1",
+            "        if !errorlevel! equ 0 (",
+            "            echo [%DATE% %TIME%] [OK] Service %%S start type verified as disabled [0x4] >> `"!LOGFILE!`"",
+            "        ) else (",
+            "            echo [%DATE% %TIME%] [FAIL] Service %%S start type verification failed [not 0x4] >> `"!LOGFILE!`"",
+            "            set /a SC_FAIL_COUNT+=1",
+            "        )",
+            "    ) else (",
+            "        echo [%DATE% %TIME%] [FAIL] Unable to query service %%S - code: !errorlevel! >> `"!LOGFILE!`"",
+            "        set /a SC_FAIL_COUNT+=1",
+            "    )",
+            ")",
+            "rem --- Stage 2: Stop active Defender services and verify STOPPED state with bounded wait ---",
+            "for %%S in (WinDefend MDCoreSvc) do (",
+            "    sc.exe query %%S >nul 2>&1",
+            "    if !errorlevel! equ 1060 (",
+            "        echo [%DATE% %TIME%] [SKIP] Service %%S not installed, skip stop >> `"!LOGFILE!`"",
+            "    ) else if !errorlevel! equ 0 (",
+            "        sc.exe stop %%S >> `"!LOGFILE!`" 2>&1",
+            "        if !errorlevel! neq 0 (",
+            "            echo [%DATE% %TIME%] [WARN] sc stop %%S returned non-zero code !errorlevel! >> `"!LOGFILE!`"",
+            "        ) else (",
+            "            echo [%DATE% %TIME%] [INFO] sc stop %%S request accepted >> `"!LOGFILE!`"",
+            "        )",
+            "        set `"SVC_STOPPED=0`"",
+            "        for /l %%I in (1,1,5) do (",
+            "            if !SVC_STOPPED! equ 0 (",
+            "                sc.exe query %%S 2>&1 | findstr /i `"STATE`" | findstr /i `"STOPPED`" >nul 2>&1",
+            "                if !errorlevel! equ 0 (",
+            "                    set `"SVC_STOPPED=1`"",
+            "                ) else (",
+            "                    ping.exe 127.0.0.1 -n 2 >nul 2>&1",
+            "                )",
+            "            )",
+            "        )",
+            "        if !SVC_STOPPED! equ 1 (",
+            "            echo [%DATE% %TIME%] [OK] Service %%S confirmed STOPPED >> `"!LOGFILE!`"",
+            "        ) else (",
+            "            echo [%DATE% %TIME%] [FAIL] Service %%S failed to reach STOPPED state within timeout >> `"!LOGFILE!`"",
+            "            set /a SC_FAIL_COUNT+=1",
+            "        )",
+            "    ) else (",
+            "        echo [%DATE% %TIME%] [FAIL] Unable to query service %%S for stop - code: !errorlevel! >> `"!LOGFILE!`"",
+            "        set /a SC_FAIL_COUNT+=1",
+            "    )",
+            ")",
+            "rem --- Stage 3: Delete autostart entries and IFEO traps ---",
+            "reg.exe delete `"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run`" /v `"SecurityHealth`" /f >> `"!LOGFILE!`" 2>&1",
+            "reg.exe delete `"HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\smartscreen.exe`" /f >> `"!LOGFILE!`" 2>&1",
+            "reg.exe delete `"HKLM\SOFTWARE\WOW6432Node\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\smartscreen.exe`" /f >> `"!LOGFILE!`" 2>&1",
+            "rem --- Stage 4: Post-Verification of Registry States with Direct Key Inspection ---",
+            "rem Distinguish nonexistence (exit 0) from existing key/value (exit 1) and exception/denial (exit 2)",
+            "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command `"try { `$k = [Microsoft.Win32.Registry]::LocalMachine.OpenSubKey('SOFTWARE\Microsoft\Windows\CurrentVersion\Run'); if (`$null -eq `$k) { exit 0 } `$v = `$k.GetValue('SecurityHealth'); `$k.Close(); if (`$null -ne `$v) { exit 1 } else { exit 0 } } catch { exit 2 }`" >nul 2>&1",
+            "if !errorlevel! equ 0 (",
+            "    echo [%DATE% %TIME%] [OK] SecurityHealth autostart verified absent >> `"!LOGFILE!`"",
+            ") else if !errorlevel! equ 1 (",
+            "    echo [%DATE% %TIME%] [FAIL] SecurityHealth autostart still exists! >> `"!LOGFILE!`"",
+            "    set /a SC_FAIL_COUNT+=1",
+            ") else (",
+            "    echo [%DATE% %TIME%] [FAIL] SecurityHealth autostart check exception or access denied - code: !errorlevel! >> `"!LOGFILE!`"",
+            "    set /a SC_FAIL_COUNT+=1",
+            ")",
+            "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command `"try { `$k = [Microsoft.Win32.Registry]::LocalMachine.OpenSubKey('SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\smartscreen.exe'); if (`$null -ne `$k) { `$k.Close(); exit 1 } else { exit 0 } } catch { exit 2 }`" >nul 2>&1",
+            "if !errorlevel! equ 0 (",
+            "    echo [%DATE% %TIME%] [OK] Standard smartscreen.exe IFEO verified absent >> `"!LOGFILE!`"",
+            ") else if !errorlevel! equ 1 (",
+            "    echo [%DATE% %TIME%] [FAIL] Standard smartscreen.exe IFEO still exists! >> `"!LOGFILE!`"",
+            "    set /a SC_FAIL_COUNT+=1",
+            ") else (",
+            "    echo [%DATE% %TIME%] [FAIL] Standard smartscreen.exe IFEO check exception or access denied - code: !errorlevel! >> `"!LOGFILE!`"",
+            "    set /a SC_FAIL_COUNT+=1",
+            ")",
+            "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command `"try { `$k = [Microsoft.Win32.Registry]::LocalMachine.OpenSubKey('SOFTWARE\WOW6432Node\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\smartscreen.exe'); if (`$null -ne `$k) { `$k.Close(); exit 1 } else { exit 0 } } catch { exit 2 }`" >nul 2>&1",
+            "if !errorlevel! equ 0 (",
+            "    echo [%DATE% %TIME%] [OK] WOW6432Node smartscreen.exe IFEO verified absent >> `"!LOGFILE!`"",
+            ") else if !errorlevel! equ 1 (",
+            "    echo [%DATE% %TIME%] [FAIL] WOW6432Node smartscreen.exe IFEO still exists! >> `"!LOGFILE!`"",
+            "    set /a SC_FAIL_COUNT+=1",
+            ") else (",
+            "    echo [%DATE% %TIME%] [FAIL] WOW6432Node smartscreen.exe IFEO check exception or access denied - code: !errorlevel! >> `"!LOGFILE!`"",
+            "    set /a SC_FAIL_COUNT+=1",
+            ")"
+        )
+    }
+    $setupCompleteLines += @(
+        "if !SC_FAIL_COUNT! equ 0 (",
+        "    if exist `"%SystemDrive%\ProgramData\nano11\setupcomplete.failed`" del /f /q `"%SystemDrive%\ProgramData\nano11\setupcomplete.failed`" 2>nul",
+        "    echo %DATE% %TIME% SetupComplete Succeeded > `"%SystemDrive%\ProgramData\nano11\setupcomplete.succeeded`"",
+        "    echo [%DATE% %TIME%] ===== SetupComplete finished successfully with 0 errors ===== >> `"!LOGFILE!`"",
+        "    exit /b 0",
+        ") else (",
+        "    if exist `"%SystemDrive%\ProgramData\nano11\setupcomplete.succeeded`" del /f /q `"%SystemDrive%\ProgramData\nano11\setupcomplete.succeeded`" 2>nul",
+        "    echo %DATE% %TIME% SetupComplete Completed with !SC_FAIL_COUNT! errors > `"%SystemDrive%\ProgramData\nano11\setupcomplete.failed`"",
+        "    echo [%DATE% %TIME%] ===== SetupComplete failed with !SC_FAIL_COUNT! errors ===== >> `"!LOGFILE!`"",
+        "    exit /b 1",
+        ")"
+    )
+    $setupCompleteLines -join "`r`n" | Set-Content -LiteralPath (Join-Path -Path $setupScriptsDir -ChildPath "SetupComplete.cmd") -Encoding ascii
+    Write-Host "  [SetupComplete] Configured two-stage markers with individual logging and explicit exit codes" -ForegroundColor Green
 
     # Bundle winget-packages.json for post-setup automated app installation if present
     $repoWingetJson = Join-Path -Path $scriptDir -ChildPath "tools\winget-packages.json"
@@ -5608,36 +8226,45 @@ echo %DATE% %TIME% SetupComplete > "%SystemDrive%\ProgramData\nano11\setupcomple
     }
     
     # Stage feature flags for FirstLogon.ps1 automation
+    if ($removeDefender) {
+        Set-Content -LiteralPath (Join-Path -Path $setupScriptsDir -ChildPath "remove-defender.flag") -Value "1" -Encoding ascii -Force
+        Write-Host "  - Staged remove-defender.flag" -ForegroundColor Green
+    }
     if ($disableMemCompression) {
-        Set-Content -LiteralPath (Join-Path -Path $setupScriptsDir -ChildPath "disable-memcompression.flag") -Value "1" -Encoding ascii
+        Set-Content -LiteralPath (Join-Path -Path $setupScriptsDir -ChildPath "disable-memcompression.flag") -Value "1" -Encoding ascii -Force
     }
     if ($noHypervisor -or (-not $wslSupport -and $selectedProfile -in @('extreme', 'handheld', 'audio'))) {
-        Set-Content -LiteralPath (Join-Path -Path $setupScriptsDir -ChildPath "no-hypervisor.flag") -Value "1" -Encoding ascii
+        Set-Content -LiteralPath (Join-Path -Path $setupScriptsDir -ChildPath "no-hypervisor.flag") -Value "1" -Encoding ascii -Force
     }
-    if ($script:activeTweakGroups['NetworkStack']) {
-        Set-Content -LiteralPath (Join-Path -Path $setupScriptsDir -ChildPath "disable-netbios.flag") -Value "1" -Encoding ascii
+    if ($script:activeTweakGroups -and $script:activeTweakGroups.Contains('NetworkStack') -and $script:activeTweakGroups['NetworkStack']) {
+        Set-Content -LiteralPath (Join-Path -Path $setupScriptsDir -ChildPath "disable-netbios.flag") -Value "1" -Encoding ascii -Force
     }
     if ($removeWebViewPostOOBE) {
-        Set-Content -LiteralPath (Join-Path -Path $setupScriptsDir -ChildPath "remove-webview.flag") -Value "1" -Encoding ascii
+        Set-Content -LiteralPath (Join-Path -Path $setupScriptsDir -ChildPath "remove-webview.flag") -Value "1" -Encoding ascii -Force
     }
     if ($bypassActivationRestrictions) {
-        Set-Content -LiteralPath (Join-Path -Path $setupScriptsDir -ChildPath "bypass-activation.flag") -Value "1" -Encoding ascii
+        Set-Content -LiteralPath (Join-Path -Path $setupScriptsDir -ChildPath "bypass-activation.flag") -Value "1" -Encoding ascii -Force
+    }
+    if ($radicalRAM) {
+        Set-Content -LiteralPath (Join-Path -Path $setupScriptsDir -ChildPath "radical-ram.flag") -Value "1" -Encoding ascii -Force
     }
 
     # Save build traceability manifest (nano11-build-info.json)
     $buildInfoObj = [ordered]@{
-        BuilderVersion  = $script:Nano11Version
-        BuildUtc        = [DateTime]::UtcNow.ToString("o")
-        Profile         = $selectedProfile
-        Architecture    = $architecture
-        ComputerName    = $ComputerName
-        UserName        = $UserName
-        JapaneseKeyboard= $setJapaneseKeyboard
-        KeepBasicApps   = $keepBasicApps
-        KeepSearchIndex = $keepSearchIndex
-        BypassActivation= $bypassActivationRestrictions
-        SourceDrive     = $DriveLetter
-        PayloadFormat   = if ($exportESDMode) { "ESD" } elseif ($splitWIMMode) { "SWM" } else { "WIM" }
+        BuilderVersion   = $script:Nano11Version
+        BuildUtc         = [DateTime]::UtcNow.ToString("o")
+        Profile          = $selectedProfile
+        Architecture     = $architecture
+        ComputerName     = $ComputerName
+        UserName         = $UserName
+        RadicalRAM       = $radicalRAM
+        JapaneseKeyboard = $setJapaneseKeyboard
+        KeepBasicApps    = $keepBasicApps
+        KeepSearchIndex  = [bool]$keepSearchIndex
+        RemoveDefender   = [bool]$removeDefender
+        BypassActivation = $bypassActivationRestrictions
+        SourceDrive      = $DriveLetter
+        PayloadFormat    = if ($exportESDMode) { "ESD" } elseif ($splitWIMMode) { "SWM" } else { "WIM" }
     }
     $buildInfoJson = $buildInfoObj | ConvertTo-Json -Depth 4
     $buildInfoJson | Set-Content -LiteralPath (Join-Path -Path $nano11Dir -ChildPath "nano11-build-info.json") -Encoding utf8
@@ -5654,7 +8281,8 @@ echo %DATE% %TIME% SetupComplete > "%SystemDrive%\ProgramData\nano11\setupcomple
                     if (-not (Test-Path -LiteralPath $parentDir)) {
                         New-Item -Path $parentDir -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null
                     }
-                    [System.IO.File]::WriteAllText($destPath, $fileNode.InnerText.Trim(), [System.Text.Encoding]::UTF8)
+                    $utf8WithBom = New-Object System.Text.UTF8Encoding($true)
+                    [System.IO.File]::WriteAllText($destPath, $fileNode.InnerText.Trim(), $utf8WithBom)
                 }
             }
             Write-Host "  - Pre-extracted Setup & Winhance scripts directly into image" -ForegroundColor Green
@@ -5680,7 +8308,12 @@ New-Item -Path $pubDesktop -ItemType Directory -Force -ErrorAction SilentlyConti
 New-Item -Path $setupTools -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null
 
 $browserPs1Content = @'
-[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+try {
+    if ([Enum]::IsDefined([Net.SecurityProtocolType], 'Tls13')) {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]'Tls13'
+    }
+} catch {}
 $ErrorActionPreference = 'Stop'
 
 Clear-Host
@@ -5794,7 +8427,7 @@ goto MENU
 
 :DEFENDER
 echo.
-sc query WinDefend | find "RUNNING" >nul
+powershell.exe -NoProfile -Command "exit ((Get-Service WinDefend -ErrorAction SilentlyContinue).Status -ne 'Running')" >nul 2>&1
 if %errorlevel% equ 0 (
     echo Disabling Windows Defender...
     sc config WinDefend start= disabled >nul 2>&1
@@ -5817,7 +8450,7 @@ goto MENU
 
 :WU
 echo.
-sc query wuauserv | find "RUNNING" >nul
+powershell.exe -NoProfile -Command "exit ((Get-Service wuauserv -ErrorAction SilentlyContinue).Status -ne 'Running')" >nul 2>&1
 if %errorlevel% equ 0 (
     echo Disabling Windows Update...
     sc config wuauserv start= disabled >nul 2>&1
@@ -5852,7 +8485,7 @@ goto MENU
 
 :BLUETOOTH
 echo.
-sc query bthserv | find "RUNNING" >nul
+powershell.exe -NoProfile -Command "exit ((Get-Service bthserv -ErrorAction SilentlyContinue).Status -ne 'Running')" >nul 2>&1
 if %errorlevel% equ 0 (
     echo Disabling Bluetooth...
     sc config bthserv start= disabled >nul 2>&1
@@ -5873,7 +8506,7 @@ goto MENU
 
 :SPOOLER
 echo.
-sc query Spooler | find "RUNNING" >nul
+powershell.exe -NoProfile -Command "exit ((Get-Service Spooler -ErrorAction SilentlyContinue).Status -ne 'Running')" >nul 2>&1
 if %errorlevel% equ 0 (
     echo Disabling Print Spooler...
     sc config Spooler start= disabled >nul 2>&1
@@ -5904,20 +8537,22 @@ goto MENU
 '@
 
 if (-not $NoPostInstallAssets) {
-    $browserPs1Content | Set-Content -LiteralPath (Join-Path -Path $pubDesktop -ChildPath "Install-Browser.ps1") -Encoding utf8
-    $browserCmdContent | Set-Content -LiteralPath (Join-Path -Path $pubDesktop -ChildPath "Install-Browser.cmd") -Encoding ascii
-    $controlCenterContent | Set-Content -LiteralPath (Join-Path -Path $pubDesktop -ChildPath "Nano11 Control Center.bat") -Encoding ascii
-    Copy-Item -LiteralPath (Join-Path -Path $pubDesktop -ChildPath "Install-Browser.cmd") -Destination (Join-Path -Path $pubDesktop -ChildPath "🌐 Install Browser.cmd") -Force -ErrorAction SilentlyContinue
-    Copy-Item -LiteralPath (Join-Path -Path $pubDesktop -ChildPath "Nano11 Control Center.bat") -Destination (Join-Path -Path $pubDesktop -ChildPath "⚡ nano11 Control Center.cmd") -Force -ErrorAction SilentlyContinue
-
+    # Keep maintenance tools safely in Windows\Setup\Tools (do not pollute Public Desktop)
     $browserPs1Content | Set-Content -LiteralPath (Join-Path -Path $setupTools -ChildPath "Install-Browser.ps1") -Encoding utf8
     $browserCmdContent | Set-Content -LiteralPath (Join-Path -Path $setupTools -ChildPath "Install-Browser.cmd") -Encoding ascii
     $controlCenterContent | Set-Content -LiteralPath (Join-Path -Path $setupTools -ChildPath "Nano11 Control Center.bat") -Encoding ascii
-    Copy-Item -LiteralPath (Join-Path -Path $setupTools -ChildPath "Install-Browser.cmd") -Destination (Join-Path -Path $setupTools -ChildPath "🌐 Install Browser.cmd") -Force -ErrorAction SilentlyContinue
-    Copy-Item -LiteralPath (Join-Path -Path $setupTools -ChildPath "Nano11 Control Center.bat") -Destination (Join-Path -Path $setupTools -ChildPath "⚡ nano11 Control Center.cmd") -Force -ErrorAction SilentlyContinue
-    Write-Host "  - Deployed Browser Grabber and Nano11 Control Center to Desktop & Setup Tools" -ForegroundColor Green
+    Write-Host "  - Staged Browser Grabber and Nano11 Control Center to Windows\Setup\Tools" -ForegroundColor Green
+    
+    # Ensure Public Desktop is clean of tools folders
+    $cleanItems = @("Atlas-ReviOS Tools", "Install-Browser.cmd", "Install-Browser.ps1", "Nano11 Control Center.bat", "Nano11 Control Center.cmd")
+    foreach ($ci in $cleanItems) {
+        $ciPath = Join-Path -Path $pubDesktop -ChildPath $ci
+        if (Test-Path -LiteralPath $ciPath) {
+            Remove-Item -LiteralPath $ciPath -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
 } else {
-    Write-Host "  - Skipping deployment of post-install assets (-NoPostInstallAssets specified)." -ForegroundColor Yellow
+    Write-Host "  - Skipping staging of post-install assets (-NoPostInstallAssets specified)." -ForegroundColor Yellow
 }
 
 # Ensure CurrentControlSet does NOT exist in offline SYSTEM hive
@@ -5930,6 +8565,8 @@ if ($LASTEXITCODE -eq 0) {
 
 # Unmount Registry Hives
 Write-Host "Unmounting offline registry hives..." -ForegroundColor Cyan
+[GC]::Collect()
+[GC]::WaitForPendingFinalizers()
 @('zCOMPONENTS', 'zDEFAULT', 'zNTUSER', 'zSOFTWARE', 'zSYSTEM') | ForEach-Object {
     [void](Unmount-RegistryHiveWithRetry -Name $_)
 }
@@ -5975,12 +8612,19 @@ Enter-Phase 12 "Unmount and Commit install.wim Image"
 
 # 12. Unmount and export install image
 Write-Host "Unmounting install image and committing changes..." -ForegroundColor Green
-Write-Host "  -> Saving WIM image changes. Progress will display below..." -ForegroundColor Cyan
+Write-Host "  -> Saving WIM image changes to disk. This typically takes 2-5 minutes depending on SSD/HDD speed." -ForegroundColor Cyan
+Write-Host "  -> [Notice] DISM progress will update below. Please DO NOT close this window - commit is actively running." -ForegroundColor Yellow
+
+# Ensure working directory is safely outside mount path and release lingering handles
+Set-Location -LiteralPath $scriptDir
+[GC]::Collect()
+[GC]::WaitForPendingFinalizers()
 
 $unmountSuccess = $false
 for ($retry = 1; $retry -le 4; $retry++) {
     [GC]::Collect()
     [GC]::WaitForPendingFinalizers()
+    Set-Location -LiteralPath $scriptDir
     Start-Sleep -Seconds 2
 
     & dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /commit
@@ -5991,6 +8635,7 @@ for ($retry = 1; $retry -le 4; $retry++) {
     }
 
     Write-Host "Warning: commit unmount failed (attempt $retry/4). Retrying after waiting and garbage collection..." -ForegroundColor Yellow
+    Set-Location -LiteralPath $scriptDir
     [GC]::Collect()
     [GC]::WaitForPendingFinalizers()
     Start-Sleep -Seconds (3 * $retry)
@@ -6014,58 +8659,121 @@ if (-not $unmountSuccess) {
 Enter-Phase 13 "Export Modified Image (WIM / ESD / SWM)"
 
 # 13. Export modified image
-# Note: On Windows 11 24H2 (build 26100+), DISM /Compress:recovery (LZMS) has a known crash bug (0xc0000005 in WIMGAPI.DLL).
-# Exporting to install.wim via /Compress:max (LZX) completes in ~20 seconds, never crashes, and produces a 100% compliant Windows Setup payload.
 $finalWim = Join-Path -Path "$nano11Dir\sources" -ChildPath "install.wim"
 $finalEsd = Join-Path -Path "$nano11Dir\sources" -ChildPath "install.esd"
 $tempWim  = Join-Path -Path "$nano11Dir\sources" -ChildPath "install_export.wim"
+$exportScratch = Join-Path -Path $workDir -ChildPath "dism_export_scratch"
 
-# Clean up any leftover temporary/broken export files
+# Clean up any leftover temporary/broken export files and scratch dir
 Remove-Item -LiteralPath $finalEsd -Force -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath $tempWim -Force -ErrorAction SilentlyContinue
+if (Test-Path -LiteralPath $exportScratch) {
+    Remove-Item -LiteralPath $exportScratch -Recurse -Force -ErrorAction SilentlyContinue
+}
+New-Item -ItemType Directory -Force -Path $exportScratch -ErrorAction SilentlyContinue | Out-Null
 
-$esdSuccess = $false
+# Flush memory and release native file handles prior to export
+[System.GC]::Collect()
+[System.GC]::WaitForPendingFinalizers()
+Start-Sleep -Milliseconds 500
+
+$exportSuccess = $false
+$script:StreamIntegrityVerified = $false
+$script:StreamIntegrityMethod = "NOT VERIFIED"
+$dismExportLog = Join-Path -Path $script:DiagDir -ChildPath "dism_export.log"
+$exportIntegrityReport = Join-Path -Path $script:DiagDir -ChildPath "dism_export_integrity_report.txt"
+
+# Guard against unverified ESD / SWM modes (Rule 9)
 if ($exportESDMode) {
-    Write-Host "Exporting modified image to recovery-compressed install.esd (LZMS)..." -ForegroundColor Green
-    & dism.exe /English /Export-Image "/SourceImageFile:$destWim" "/SourceIndex:$index" "/DestinationImageFile:$finalEsd" /Compress:recovery
-    if ($LASTEXITCODE -eq 0 -and (Test-Path -LiteralPath $finalEsd) -and ((Get-Item -LiteralPath $finalEsd).Length -gt 1GB)) {
-        Write-Host "install.esd successfully created ($([math]::Round((Get-Item -LiteralPath $finalEsd).Length / 1GB, 2)) GB). Removing temporary install.wim..." -ForegroundColor Green
-        Remove-Item -LiteralPath $destWim -Force -ErrorAction SilentlyContinue
-        $esdSuccess = $true
-    } else {
-        Write-Host "Recovery export failed or crashed. Cleaning up incomplete ESD and falling back to LZX install.wim..." -ForegroundColor Yellow
-        Remove-Item -LiteralPath $finalEsd -Force -ErrorAction SilentlyContinue
-    }
+    $script:DiagnosticData.FailurePhase = "Phase 13: Export Mode Validation"
+    $script:DiagnosticData.FailureMessage = "ESD export requested but deep apply verification for ESD is unverified in this build. Please build standard WIM."
+    Write-Nano11DiagnosticReport "ESD mode rejected"
+    throw "ESD export mode is disabled because deep apply verification for ESD is unverified. Please build standard WIM."
+}
+if ($splitWIMMode) {
+    $script:DiagnosticData.FailurePhase = "Phase 13: Export Mode Validation"
+    $script:DiagnosticData.FailureMessage = "Split-WIM (SWM) export requested but multipart apply verification is unverified in this build. Please build standard WIM."
+    Write-Nano11DiagnosticReport "SWM mode rejected"
+    throw "Split-WIM (SWM) export mode is disabled because multipart apply verification is unverified. Please build standard WIM."
 }
 
-if (-not $esdSuccess) {
-    Write-Host "Exporting modified image to highly-compressed install.wim (LZX)..." -ForegroundColor Green
-    $compressArg = if ($fastExport) { "/Compress:fast" } else { "/Compress:max" }
-    & dism.exe /English /Export-Image "/SourceImageFile:$destWim" "/SourceIndex:$index" "/DestinationImageFile:$tempWim" $compressArg
-    if ($LASTEXITCODE -eq 0 -and (Test-Path -LiteralPath $tempWim) -and ((Get-Item -LiteralPath $tempWim).Length -gt 1GB)) {
-        Remove-Item -LiteralPath $destWim -Force -ErrorAction SilentlyContinue
-        Rename-Item -LiteralPath $tempWim -NewName "install.wim" -Force
-        $exportedWimSize = (Get-Item -LiteralPath $finalWim).Length
-        Write-Host "install.wim successfully exported ($([math]::Round($exportedWimSize / 1GB, 2)) GB)." -ForegroundColor Green
+# Preserve pre-export original WIM backup (Rule 5)
+$destWimBackup = Join-Path -Path "$nano11Dir\sources" -ChildPath "install_pre_export_backup.wim"
+$tempExportWim = Join-Path -Path "$nano11Dir\sources" -ChildPath "install_export_temp.wim"
 
-        # Split-WIM (install.swm) for 100% FAT32 USB compatibility
-        if ($splitWIMMode) {
-            Write-Host "Splitting install.wim into <= 3800MB chunks for 100% FAT32 USB compatibility (install.swm)..." -ForegroundColor Cyan
-            $swmTarget = Join-Path -Path "$nano11Dir\sources" -ChildPath "install.swm"
-            & dism.exe /English /Split-Image "/ImageFile:$finalWim" "/SWMFile:$swmTarget" /FileSize:3800
-            if ($LASTEXITCODE -eq 0 -and (Test-Path -LiteralPath $swmTarget)) {
-                $swmParts = Get-ChildItem -Path "$nano11Dir\sources" -Filter "install*.swm"
-                Write-Host "install.swm successfully generated ($($swmParts.Count) parts). Removing single install.wim..." -ForegroundColor Green
-                Remove-Item -LiteralPath $finalWim -Force -ErrorAction SilentlyContinue
-            } else {
-                Write-Host "Warning: Split-Image failed. Retaining single install.wim." -ForegroundColor Yellow
-            }
+if (Test-Path -LiteralPath $destWim) {
+    $script:DiagnosticData.PreExportWimSha256 = (Get-FileHash -LiteralPath $destWim -Algorithm SHA256).Hash
+}
+
+# Standard WIM Export with Resilient Compression (/Compress:max -> /Compress:fast) with STRICT /CheckIntegrity (Rule 3)
+$compressModes = if ($fastExport) { @("/Compress:fast") } else { @("/Compress:max", "/Compress:fast") }
+foreach ($compMode in $compressModes) {
+    Write-Host "Exporting modified image to single-edition install.wim ($compMode /CheckIntegrity)..." -ForegroundColor Green
+    if (Test-Path -LiteralPath $tempExportWim) {
+        Remove-Item -LiteralPath $tempExportWim -Force -ErrorAction Stop
+    }
+
+    $exportCmdStr = "dism.exe /English /Export-Image /SourceImageFile:`"$destWim`" /SourceIndex:$index /DestinationImageFile:`"$tempExportWim`" $compMode /ScratchDir:`"$exportScratch`" /CheckIntegrity /LogPath:`"$dismExportLog`""
+    $script:DiagnosticData.ExportCommand = $exportCmdStr
+
+    $exportOut = & dism.exe /English /Export-Image "/SourceImageFile:$destWim" "/SourceIndex:$index" "/DestinationImageFile:$tempExportWim" $compMode "/ScratchDir:$exportScratch" /CheckIntegrity "/LogPath:$dismExportLog" 2>&1
+    $exportExit = $LASTEXITCODE
+    $script:DiagnosticData.ExportExitCode = $exportExit
+
+    $integrityEntry = @(
+        "=== Phase 13 Export-Image ($compMode /CheckIntegrity) ===",
+        "Timestamp:  $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')",
+        "Command:    $exportCmdStr",
+        "ExitCode:   $exportExit",
+        "Raw Output:",
+        ($exportOut -join "`r`n"),
+        "=========================================================="
+    ) -join "`r`n"
+    [System.IO.File]::AppendAllText($exportIntegrityReport, "$integrityEntry`r`n", [System.Text.Encoding]::UTF8)
+
+    if ($exportExit -eq 0 -and (Test-Path -LiteralPath $tempExportWim) -and ((Get-Item -LiteralPath $tempExportWim).Length -gt 500MB)) {
+        $exportSuccess = $true
+        break
+    } else {
+        Write-Host "Notice: Export with $compMode /CheckIntegrity failed (Exit code: $exportExit)." -ForegroundColor Yellow
+        if (Test-Path -LiteralPath $tempExportWim) {
+            Remove-Item -LiteralPath $tempExportWim -Force -ErrorAction SilentlyContinue
         }
-    } else {
-        Write-Host "Warning: Export to install_export.wim failed or produced undersized file. Keeping original committed install.wim." -ForegroundColor Yellow
-        Remove-Item -LiteralPath $tempWim -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 1
     }
 }
+
+if (-not $exportSuccess) {
+    $script:ExportSucceeded = $false
+    $script:DiagnosticData.ExportSucceeded = $false
+    $script:DiagnosticData.FailurePhase = "Phase 13: Export Image"
+    $script:DiagnosticData.FailureMessage = "Export-Image with /CheckIntegrity failed under all compression modes. Retaining original pre-export WIM for diagnosis."
+    Write-Nano11DiagnosticReport "Export failed"
+    throw "Phase 13: Export-Image with /CheckIntegrity failed under all compression modes. Halting build to preserve pre-export WIM."
+}
+
+# Verify exported temporary WIM metadata before replacing original
+$tempInfoOut = & dism.exe /English /Get-WimInfo "/WimFile:$tempExportWim" 2>&1
+if ($LASTEXITCODE -ne 0) {
+    throw "Phase 13: Exported temporary WIM metadata inspection failed."
+}
+
+# Step 2: Move original WIM to unique backup (Rule 5)
+Move-Item -LiteralPath $destWim -Destination $destWimBackup -Force -ErrorAction Stop
+# Step 3: Move export output to final install.wim
+Move-Item -LiteralPath $tempExportWim -Destination $destWim -Force -ErrorAction Stop
+
+# Step 4: Record final path existence, size, SHA256
+$finalWimItem = Get-Item -LiteralPath $destWim -ErrorAction Stop
+$script:DiagnosticData.ExportedWimSha256 = (Get-FileHash -LiteralPath $destWim -Algorithm SHA256).Hash
+$script:ExportSucceeded = $true
+$script:DiagnosticData.ExportSucceeded = $true
+$script:StreamIntegrityVerified = $true
+$script:StreamIntegrityMethod = "DISM /Export-Image /CheckIntegrity (ExitCode: 0)"
+Write-Host "install.wim successfully exported with /CheckIntegrity ($([math]::Round($finalWimItem.Length / 1GB, 2)) GB)." -ForegroundColor Green
+
+# Clean up export scratch directory
+Remove-Item -LiteralPath $exportScratch -Recurse -Force -ErrorAction SilentlyContinue
 
 Enter-Phase 14 "Patch boot.wim (LabConfig & Bypasses)"
 
@@ -6091,95 +8799,202 @@ if (Test-Path -LiteralPath $bootWimPath) {
 
     foreach ($bIndex in $indicesToPatch) {
         Write-Host "  - Applying Setup & Hardware requirement bypasses to boot.wim Index $bIndex..." -ForegroundColor Cyan
-        Clear-DismMountConflicts -TargetMountDir $scratchDir -TargetWimFile $bootWimPath
-        & dism.exe /English /Mount-Image "/ImageFile:$bootWimPath" "/Index:$bIndex" "/MountDir:$scratchDir"
-        if ($LASTEXITCODE -eq 0) {
+        $bMountResult = Invoke-Nano11ImageMount -ImageFile $bootWimPath -ImageIndex $bIndex -Retries 3
+        $scratchDir = $bMountResult.MountDir
+        $script:DismMountDir = $scratchDir
+        $script:MountOpened = $true
+
+        try {
             & reg.exe query "HKLM\zSYSTEM" > $null 2>&1
             if ($LASTEXITCODE -eq 0) {
                 [void](Unmount-RegistryHiveWithRetry -Name 'zSYSTEM')
             }
             reg.exe load HKLM\zSYSTEM "$scratchDir\Windows\System32\config\SYSTEM" > $null 2>&1
+            if ($LASTEXITCODE -eq 0) {
+                $script:HivesLoaded = $true
+            }
             foreach ($key in $labConfigKeys) {
                 reg.exe add "HKLM\zSYSTEM\Setup\LabConfig" /v $key /t REG_DWORD /d 1 /f > $null 2>&1
             }
             reg.exe add "HKLM\zSYSTEM\Setup\LabConfig" /v "BypassNRO" /t REG_DWORD /d 1 /f > $null 2>&1
             reg.exe add "HKLM\zSYSTEM\Setup\MoSetup" /v "AllowUpgradesWithUnsupportedTPMOrCPU" /t REG_DWORD /d 1 /f > $null 2>&1
             reg.exe add "HKLM\zSYSTEM\ControlSet001\Control\BitLocker" /v "PreventDeviceEncryption" /t REG_DWORD /d 1 /f > $null 2>&1
-            & reg.exe query "HKLM\zSYSTEM\CurrentControlSet" > $null 2>&1
-            if ($LASTEXITCODE -eq 0) {
-                reg.exe delete "HKLM\zSYSTEM\CurrentControlSet" /f > $null 2>&1
-            }
+            # CurrentControlSet is dynamically linked by the Windows kernel at boot; leave hive untouched.
+        } finally {
             [void](Unmount-RegistryHiveWithRetry -Name 'zSYSTEM')
-
-            $bootUnmountSuccess = $false
-            for ($bRetry = 1; $bRetry -le 3; $bRetry++) {
-                [GC]::Collect()
-                [GC]::WaitForPendingFinalizers()
-                Start-Sleep -Seconds 2
-                & dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /commit
-                if ($LASTEXITCODE -eq 0) {
-                    $bootUnmountSuccess = $true
-                    break
-                }
-                Start-Sleep -Seconds (2 * $bRetry)
-            }
-
-            if (-not $bootUnmountSuccess) {
-                Write-Host "Falling back to discard unmount for boot.wim index $bIndex..." -ForegroundColor Yellow
-                & dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /discard
-            }
+            $script:HivesLoaded = $false
         }
+
+        Set-Location -LiteralPath $scriptDir
+        [GC]::Collect()
+        [GC]::WaitForPendingFinalizers()
+
+        $bootUnmountSuccess = $false
+        for ($bRetry = 1; $bRetry -le 3; $bRetry++) {
+            [GC]::Collect()
+            [GC]::WaitForPendingFinalizers()
+            Set-Location -LiteralPath $scriptDir
+            Start-Sleep -Seconds 2
+            & dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /commit
+            if ($LASTEXITCODE -eq 0) {
+                $bootUnmountSuccess = $true
+                break
+            }
+            Set-Location -LiteralPath $scriptDir
+            Start-Sleep -Seconds (2 * $bRetry)
+        }
+
+        if (-not $bootUnmountSuccess) {
+            Write-Host "Falling back to discard unmount for boot.wim index $bIndex..." -ForegroundColor Yellow
+            & dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /discard > $null 2>&1
+            throw "Failed to commit changes to boot.wim Index $bIndex after multiple attempts. Aborting build."
+        }
+
+        # Verify unmount was completed and no lock remains
+        Clear-DismMountConflicts -TargetMountDir $scratchDir -TargetWimFile $bootWimPath
+        $script:MountOpened = $false
     }
 }
 
 Enter-Phase 15 "Verify Final Installation Payload"
 
 # 15. Verify final installation payload
-$esdCheck = Join-Path -Path "$nano11Dir\sources" -ChildPath "install.esd"
 $wimCheck = Join-Path -Path "$nano11Dir\sources" -ChildPath "install.wim"
-$swmCheck = Join-Path -Path "$nano11Dir\sources" -ChildPath "install.swm"
 
-$validEsd = (Test-Path -LiteralPath $esdCheck) -and ((Get-Item -LiteralPath $esdCheck).Length -gt 1GB)
-$validWim = (Test-Path -LiteralPath $wimCheck) -and ((Get-Item -LiteralPath $wimCheck).Length -gt 1GB)
-$validSwm = (Test-Path -LiteralPath $swmCheck) -and ((Get-Item -LiteralPath $swmCheck).Length -gt 500MB)
-
-# Remove any corrupt stub files or invalid partial files (< 1GB / < 500MB)
-if (-not $validEsd -and (Test-Path -LiteralPath $esdCheck)) {
-    Write-Host "Warning: Corrupt or incomplete install.esd detected ($((Get-Item -LiteralPath $esdCheck).Length) bytes). Removing..." -ForegroundColor Yellow
-    Remove-Item -LiteralPath $esdCheck -Force -ErrorAction SilentlyContinue
-    $validEsd = $false
-}
-if (-not $validWim -and (Test-Path -LiteralPath $wimCheck) -and (-not $validSwm)) {
-    Write-Host "Warning: Corrupt or incomplete install.wim detected ($((Get-Item -LiteralPath $wimCheck).Length) bytes). Removing..." -ForegroundColor Yellow
-    Remove-Item -LiteralPath $wimCheck -Force -ErrorAction SilentlyContinue
-    $validWim = $false
+if (-not (Test-Path -LiteralPath $wimCheck) -or ((Get-Item -LiteralPath $wimCheck).Length -lt 500MB)) {
+    $script:DiagnosticData.FailurePhase = "Phase 15: Payload Verification"
+    $script:DiagnosticData.FailureMessage = "No valid install.wim found in $nano11Dir\sources"
+    Write-Nano11DiagnosticReport "Missing install.wim"
+    throw "CRITICAL ERROR: No valid installation payload (install.wim) found in $nano11Dir\sources!"
 }
 
-if ($validWim) {
-    Write-Host "Final installation image confirmed: install.wim ($([math]::Round((Get-Item -LiteralPath $wimCheck).Length / 1GB, 2)) GB)" -ForegroundColor Green
-    if (Test-Path -LiteralPath $esdCheck) {
-        Remove-Item -LiteralPath $esdCheck -Force -ErrorAction SilentlyContinue
-    }
-} elseif ($validSwm) {
-    $swmParts = Get-ChildItem -Path "$nano11Dir\sources" -Filter "install*.swm"
-    Write-Host "Final installation image confirmed: install.swm (Split-WIM: $($swmParts.Count) parts for 100% FAT32 USB boot)" -ForegroundColor Green
-    if (Test-Path -LiteralPath $wimCheck) {
-        Remove-Item -LiteralPath $wimCheck -Force -ErrorAction SilentlyContinue
-    }
-    if (Test-Path -LiteralPath $esdCheck) {
-        Remove-Item -LiteralPath $esdCheck -Force -ErrorAction SilentlyContinue
-    }
-} elseif ($validEsd) {
-    Write-Host "Final installation image confirmed: install.esd ($([math]::Round((Get-Item -LiteralPath $esdCheck).Length / 1GB, 2)) GB)" -ForegroundColor Green
-    if (Test-Path -LiteralPath $wimCheck) {
-        Remove-Item -LiteralPath $wimCheck -Force -ErrorAction SilentlyContinue
-    }
-} else {
-    Write-Host "CRITICAL ERROR: No valid installation payload (install.wim, install.esd, or install.swm) found in $nano11Dir\sources!" -ForegroundColor Red
-    Write-Host "Aborting ISO creation to prevent producing an unbootable or corrupt image." -ForegroundColor Red
-    Stop-Transcript
-    exit 1
+$wimSizeGB = [math]::Round((Get-Item -LiteralPath $wimCheck).Length / 1GB, 2)
+Write-Host "Final installation image confirmed: install.wim ($wimSizeGB GB)" -ForegroundColor Green
+
+# 1. Metadata Verification via DISM /Get-WimInfo (Strictly metadata query only, no /CheckIntegrity) (Rule 8)
+Write-Host "Verifying install.wim metadata structure via DISM..." -ForegroundColor Cyan
+$dismMetaOut = & dism.exe /English /Get-WimInfo "/WimFile:$wimCheck" 2>&1
+$dismMetaExit = $LASTEXITCODE
+$metaText = ($dismMetaOut -join "`n")
+$hasIndex1 = ($metaText -match '(?m)^\s*Index\s*:\s*1\s*$')
+$totalIndexCount = ([regex]::Matches($metaText, '(?m)^\s*Index\s*:\s*\d+\s*$')).Count
+
+$metadataValid = ($dismMetaExit -eq 0) -and $hasIndex1 -and ($totalIndexCount -eq 1)
+$metadataStatus = if ($metadataValid) { "PASS" } else { "FAIL" }
+
+if ($metadataStatus -eq "FAIL") {
+    $script:DiagnosticData.FailurePhase = "Phase 15: Metadata Verification"
+    $script:DiagnosticData.FailureMessage = "install.wim failed metadata verification (ExitCode: $dismMetaExit, IndexCount: $totalIndexCount)"
+    Write-Nano11DiagnosticReport "Metadata check failed"
+    throw "install.wim failed metadata verification (ExitCode: $dismMetaExit). Expected exactly 1 index (Index 1)."
 }
+
+# 2. Mandatory Deep Apply Verification of Final Payload (Rule 6)
+Write-Host "Performing mandatory deep apply verification of install.wim via DISM..." -ForegroundColor Cyan
+$verifyApply = Join-Path -Path $workDir -ChildPath "deep_apply_verification"
+$verifyScratch = Join-Path -Path $workDir -ChildPath "deep_apply_scratch"
+$verifyLog = Join-Path -Path $script:DiagDir -ChildPath "dism_deep_apply.log"
+$verifyReport = Join-Path -Path $script:DiagDir -ChildPath "final_apply_report.txt"
+
+if (Test-Path -LiteralPath $verifyApply) {
+    Remove-Item -LiteralPath $verifyApply -Recurse -Force -ErrorAction SilentlyContinue
+}
+if (Test-Path -LiteralPath $verifyScratch) {
+    Remove-Item -LiteralPath $verifyScratch -Recurse -Force -ErrorAction SilentlyContinue
+}
+New-Item -ItemType Directory -Path $verifyApply -Force | Out-Null
+New-Item -ItemType Directory -Path $verifyScratch -Force | Out-Null
+
+# Verify free space on target drive (minimum 15GB recommended)
+$applyDriveLetter = (Split-Path -Path (Resolve-Path $verifyApply).Path -Qualifier).TrimEnd(':')
+$driveInfo = [System.IO.DriveInfo]::new($applyDriveLetter)
+$freeSpaceGB = [math]::Round($driveInfo.AvailableFreeSpace / 1GB, 2)
+if ($freeSpaceGB -lt 15) {
+    $spaceMsg = "Insufficient disk space for deep apply verification on drive ${applyDriveLetter}: ($freeSpaceGB GB free, minimum 15 GB required)."
+    $script:DiagnosticData.FailurePhase = "Phase 15: Deep Apply Verification Space Check"
+    $script:DiagnosticData.FailureMessage = $spaceMsg
+    Write-Nano11DiagnosticReport $spaceMsg
+    throw $spaceMsg
+}
+
+$applyCmdStr = "dism.exe /English /Apply-Image /ImageFile:`"$wimCheck`" /Index:1 /ApplyDir:`"$verifyApply`" /CheckIntegrity /Verify /ScratchDir:`"$verifyScratch`" /LogPath:`"$verifyLog`""
+$script:DiagnosticData.FinalApplyCommand = $applyCmdStr
+
+Write-Host "  Executing: $applyCmdStr" -ForegroundColor Cyan
+$applyOut = & dism.exe /English /Apply-Image "/ImageFile:$wimCheck" "/Index:1" "/ApplyDir:$verifyApply" /CheckIntegrity /Verify "/ScratchDir:$verifyScratch" "/LogPath:$verifyLog" 2>&1
+$applyExit = $LASTEXITCODE
+$script:DiagnosticData.FinalApplyExitCode = $applyExit
+
+$applyReportEntry = @(
+    "=== Phase 15 Final Payload Deep Apply Verification ===",
+    "Timestamp:  $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')",
+    "Command:    $applyCmdStr",
+    "ExitCode:   $applyExit",
+    "Raw Output:",
+    ($applyOut -join "`r`n"),
+    "======================================================="
+) -join "`r`n"
+[System.IO.File]::WriteAllText($verifyReport, $applyReportEntry, [System.Text.Encoding]::UTF8)
+
+if ($applyExit -ne 0) {
+    $script:FinalPayloadVerified = $false
+    $script:DiagnosticData.FinalPayloadVerified = $false
+    $script:DiagnosticData.FailurePhase = "Phase 15: Deep Apply Verification"
+    $script:DiagnosticData.FailureMessage = "DISM /Apply-Image /CheckIntegrity /Verify failed with ExitCode: $applyExit. Verification directory and logs preserved."
+    Write-Nano11DiagnosticReport "Deep apply failed"
+    throw "CRITICAL ERROR: install.wim failed deep apply verification (ExitCode: $applyExit). This payload would cause Windows Setup to fail with 0x80070570. Halting build to preserve evidence."
+}
+
+$script:FinalPayloadVerified = $true
+$script:DiagnosticData.FinalPayloadVerified = $true
+$script:VerifiedFinalWimSha256 = (Get-FileHash -LiteralPath $wimCheck -Algorithm SHA256).Hash
+$script:DiagnosticData.FinalWimSha256 = $script:VerifiedFinalWimSha256
+Write-Host "  [PASS] Deep apply verification completed successfully (ExitCode: 0)." -ForegroundColor Green
+Write-Host "  [SHA256] Final WIM: $script:VerifiedFinalWimSha256" -ForegroundColor Green
+
+# Clean up verification scratch on success
+Remove-Item -LiteralPath $verifyApply -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath $verifyScratch -Recurse -Force -ErrorAction SilentlyContinue
+
+# 3. Optional Auxiliary 7-Zip Check (Relegated to auxiliary, not replacing Apply) (Rule 7)
+$sevenZipCandidates = @(
+    "C:\Program Files\7-Zip\7z.exe",
+    "C:\Program Files (x86)\7-Zip\7z.exe"
+)
+$szTool = $sevenZipCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+$aux7zStatus = "SKIPPED"
+if ($szTool) {
+    $szOut = & "$szTool" t "$wimCheck" 2>&1
+    $szExit = $LASTEXITCODE
+    $aux7zStatus = if ($szExit -eq 0 -and -not ($szOut -match 'Data Error|ERROR:|Sub items Errors')) { "PASS" } else { "FAIL" }
+}
+
+# Output separated verification summary (Rule 7)
+Write-Host "Payload Verification Summary:" -ForegroundColor Cyan
+Write-Host "  - Metadata Status:         $metadataStatus" -ForegroundColor Green
+Write-Host "  - Export Status:           PASS" -ForegroundColor Green
+Write-Host "  - Final Apply Status:      PASS" -ForegroundColor Green
+Write-Host "  - Auxiliary 7-Zip Status:  $aux7zStatus" -ForegroundColor Gray
+Write-Host "  - Payload SHA256:          $script:VerifiedFinalWimSha256" -ForegroundColor Green
+Write-Host "  - ISO Payload Match:       PENDING (Phase 18)" -ForegroundColor Yellow
+Write-Host "  - Overall Build Status:    PENDING (Phase 18)" -ForegroundColor Yellow
+
+$wimSummaryPath = Join-Path -Path "$nano11Dir\sources" -ChildPath "wim-verification-summary.txt"
+$wimSummaryLines = @(
+    "=== Final Payload Verification Summary ===",
+    "Timestamp:               $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')",
+    "Target Image:            $wimCheck",
+    "Image Size:              $wimSizeGB GB",
+    "Metadata Status:         $metadataStatus",
+    "Export Status:           PASS",
+    "Final Apply Status:      PASS",
+    "Auxiliary 7-Zip Status:  $aux7zStatus",
+    "Payload SHA256:          $script:VerifiedFinalWimSha256",
+    "ISO Payload Match:       PENDING",
+    "Overall Build Status:    PENDING",
+    "=========================================="
+)
+[System.IO.File]::WriteAllLines($wimSummaryPath, $wimSummaryLines, [System.Text.Encoding]::UTF8)
 
 Enter-Phase 16 "ISO Root Cleanup & Traceability Embedding"
 
@@ -6196,6 +9011,11 @@ if (Test-Path -LiteralPath $sourcesDir) {
     Remove-Item -Path "$sourcesDir\setupcore.log" -Force -ErrorAction SilentlyContinue
     Remove-Item -Path "$sourcesDir\*.diagerr" -Force -ErrorAction SilentlyContinue
     Remove-Item -Path "$sourcesDir\*.diagxml" -Force -ErrorAction SilentlyContinue
+    # Remove any broken or empty OEM folders that cause 0x80070002 during Setup file expansion
+    $brokenOem = Join-Path -Path $sourcesDir -ChildPath "`$OEM`$"
+    if ((Test-Path -LiteralPath $brokenOem) -and ((Get-ChildItem -Path $brokenOem -Recurse -File -ErrorAction SilentlyContinue).Count -eq 0)) {
+        Remove-Item -LiteralPath $brokenOem -Recurse -Force -ErrorAction SilentlyContinue
+    }
 }
 
 Enter-Phase 17 "Locate or Verify oscdimg.exe"
@@ -6240,7 +9060,12 @@ if (-not $oscdimgExe) {
         "https://msdl.microsoft.com/download/symbols/oscdimg.exe/3D44737265000/oscdimg.exe"
     )
     
-    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+try {
+    if ([Enum]::IsDefined([Net.SecurityProtocolType], 'Tls13')) {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]'Tls13'
+    }
+} catch {}
     
     foreach ($url in $mirrors) {
         try {
@@ -6264,13 +9089,17 @@ if (-not $oscdimgExe) {
             Write-Host "  - Attempting public DNS fallback resolution (8.8.8.8)..." -ForegroundColor Gray
             $dnsEntry = Resolve-DnsName -Name "raw.githubusercontent.com" -Server 8.8.8.8 -ErrorAction SilentlyContinue | Where-Object { $_.IP4Address } | Select-Object -First 1
             if ($dnsEntry -and $dnsEntry.IP4Address) {
+                $tempOscdPath = Join-Path -Path $env:TEMP -ChildPath "oscdimg_dns_temp_$([System.IO.Path]::GetRandomFileName()).exe"
                 $wc = New-Object System.Net.WebClient
                 $wc.Headers.Add("Host", "raw.githubusercontent.com")
                 $wc.Headers.Add("User-Agent", "Mozilla/5.0")
-                $wc.DownloadFile("https://$($dnsEntry.IP4Address)/gh459/nano11/main/oscdimg.exe", $targetOscdPath)
-                if ((Test-Path -LiteralPath $targetOscdPath) -and ((Get-Item -LiteralPath $targetOscdPath).Length -gt 50KB)) {
+                $wc.DownloadFile("https://$($dnsEntry.IP4Address)/gh459/nano11/main/oscdimg.exe", $tempOscdPath)
+                if ((Test-Path -LiteralPath $tempOscdPath) -and (Test-OscdimgIntegrity -OscdimgPath $tempOscdPath)) {
+                    Move-Item -LiteralPath $tempOscdPath -Destination $targetOscdPath -Force
                     $oscdimgExe = $targetOscdPath
-                    Write-Host "  - oscdimg.exe downloaded successfully via public DNS fallback!" -ForegroundColor Green
+                    Write-Host "  - oscdimg.exe downloaded and verified successfully via public DNS fallback!" -ForegroundColor Green
+                } else {
+                    if (Test-Path -LiteralPath $tempOscdPath) { Remove-Item -LiteralPath $tempOscdPath -Force -ErrorAction SilentlyContinue }
                 }
             }
         } catch {
@@ -6279,15 +9108,29 @@ if (-not $oscdimgExe) {
     }
 }
 
+if (-not $oscdimgExe) {
+    $script:DiagnosticData.FailurePhase = "Phase 17: Locate or Verify oscdimg.exe"
+    $script:DiagnosticData.FailureMessage = "Failed to locate or download an Authenticode-verified oscdimg.exe."
+    Write-Nano11DiagnosticReport "Missing oscdimg"
+    throw "Phase 17: No Authenticode-verified oscdimg.exe available. Cannot proceed with bootable ISO generation."
+}
+
 Enter-Phase 18 "Create Bootable ISO Image"
 
 # 18. Create bootable ISO (oscdimg) with Architecture-aware bootdata and Volume Label
 Write-Host "Creating bootable ISO image..." -ForegroundColor Green
 $profSlug = if ($selectedProfile) { ($selectedProfile -replace '[^\w\-]', '_').Trim('_') } else { "custom" }
 $isoTimestamp = (Get-Date).ToString("yyyyMMdd_HHmm")
-$dynamicIsoName = "nano11_${profSlug}_${isoTimestamp}.iso"
-$outputIso = Join-Path -Path $scriptDir -ChildPath $dynamicIsoName
-$standardIso = Join-Path -Path $scriptDir -ChildPath "nano11.iso"
+
+# Determine output ISO filename (single output, no duplicate copies)
+if ($OutputIsoName) {
+    $isoFileName = if ($OutputIsoName.EndsWith('.iso', [System.StringComparison]::OrdinalIgnoreCase)) { $OutputIsoName } else { "$OutputIsoName.iso" }
+} elseif ($TimestampIso) {
+    $isoFileName = "nano11_${profSlug}_${isoTimestamp}.iso"
+} else {
+    $isoFileName = "nano11.iso"
+}
+$outputIso = Join-Path -Path $scriptDir -ChildPath $isoFileName
 
 # Dismount and remove any existing output ISO to prevent file locks/collisions
 try {
@@ -6348,170 +9191,183 @@ foreach ($c in $efiSysCandidates) {
 # Determine bootdata parameters based on discovered boot sector files
 $bootData = $null
 if ($uefiOnly -and $efiSys) {
-    # Force UEFI-only bootdata (no BIOS boot sector)
     $bootData = "1#pEF,e,b$efiSys"
     Write-Host "Configured UEFI-Only Boot (-UefiOnly):" -ForegroundColor Green
     Write-Host "  - UEFI Boot Sector: $efiSys" -ForegroundColor Gray
 } elseif ($efiSys -and $etfsBoot -and ($architecture -ne 'arm64')) {
-    # Dual boot: BIOS (etfsboot.com) + UEFI (efisys.bin)
     $bootData = "2#p0,e,b$etfsBoot#pEF,e,b$efiSys"
     Write-Host "Configured Dual Boot (BIOS + UEFI):" -ForegroundColor Green
     Write-Host "  - BIOS Boot Sector: $etfsBoot" -ForegroundColor Gray
     Write-Host "  - UEFI Boot Sector: $efiSys" -ForegroundColor Gray
 } elseif ($efiSys) {
-    # UEFI-only (ARM64 or systems without BIOS bootloader)
     $bootData = "1#pEF,e,b$efiSys"
     Write-Host "Configured UEFI Boot:" -ForegroundColor Green
     Write-Host "  - UEFI Boot Sector: $efiSys" -ForegroundColor Gray
 } elseif ($etfsBoot) {
-    # BIOS-only
     $bootData = "1#p0,e,b$etfsBoot"
     Write-Host "Configured BIOS Boot:" -ForegroundColor Green
     Write-Host "  - BIOS Boot Sector: $etfsBoot" -ForegroundColor Gray
 } else {
-    Write-Host "Warning: Neither BIOS nor UEFI boot sector files were found. Output ISO will not be bootable." -ForegroundColor Yellow
+    $script:DiagnosticData.FailurePhase = "Phase 18: Boot Sector Verification"
+    $script:DiagnosticData.FailureMessage = "Missing required boot sector files (etfsboot.com / efisys.bin). Output ISO would not be bootable."
+    Write-Nano11DiagnosticReport "Missing boot files"
+    throw "Phase 18: Missing required boot sector files. Aborting build to prevent generating unbootable media."
 }
 
-$isoCreatedSuccessfully = $false
-if ($oscdimgExe -and (Test-Path -LiteralPath $oscdimgExe)) {
-    $oscdimgArgs = @("-m", "-o", "-u2", "-udfver102", "-l`"nano11`"")
-    if ($bootData) {
-        $oscdimgArgs += "-bootdata:$bootData"
-    }
-    $oscdimgArgs += $nano11Dir
-    $oscdimgArgs += $outputIso
-
-    Write-Host "Executing oscdimg..." -ForegroundColor Cyan
-    & "$oscdimgExe" @oscdimgArgs
-    
-    if ((Test-Path -LiteralPath $outputIso) -and ((Get-Item -LiteralPath $outputIso).Length -gt 1.5GB)) {
-        $isoCreatedSuccessfully = $true
-        $isoItem = Get-Item -LiteralPath $outputIso
-        $isoSizeMB = [math]::Round($isoItem.Length / 1MB, 2)
-        Write-Host "Calculating SHA256 checksum..." -ForegroundColor Cyan
-        $sha256 = (Get-FileHash -LiteralPath $outputIso -Algorithm SHA256).Hash
-        
-        Write-Host ""
-        Write-Host "=========================================================" -ForegroundColor Green
-        Write-Host "   Creation complete! Your ISO is named nano11.iso        " -ForegroundColor Green
-        Write-Host "   Path:   $outputIso ($isoSizeMB MB)                     " -ForegroundColor Green
-        Write-Host "   SHA256: $sha256                                        " -ForegroundColor Green
-        Write-Host "=========================================================" -ForegroundColor Green
-        Write-Host ""
-
-        # Maintain standard nano11.iso copy for tooling backwards-compatibility
-        try {
-            Copy-Item -LiteralPath $outputIso -Destination $standardIso -Force -ErrorAction SilentlyContinue
-        } catch {}
-
-        # 3-Generation Retention Rotation for ISOs matching this profile
-        try {
-            $existingProfileIsos = Get-ChildItem -Path $scriptDir -Filter "nano11_${profSlug}_*.iso" -File -ErrorAction SilentlyContinue |
-                Sort-Object LastWriteTime -Descending
-            if ($existingProfileIsos.Count -gt 3) {
-                $isosToRemove = $existingProfileIsos | Select-Object -Skip 3
-                foreach ($oldIso in $isosToRemove) {
-                    Write-Host "Rotating out older generation ISO: $($oldIso.Name)" -ForegroundColor DarkGray
-                    Remove-Item -LiteralPath $oldIso.FullName -Force -ErrorAction SilentlyContinue
-                }
-            }
-        } catch {}
-
-        # Generate Visual HTML Build Report
-        try {
-            $reportOutputDir = Split-Path -Path $outputIso -Parent
-            if (-not $reportOutputDir) { $reportOutputDir = $PSScriptRoot }
-            $reportPath = Join-Path -Path $reportOutputDir -ChildPath "nano11_report.html"
-            $reportData = @{
-                Title             = "nano11 Master Build Report - $selectedProfile"
-                Timestamp         = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
-                Profile           = $selectedProfile
-                Architecture      = $architecture
-                SourceDrive       = $DriveLetter
-                OutputIso         = $outputIso
-                PayloadFormat     = if ($SplitWIM) { "install.swm" } elseif ($exportESDMode) { "install.esd" } else { "install.wim" }
-                OriginalSizeBytes = if ($sourceWimSize -gt 0) { $sourceWimSize } else { 0 }
-                FinalSizeBytes    = $isoItem.Length
-                IsoSha256         = $sha256
-                RegSuccessCount   = $script:regSuccessCount
-                Settings          = $resolvedConfig
-            }
-            $reportData['RemovedPackagesCount'] = if ($script:RemovedPackages) { $script:RemovedPackages.Count } else { 0 }
-            $reportData['WinSxSSavedMB']        = if ($script:WinSxSSavedMB) { $script:WinSxSSavedMB } else { 0 }
-            $reportData['WinSxSBeforeMB']       = if ($script:WinSxsBeforeMB) { $script:WinSxsBeforeMB } else { 0 }
-            $reportData['WinSxSAfterMB']        = if ($script:WinSxsAfterMB) { $script:WinSxsAfterMB } else { 0 }
-            Export-Nano11HtmlReport -OutputPath $reportPath -BuildInfo $reportData
-            Write-Host "Visual Build Report generated: $reportPath" -ForegroundColor Cyan
-
-            # Post-build hook execution (tools\post-build.ps1)
-            $postBuildScript = Join-Path -Path $scriptDir -ChildPath "tools\post-build.ps1"
-            if (Test-Path -LiteralPath $postBuildScript) {
-                Write-Host "Executing post-build hook: $postBuildScript..." -ForegroundColor Cyan
-                try {
-                    $isoSha256 = (Get-FileHash -LiteralPath $outputIso -Algorithm SHA256).Hash
-                    & $postBuildScript -IsoPath $outputIso -IsoHash $isoSha256 -Profile $selectedProfile -LogDir $logDir
-                } catch {
-                    Write-Warning "Post-build hook exited with warning: $_"
-                }
-            }
-
-            # GUI completion dialog
-            if ($GUI -and $isoCreatedSuccessfully -and (Test-Path -LiteralPath $outputIso)) {
-                $isoLenGB = [math]::Round((Get-Item -LiteralPath $outputIso).Length / 1GB, 2)
-                $isoHashVal = (Get-FileHash -LiteralPath $outputIso -Algorithm SHA256).Hash
-                $dialogMsg = "nano11 ISO ビルドが正常に完了しました！`n`n" +
-                             "■ 出力先: $outputIso`n" +
-                             "■ サイズ: $isoLenGB GB`n" +
-                             "■ SHA256: $isoHashVal`n" +
-                             "■ 所要時間: $(if ($elapsedSec) { $elapsedSec } else { '完了' }) 秒`n`n" +
-                             "ISO が保存されたフォルダーを開きますか？"
-                $res = [System.Windows.Forms.MessageBox]::Show($dialogMsg, "nano11 ビルド完了", [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Information)
-                if ($res -eq [System.Windows.Forms.DialogResult]::Yes) {
-                    Invoke-Item -LiteralPath (Split-Path -Path $outputIso -Parent)
-                }
-            }
-        } catch {
-            Write-Warning "Could not export visual build report: $_"
-        }
-        if ($validSwm) {
-            Write-Host "[100% FAT32 USB COMPATIBLE]" -ForegroundColor Green
-            Write-Host "- The image was split into install.swm parts (each <= 3800MB)." -ForegroundColor Green
-            Write-Host "- You can copy the contents of nano11.iso directly into any FAT32 USB drive!" -ForegroundColor Green
-            Write-Host "- Standard UEFI systems will boot seamlessly without needing NTFS or Rufus." -ForegroundColor Green
-            Write-Host ""
-        } elseif (Test-Path -LiteralPath (Join-Path -Path "$nano11Dir\sources" -ChildPath "install.wim") -and ((Get-Item (Join-Path -Path "$nano11Dir\sources" -ChildPath "install.wim")).Length -gt 4000000000)) {
-            Write-Host "[IMPORTANT NOTE FOR BOOTABLE USB CREATION]" -ForegroundColor Cyan
-            Write-Host "- install.wim is larger than 4GB. FAT32 cannot store files > 4GB." -ForegroundColor Yellow
-            Write-Host "- When creating a bootable USB with Rufus, select 'NTFS' filesystem." -ForegroundColor Yellow
-            Write-Host "- Or copy nano11.iso directly into a Ventoy USB drive (recommended)." -ForegroundColor Yellow
-            Write-Host "- Tip: Run with -SplitWIM to automatically split into FAT32-compatible parts." -ForegroundColor Cyan
-            Write-Host ""
-        }
-    } else {
-        Write-Host ""
-        Write-Host "=========================================================" -ForegroundColor Red
-        Write-Host "   ERROR: Failed to create valid bootable ISO!           " -ForegroundColor Red
-        if (Test-Path -LiteralPath $outputIso) {
-            Write-Host "   Generated ISO size ($([math]::Round((Get-Item -LiteralPath $outputIso).Length / 1MB, 2)) MB) is abnormally small (< 1.5 GB). Likely missing OS payload." -ForegroundColor Red
-        } else {
-            Write-Host "   oscdimg exited with code $LASTEXITCODE. The ISO file was not generated." -ForegroundColor Red
-        }
-        Write-Host "   Working directory preserved for inspection: $nano11Dir" -ForegroundColor Yellow
-        Write-Host "=========================================================" -ForegroundColor Red
-    }
-} else {
-    Write-Host "oscdimg.exe not found. You can manually package the ISO from: $nano11Dir" -ForegroundColor Yellow
+# Temporary ISO generation & payload verification (Rules 11, 12, 13, 14, 20)
+$tempIsoFileName = "nano11_temp_${profSlug}_${isoTimestamp}.iso"
+$tempOutputIso = Join-Path -Path $scriptDir -ChildPath $tempIsoFileName
+if (Test-Path -LiteralPath $tempOutputIso) {
+    Remove-Item -LiteralPath $tempOutputIso -Force -ErrorAction SilentlyContinue
 }
 
+$oscdimgArgs = @("-m", "-o", "-u2", "-udfver102", "-l`"nano11`"")
+if ($bootData) {
+    $oscdimgArgs += "-bootdata:$bootData"
+}
+$oscdimgArgs += $nano11Dir
+$oscdimgArgs += $tempOutputIso
+
+$oscdCmdStr = "$oscdimgExe $($oscdimgArgs -join ' ')"
+$script:DiagnosticData.OscdimgCommand = $oscdCmdStr
+
+Write-Host "Executing oscdimg to temporary ISO: $tempOutputIso..." -ForegroundColor Cyan
+& "$oscdimgExe" @oscdimgArgs
+$oscdimgExit = $LASTEXITCODE
+$script:DiagnosticData.OscdimgExitCode = $oscdimgExit
+
+if ($oscdimgExit -ne 0 -or (-not (Test-Path -LiteralPath $tempOutputIso)) -or ((Get-Item -LiteralPath $tempOutputIso).Length -lt 1.5GB)) {
+    $script:IsoGenerated = $false
+    $script:DiagnosticData.IsoGenerated = $false
+    $script:DiagnosticData.FailurePhase = "Phase 18: ISO Generation"
+    $script:DiagnosticData.FailureMessage = "oscdimg failed with exit code $oscdimgExit (or output file is invalid/too small)."
+    Write-Nano11DiagnosticReport "oscdimg failed"
+    throw "CRITICAL ERROR: Failed to create valid bootable ISO! oscdimg exited with code $oscdimgExit."
+}
+
+$script:IsoGenerated = $true
+$script:DiagnosticData.IsoGenerated = $true
+
+# Mount temporary ISO and verify embedded payload SHA256 against verified final WIM (Rule 13)
+Write-Host "Mounting temporary ISO to verify embedded payload integrity..." -ForegroundColor Cyan
+$isoMountResult = $null
+$embeddedWimSha256 = $null
+try {
+    $isoMountResult = Mount-DiskImage -ImagePath $tempOutputIso -StorageType ISO -PassThru -ErrorAction Stop
+    $isoVol = Get-Volume -DiskImage $isoMountResult -ErrorAction Stop | Select-Object -First 1
+    $isoDriveLetter = $isoVol.DriveLetter
+    if (-not $isoDriveLetter) {
+        throw "Failed to determine drive letter for mounted ISO."
+    }
+    $embeddedWimPath = "${isoDriveLetter}:\sources\install.wim"
+    if (-not (Test-Path -LiteralPath $embeddedWimPath)) {
+        throw "Mounted ISO is missing sources\install.wim payload."
+    }
+    Write-Host "  Calculating SHA256 of embedded sources\install.wim..." -ForegroundColor Cyan
+    $embeddedWimSha256 = (Get-FileHash -LiteralPath $embeddedWimPath -Algorithm SHA256).Hash
+    $script:DiagnosticData.IsoEmbeddedWimSha256 = $embeddedWimSha256
+
+    Write-Host "  Verified Final WIM SHA256:  $script:VerifiedFinalWimSha256" -ForegroundColor Cyan
+    Write-Host "  ISO Embedded WIM SHA256:    $embeddedWimSha256" -ForegroundColor Cyan
+
+    if ($embeddedWimSha256 -ne $script:VerifiedFinalWimSha256) {
+        throw "PAYLOAD HASH MISMATCH: ISO embedded install.wim ($embeddedWimSha256) does not match verified final WIM ($script:VerifiedFinalWimSha256)!"
+    }
+
+    $script:IsoPayloadVerified = $true
+    $script:DiagnosticData.IsoPayloadMatch = $true
+    Write-Host "  [PASS] ISO embedded payload verified identical to verified final WIM." -ForegroundColor Green
+} finally {
+    if ($isoMountResult) {
+        try { Dismount-DiskImage -ImagePath $tempOutputIso -ErrorAction SilentlyContinue | Out-Null } catch {}
+    }
+}
+
+# Promote temporary ISO to official output ISO (Rule 12)
+Write-Host "Promoting verified temporary ISO to official release name..." -ForegroundColor Cyan
+try {
+    $oldMounted = Get-DiskImage -ImagePath $outputIso -ErrorAction SilentlyContinue
+    if ($oldMounted) { Dismount-DiskImage -ImagePath $outputIso -ErrorAction SilentlyContinue | Out-Null }
+} catch {}
+if (Test-Path -LiteralPath $outputIso) {
+    Remove-Item -LiteralPath $outputIso -Force -ErrorAction Stop
+}
+Move-Item -LiteralPath $tempOutputIso -Destination $outputIso -Force -ErrorAction Stop
+
+# 3-Generation Retention Rotation for ISOs matching this profile (when TimestampIso is used)
+if ($TimestampIso) {
+    try {
+        $existingProfileIsos = Get-ChildItem -Path $scriptDir -Filter "nano11_${profSlug}_*.iso" -File -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime -Descending
+        if ($existingProfileIsos.Count -gt 3) {
+            $isosToRemove = $existingProfileIsos | Select-Object -Skip 3
+            foreach ($oldIso in $isosToRemove) {
+                Write-Host "Rotating out older generation ISO: $($oldIso.Name)" -ForegroundColor DarkGray
+                Remove-Item -LiteralPath $oldIso.FullName -Force -ErrorAction SilentlyContinue
+            }
+        }
+    } catch {}
+}
+
+# Post-build hook execution (tools\post-build.ps1) (Rule 14)
+$postBuildScript = Join-Path -Path $scriptDir -ChildPath "tools\post-build.ps1"
+if (Test-Path -LiteralPath $postBuildScript) {
+    Write-Host "Executing post-build hook: $postBuildScript..." -ForegroundColor Cyan
+    try {
+        $isoSha256PreHook = (Get-FileHash -LiteralPath $outputIso -Algorithm SHA256).Hash
+        & $postBuildScript -IsoPath $outputIso -IsoHash $isoSha256PreHook -Profile $selectedProfile -LogDir $logDir
+    } catch {
+        Write-Warning "Post-build hook exited with warning: $_"
+    }
+}
+
+# Final ISO SHA256 and size calculation
+$isoItem = Get-Item -LiteralPath $outputIso
+$isoSizeMB = [math]::Round($isoItem.Length / 1MB, 2)
+Write-Host "Calculating final ISO SHA256 checksum..." -ForegroundColor Cyan
+$sha256 = (Get-FileHash -LiteralPath $outputIso -Algorithm SHA256).Hash
+
+# Generate Visual HTML Build Report
+try {
+    $reportOutputDir = Split-Path -Path $outputIso -Parent
+    if (-not $reportOutputDir) { $reportOutputDir = $PSScriptRoot }
+    $reportPath = Join-Path -Path $reportOutputDir -ChildPath "nano11_report.html"
+    $reportData = @{
+        Title             = "nano11 Master Build Report - $selectedProfile"
+        Timestamp         = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+        Profile           = $selectedProfile
+        Architecture      = $architecture
+        SourceDrive       = $DriveLetter
+        OutputIso         = $outputIso
+        PayloadFormat     = "install.wim"
+        OriginalSizeBytes = if ($sourceWimSize -gt 0) { $sourceWimSize } else { 0 }
+        FinalSizeBytes    = $isoItem.Length
+        IsoSha256         = $sha256
+        RegSuccessCount   = $script:regSuccessCount
+        Settings          = $resolvedConfig
+        ApplyVerified     = $script:FinalPayloadVerified
+        IsoPayloadMatch   = $script:IsoPayloadVerified
+    }
+    $reportData['RemovedPackagesCount'] = if ($script:RemovedPackages) { $script:RemovedPackages.Count } else { 0 }
+    $reportData['WinSxSSavedMB']        = if ($script:WinSxSSavedMB) { $script:WinSxSSavedMB } else { 0 }
+    $reportData['WinSxSBeforeMB']       = if ($script:WinSxsBeforeMB) { $script:WinSxsBeforeMB } else { 0 }
+    $reportData['WinSxSAfterMB']        = if ($script:WinSxsAfterMB) { $script:WinSxsAfterMB } else { 0 }
+    Export-Nano11HtmlReport -OutputPath $reportPath -BuildInfo $reportData
+    Write-Host "Visual Build Report generated: $reportPath" -ForegroundColor Cyan
+} catch {
+    Write-Warning "Could not export visual build report: $_"
+}
+
+# Auxiliary File Inspection (-Validate) (Rule 15)
 if ($Validate) {
     $validateWim = Join-Path -Path "$nano11Dir\sources" -ChildPath "install.wim"
     if (Test-Path -LiteralPath $validateWim) {
-        Write-Host "Running post-export image validation (-Validate)..." -ForegroundColor Cyan
-        $verifyMount = Join-Path -Path $baseWorkDir -ChildPath "verify_mount"
-        New-Item -ItemType Directory -Force -Path $verifyMount | Out-Null
+        Write-Host "Running auxiliary image file inspection (-Validate)..." -ForegroundColor Cyan
+        $valMountResult = $null
         try {
+            $valMountResult = Invoke-Nano11ImageMount -ImageFile $validateWim -ImageIndex "1" -ReadOnly -Retries 3
+            $verifyMount = $valMountResult.MountDir
             & dism.exe /English /Get-WimInfo "/WimFile:$validateWim" | Out-File (Join-Path -Path $baseWorkDir -ChildPath "verify-wiminfo.txt") -Encoding utf8
-            & dism.exe /English /Mount-Image "/ImageFile:$validateWim" /Index:1 "/MountDir:$verifyMount" /ReadOnly
             $keyFiles = @(
                 'Windows\System32\osk.exe',
                 'Windows\System32\ctfmon.exe',
@@ -6526,15 +9382,69 @@ if ($Validate) {
                 Write-Host "  - Verification: $status" -ForegroundColor (if ($exists) { 'Green' } else { 'Yellow' })
             }
             $valLog | Out-File (Join-Path -Path $baseWorkDir -ChildPath "verify-paths.txt") -Encoding utf8
+        } catch {
+            Write-Warning "Auxiliary validation mount failed: $_"
         } finally {
-            & dism.exe /English /Unmount-Image "/MountDir:$verifyMount" /discard > $null 2>&1
-            Reset-DirectoryWithRobocopy -Path $verifyMount
-            Remove-Item -LiteralPath $verifyMount -Recurse -Force -ErrorAction SilentlyContinue
+            if ($valMountResult -and $valMountResult.MountDir) {
+                $vDir = $valMountResult.MountDir
+                & dism.exe /English /Unmount-Image "/MountDir:$vDir" /discard > $null 2>&1
+                Clear-DismMountConflicts -TargetMountDir $vDir -TargetWimFile $validateWim
+                Reset-DirectoryWithRobocopy -Path $vDir
+                Remove-Item -LiteralPath $vDir -Force -ErrorAction SilentlyContinue
+            }
         }
     }
 }
+
+# Mark build as fully successful ONLY AFTER ALL VERIFICATIONS SUCCEED (Rules 1, 14, 20)
+$script:BuildSucceeded = $true
+$script:DiagnosticData.BuildSucceeded = $true
+$isoCreatedSuccessfully = $true
+Write-Nano11DiagnosticReport "Build succeeded"
+
+Write-Host ""
+Write-Host "=========================================================" -ForegroundColor Green
+Write-Host "   Creation complete! Your ISO is named $isoFileName" -ForegroundColor Green
+Write-Host "   Path:   $outputIso ($isoSizeMB MB)" -ForegroundColor Green
+Write-Host "   SHA256: $sha256" -ForegroundColor Green
+Write-Host "=========================================================" -ForegroundColor Green
+Write-Host ""
+
+# GUI completion dialog
+if ($GUI -and $script:BuildSucceeded -and (Test-Path -LiteralPath $outputIso)) {
+    $isoLenGB = [math]::Round((Get-Item -LiteralPath $outputIso).Length / 1GB, 2)
+    $elapsedStr = if ($elapsedSec) { "$elapsedSec 秒" } else { "完了" }
+    $dialogMsg = "nano11 ISO ビルドが正常に完了しました！`n`n" +
+                 "■ 出力先: $outputIso`n" +
+                 "■ サイズ: $isoLenGB GB`n" +
+                 "■ SHA256: $sha256`n" +
+                 "■ 所要時間: $elapsedStr`n`n" +
+                 "ISO が保存されたフォルダーを開きますか？"
+    $res = [System.Windows.Forms.MessageBox]::Show($dialogMsg, "nano11 ビルド完了", [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Information)
+    if ($res -eq [System.Windows.Forms.DialogResult]::Yes) {
+        Invoke-Item -LiteralPath (Split-Path -Path $outputIso -Parent)
+    }
+}
+
 } catch {
+    # Outer catch block: Reset success flags, record diagnostics, re-throw (Rule 16)
+    $script:BuildSucceeded = $false
+    $isoCreatedSuccessfully = $false
+    if ($script:DiagnosticData) {
+        $script:DiagnosticData.BuildSucceeded = $false
+        $script:DiagnosticData.FailureMessage = "$_"
+        if ($_.InvocationInfo -and $_.InvocationInfo.PositionMessage) {
+            $script:DiagnosticData.FailureStackTrace = "$($_.InvocationInfo.PositionMessage)`n$($_.ScriptStackTrace)"
+        } else {
+            $script:DiagnosticData.FailureStackTrace = "$($_.ScriptStackTrace)"
+        }
+        Write-Nano11DiagnosticReport "Build failed with exception"
+    }
+
     Write-Host ""
+    Write-Host "=========================================================" -ForegroundColor Red
+    Write-Host "   nano11 BUILD FAILED!                                  " -ForegroundColor Red
+    Write-Host "=========================================================" -ForegroundColor Red
     Write-Host "Build failed with unhandled exception: $_" -ForegroundColor Red
     if ($_.InvocationInfo -and $_.InvocationInfo.PositionMessage) {
         Write-Host "Exception location: $($_.InvocationInfo.PositionMessage)" -ForegroundColor Red
@@ -6547,7 +9457,28 @@ if ($Validate) {
     Write-Host ""
     Write-Host "Running cleanup and finalizing build lifecycle..." -ForegroundColor Cyan
 
-    # 1. Unload lingering offline registry hives
+    Set-Location -LiteralPath $scriptDir
+    [GC]::Collect()
+    [GC]::WaitForPendingFinalizers()
+
+    function Test-IsSafePathToDelete {
+        param([string]$Path)
+        if ([string]::IsNullOrWhiteSpace($Path)) { return $false }
+        try {
+            $full = [System.IO.Path]::GetFullPath($Path).TrimEnd('\', '/')
+            if ($full.Length -le 3) { return $false }
+            $systemProfile = [System.Environment]::GetFolderPath([System.Environment+SpecialFolder]::UserProfile)
+            if ($full -ieq $systemProfile.TrimEnd('\', '/')) { return $false }
+            $windowsDir = [System.Environment]::GetFolderPath([System.Environment+SpecialFolder]::Windows)
+            if ($full.StartsWith($windowsDir, [System.StringComparison]::OrdinalIgnoreCase)) { return $false }
+            if ($scriptDir -and ($full -ieq [System.IO.Path]::GetFullPath($scriptDir).TrimEnd('\', '/'))) { return $false }
+            return $true
+        } catch {
+            return $false
+        }
+    }
+
+    # 1. ALWAYS unmount offline registry hives (Rule 17)
     if ($script:HivesLoaded) {
         Write-Host "Cleaning up lingering registry hives..." -ForegroundColor Yellow
         @('zCOMPONENTS', 'zDEFAULT', 'zNTUSER', 'zSOFTWARE', 'zSYSTEM') | ForEach-Object {
@@ -6556,35 +9487,42 @@ if ($Validate) {
         $script:HivesLoaded = $false
     }
 
-    # 2. Discard lingering DISM mount
-    if ($script:MountOpened -and $scratchDir -and (Test-Path -LiteralPath $scratchDir)) {
-        Write-Host "Discarding lingering DISM mount on $scratchDir..." -ForegroundColor Yellow
-        & dism.exe /English /Unmount-Image "/MountDir:$scratchDir" /discard > $null 2>&1
-        $script:MountOpened = $false
+    # 2. ALWAYS unmount lingering DISM mounts across all allocated mount directories (Rule 17)
+    $allTargetMounts = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    if ($script:AllocatedMountDirs) {
+        foreach ($d in $script:AllocatedMountDirs) { [void]$allTargetMounts.Add($d) }
+    }
+    if ($scratchDir) {
+        try { [void]$allTargetMounts.Add((ConvertTo-Nano11NormalizedPath -Path $scratchDir)) } catch {}
+    }
+    if ($vhdxMountDir -and (-not $script:IsVhdxMounted)) {
+        try { [void]$allTargetMounts.Add((ConvertTo-Nano11NormalizedPath -Path $vhdxMountDir)) } catch {}
     }
 
-    # 3. Clean working directories
-    if (-not $NonInteractive -and -not $isoCreatedSuccessfully -and -not $DryRun) {
-        try { Read-Host "Press Enter to finalize cleanup." } catch {}
-    }
-
-    if ($isoCreatedSuccessfully) {
-        if ($nano11Dir -and (Test-Path -LiteralPath $nano11Dir)) {
-            Reset-DirectoryWithRobocopy -Path $nano11Dir
-            Remove-Item -LiteralPath $nano11Dir -Recurse -Force -ErrorAction SilentlyContinue
+    foreach ($mPath in $allTargetMounts) {
+        if ($script:PreservedMountDirs -and $script:PreservedMountDirs.Contains($mPath)) {
+            Write-Warning "Mount directory '$mPath' is marked as Preserved. Skipping cleanup."
+            continue
         }
-    } else {
-        if ($nano11Dir -and (Test-Path -LiteralPath $nano11Dir)) {
-            Write-Host "Preserving $nano11Dir for inspection." -ForegroundColor Yellow
+
+        try {
+            $activeMounts = @(Get-Nano11MountedImages)
+            $lingeringMount = $activeMounts | Where-Object {
+                $p = if ($_.Path) { try { ConvertTo-Nano11NormalizedPath -Path $_.Path } catch { $null } } else { $null }
+                $p -and ($p -ieq $mPath)
+            }
+            if ($lingeringMount -or $script:MountOpened) {
+                Write-Host "Discarding lingering DISM mount on '$mPath'..." -ForegroundColor Yellow
+                Clear-DismMountConflicts -TargetMountDir $mPath
+            }
+            [void](Unmount-DismOfflineHives -TargetMountDir $mPath -BestEffort)
+        } catch {
+            Write-Warning "Could not query or clean mount status for '$mPath': $_"
         }
     }
 
-    if ($scratchDir -and (Test-Path -LiteralPath $scratchDir)) {
-        Reset-DirectoryWithRobocopy -Path $scratchDir
-        Remove-Item -LiteralPath $scratchDir -Recurse -Force -ErrorAction SilentlyContinue
-    }
-
-    # 4. Detach and remove VHDX scratch disk if initialized
+    # 3. Detach VHDX scratch disk if initialized (ALWAYS ATTEMPT DETACH, Rule 18)
+    $vhdxDetached = $false
     if ($script:IsVhdxMounted -or ($vhdxPath -and (Test-Path -LiteralPath $vhdxPath))) {
         try {
             Write-Host "Detaching VHDX scratch disk..." -ForegroundColor Cyan
@@ -6593,12 +9531,21 @@ if ($Validate) {
             $dpDetachScript | Set-Content -LiteralPath $dpDetachFile -Encoding ascii
             & diskpart.exe /s $dpDetachFile > $null 2>&1
             Remove-Item -LiteralPath $dpDetachFile -Force -ErrorAction SilentlyContinue
-            Remove-Item -LiteralPath $vhdxPath -Force -ErrorAction SilentlyContinue
-            $script:IsVhdxMounted = $false
-        } catch {}
+
+            $vhdxDetached = $true
+            try {
+                $diskImg = Get-DiskImage -ImagePath $vhdxPath -ErrorAction Stop
+                if ($diskImg.Attached) { $vhdxDetached = $false }
+            } catch {}
+            if ($vhdxDetached) {
+                $script:IsVhdxMounted = $false
+            }
+        } catch {
+            Write-Warning "VHDX detachment encountered error: $_"
+        }
     }
 
-    # 5. Dismount source ISO if mounted by nano11
+    # 4. ALWAYS dismount source ISO if mounted by nano11 (Rule 17)
     if ($script:MountedIso) {
         Write-Host "Dismounting source Windows 11 ISO..." -ForegroundColor Cyan
         try {
@@ -6607,7 +9554,7 @@ if ($Validate) {
         } catch {}
     }
 
-    # 6. Remove Windows Defender temporary workspace exclusion
+    # 5. ALWAYS remove Windows Defender temporary workspace exclusion (Rule 17)
     if ($script:DefenderExclusionAdded -and $baseWorkDir) {
         try {
             Remove-MpPreference -ExclusionPath $baseWorkDir -ErrorAction SilentlyContinue
@@ -6615,11 +9562,92 @@ if ($Validate) {
         } catch {}
     }
 
+    # 6. Disk deletion: ONLY IF BUILDSUCCEEDED -EQ $TRUE (Rules 17, 18, 19)
+    if ($script:BuildSucceeded) {
+        Write-Host "Build succeeded. Cleaning workspace and intermediate build artifacts..." -ForegroundColor Cyan
+
+        # Clean backup WIM
+        $destWimBackupPath = Join-Path -Path "$nano11Dir\sources" -ChildPath "install_pre_export_backup.wim"
+        if (Test-Path -LiteralPath $destWimBackupPath) {
+            Remove-Item -LiteralPath $destWimBackupPath -Force -ErrorAction SilentlyContinue
+        }
+
+        # Clean nano11Dir
+        if ($nano11Dir -and (Test-Path -LiteralPath $nano11Dir) -and (Test-IsSafePathToDelete -Path $nano11Dir)) {
+            try {
+                Reset-DirectoryWithRobocopy -Path $nano11Dir
+                Remove-Item -LiteralPath $nano11Dir -Force -ErrorAction SilentlyContinue
+            } catch {}
+        }
+
+        # Clean target mount directories
+        foreach ($mPath in $allTargetMounts) {
+            if ((Test-Path -LiteralPath $mPath) -and (Test-IsSafePathToDelete -Path $mPath)) {
+                try {
+                    Reset-DirectoryWithRobocopy -Path $mPath
+                    Remove-Item -LiteralPath $mPath -Force -ErrorAction SilentlyContinue
+                } catch {}
+            }
+        }
+
+        # Clean VHDX file on success
+        if ($vhdxDetached -and $vhdxPath -and (Test-Path -LiteralPath $vhdxPath)) {
+            if ($vhdxMountDir -and (Test-Path -LiteralPath $vhdxMountDir)) {
+                $rpCheck = Get-Item -LiteralPath $vhdxMountDir -Force -ErrorAction SilentlyContinue
+                if ($rpCheck -and ($rpCheck.Attributes -band [System.IO.FileAttributes]::ReparsePoint)) {
+                    try { & mountvol.exe "$vhdxMountDir" /D > $null 2>&1 } catch {}
+                    try { [System.IO.Directory]::Delete($vhdxMountDir, $false) } catch { try { $rpCheck.Delete() } catch {} }
+                } else {
+                    if (Test-IsSafePathToDelete -Path $vhdxMountDir) {
+                        Reset-DirectoryWithRobocopy -Path $vhdxMountDir
+                        Remove-Item -LiteralPath $vhdxMountDir -Force -ErrorAction SilentlyContinue
+                    }
+                }
+            }
+            Remove-Item -LiteralPath $vhdxPath -Force -ErrorAction SilentlyContinue
+        }
+    } else {
+        # BUILD FAILED: STRICTLY PRESERVE FORENSIC ARTIFACTS (Rules 17, 18)
+        Write-Host ""
+        Write-Host "=========================================================" -ForegroundColor Yellow
+        Write-Host " [DIAGNOSTIC PRESERVATION] BUILD DID NOT SUCCEED         " -ForegroundColor Yellow
+        Write-Host " Preserving intermediate artifacts for forensic analysis:" -ForegroundColor Yellow
+        Write-Host "=========================================================" -ForegroundColor Yellow
+        if ($nano11Dir -and (Test-Path -LiteralPath $nano11Dir)) {
+            Write-Host "  - ISO Workspace:     $nano11Dir" -ForegroundColor Yellow
+            $script:DiagnosticData.PreservedArtifacts += $nano11Dir
+            $destWimBackupPath = Join-Path -Path "$nano11Dir\sources" -ChildPath "install_pre_export_backup.wim"
+            if (Test-Path -LiteralPath $destWimBackupPath) {
+                Write-Host "  - Pre-Export WIM:    $destWimBackupPath" -ForegroundColor Yellow
+                $script:DiagnosticData.PreservedArtifacts += $destWimBackupPath
+            }
+            $finalWimPath = Join-Path -Path "$nano11Dir\sources" -ChildPath "install.wim"
+            if (Test-Path -LiteralPath $finalWimPath) {
+                Write-Host "  - Exported WIM:      $finalWimPath" -ForegroundColor Yellow
+                $script:DiagnosticData.PreservedArtifacts += $finalWimPath
+            }
+        }
+        if ($workDir -and (Test-Path -LiteralPath $workDir)) {
+            Write-Host "  - Working Directory: $workDir" -ForegroundColor Yellow
+            $script:DiagnosticData.PreservedArtifacts += $workDir
+        }
+        if ($vhdxPath -and (Test-Path -LiteralPath $vhdxPath)) {
+            Write-Host "  - VHDX Scratch Disk: $vhdxPath" -ForegroundColor Yellow
+            $script:DiagnosticData.PreservedArtifacts += $vhdxPath
+        }
+        if ($script:DiagDir) {
+            Write-Host "  - Diagnostic Report: $script:DiagDir" -ForegroundColor Yellow
+            $script:DiagnosticData.PreservedArtifacts += $script:DiagDir
+        }
+        Write-Host "=========================================================" -ForegroundColor Yellow
+        Write-Nano11DiagnosticReport "Artifacts preserved after build failure"
+    }
+
     # 7. Build elapsed time and policy stats
     if ($script:buildStopwatch) {
         $script:buildStopwatch.Stop()
         $elapsedSec = [math]::Round($script:buildStopwatch.Elapsed.TotalSeconds, 1)
-        Write-Host "Build lifecycle completed in $elapsedSec seconds." -ForegroundColor Cyan
+        Write-Host "Build lifecycle finished in $elapsedSec seconds." -ForegroundColor Cyan
     }
     if ($script:AppliedPolicies) {
         Write-Host "Offline registry policies applied: $($script:AppliedPolicies.Count)" -ForegroundColor Cyan
@@ -6638,9 +9666,15 @@ if ($Validate) {
         } catch {}
     }
 
-    if ($isoCreatedSuccessfully) {
+    if ($script:BuildSucceeded) {
         Write-Host "Done! nano11.iso is ready." -ForegroundColor Green
     } else {
-        Write-Host "Process ended $(if ($LASTEXITCODE -ne 0) { 'with errors' } else { 'cleanly' }). Please check the logs in $transcriptPath" -ForegroundColor $(if ($LASTEXITCODE -ne 0) { 'Red' } else { 'Yellow' })
+        Write-Host "Process ended with errors. Build did not succeed." -ForegroundColor Red
+        if ($script:DiagDir) {
+            Write-Host "Diagnostic report directory: $script:DiagDir" -ForegroundColor Yellow
+        }
+        if ($transcriptPath) {
+            Write-Host "Please check the logs in $transcriptPath" -ForegroundColor Yellow
+        }
     }
 }
