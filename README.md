@@ -65,11 +65,11 @@ The goal of nano11 is to automate the creation of a streamlined Windows 11 image
   - **High-Speed Stable LZX install.wim Export & Setup Error 0x8007000D Fix**: Defaults to rock-solid LZX `/Compress:max` export to `sources\install.wim` (exports in ~20 seconds), preventing the known Windows 11 24H2 DISM `WIMGAPI.DLL` crash (`0xc0000005`) that occurred during LZMS solid recovery compression. Eliminates the critical bug where a crashed 208-byte `install.esd` remnant caused the valid `install.wim` to be deleted, which resulted in Windows Setup error `0x8007000D - 0x4002C` (ERROR_INVALID_DATA). Includes strict payload (> 1 GB) and ISO (> 1.5 GB) size validation, with an optional `-ExportESD` flag for systems that support solid LZMS export.
   - **Zero Setup-Breaking Hacks**: Strictly keeps `winre.wim` intact during offline build (preventing `0x80070002` SafeOS staging failures) and keeps `boot.wim` under LZX `/Compress:max` (avoiding `0xc0000001` unbootable media), with CBS component integrity guaranteed via official DISM `StartComponentCleanup /ResetBase`.
 - **🚫 Safe Debloat & Suppression of Target Components**:
-  - **Windows Backup (Windows バックアップ)**: Complete policy suppression (`DisableBackupRestore = 1`, `DisableCloudBackup = 1`, `DisableConsumerAccountStateContent = 1`), `AppListBackup` scheduled task removal, and concealment from Settings (`hide:backup`). Avoids breaking `Client.CBS` system dependencies.
-  - **Windows Security & Defender (Windows セキュリティ)**: Services disabled (`WinDefend`, `WdNisSvc`, `SecurityHealthService` = 4), real-time protection and antispyware policies enforced, startup system tray entry (`SecurityHealth`) removed, and settings page hidden (`hide:virus`).
-  - **Accessibility (アクセシビリティ: 音声アクセス / 拡大鏡 / スクリーンキーボード / ナレーター / ライブキャプション)**: Preserves essential binaries (`osk.exe`, `Narrator.exe`, `magnify.exe`) in `System32` during setup to ensure 100% OOBE pass stability, while hotkeys (Win+Enter, 5x Shift StickyKeys, FilterKeys, ToggleKeys), auto-launch flags, and settings pages are suppressed. Post-OOBE IFEO redirection is safely applied in `FirstLogon.ps1` to prevent any execution on the desktop.
-  - **Get Started / Tips (はじめに)**: Fully removed offline via DISM `Remove-AppxProvisionedPackage` with fallback cleanup across all user accounts in `FirstLogon.ps1`, coupled with `DisableSoftLanding` promotional suppression.
-  - **🔄 OOBE Boot Loop & Setup Crash Fixed**: Solved the infinite boot loop at the "Please wait" ("お待ちください") screen. Root causes fully resolved:
+  - **Windows Backup**: Complete policy suppression (`DisableBackupRestore = 1`, `DisableCloudBackup = 1`, `DisableConsumerAccountStateContent = 1`), `AppListBackup` scheduled task removal, and concealment from Settings (`hide:backup`). Avoids breaking `Client.CBS` system dependencies.
+  - **Windows Security & Defender**: Services disabled (`WinDefend`, `WdNisSvc`, `SecurityHealthService` = 4), real-time protection and antispyware policies enforced, startup system tray entry (`SecurityHealth`) removed, and settings page hidden (`hide:virus`).
+  - **Accessibility (Voice Access / Magnifier / On-Screen Keyboard / Narrator / Live Captions)**: Preserves essential binaries (`osk.exe`, `Narrator.exe`, `magnify.exe`) in `System32` during setup to ensure 100% OOBE pass stability, while hotkeys (Win+Enter, 5x Shift StickyKeys, FilterKeys, ToggleKeys), auto-launch flags, and settings pages are suppressed. Post-OOBE IFEO redirection is safely applied in `FirstLogon.ps1` to prevent any execution on the desktop.
+  - **Get Started / Tips**: Fully removed offline via DISM `Remove-AppxProvisionedPackage` with fallback cleanup across all user accounts in `FirstLogon.ps1`, coupled with `DisableSoftLanding` promotional suppression.
+  - **🔄 OOBE Boot Loop & Setup Crash Fixed**: Solved the infinite boot loop at the "Please wait" screen. Root causes fully resolved:
     - **WebView2 Runtime Preserved**: Preserved `C:\Windows\System32\Microsoft-Edge-WebView` and its WinSxS packages. Windows 11 OOBE (`CloudExperienceHost`, `msoobe.exe`) strictly requires the embedded WebView2 runtime to render setup interfaces; removing it crashed OOBE on launch. Edge browser UI (`Program Files (x86)\Microsoft\Edge`) is still cleanly removed.
     - **Reboot Loop Trap Removed (`ErrorHandler.cmd`)**: Completely eliminated `ErrorHandler.cmd` and `ChildCompletion` registry overrides from the unattended answer file, preventing reboot loops and allowing Windows Setup to proceed naturally without interference.
     - **Core Accessibility Binaries Retained**: Preserves essential accessibility binaries (`osk.exe`, `Narrator.exe`, `magnify.exe`) in `System32` to prevent handle exceptions during OOBE Ease of Access subsystem initialization.
@@ -229,7 +229,7 @@ The modern dark-mode GUI allows you to:
    .\nano11builder.ps1
    ```
 4. Choose a profile preset from the quick selector menu (`[1] Extreme`, `[2] Balanced`, `[3] Handheld Gaming`, `[4] VM Developer`, `[5] Audio DAW`, `[6] FAT32 Split-WIM`, `[7] Launch GUI`, `[8] Custom`), or customize settings step-by-step.
-5. Once `nano11.iso` is generated, follow the [Installation & Setup Guide](#️-installation--setup-guide-ゼロクリック自動インストール) below.
+5. Once `nano11.iso` is generated, follow the [Installation & Setup Guide](#️-installation--setup-guide-zero-click-automated-installation) below.
 
 ### **3. Non-Interactive / CLI Automation**
 You can run the builder completely unattended with built-in presets and modular optimization flags:
@@ -317,59 +317,59 @@ When finished, your bootable ISO will be generated in the script directory as `n
 
 ---
 
-## 🛠️ Installation & Setup Guide (ゼロクリック自動インストール)
+## 🛠️ Installation & Setup Guide (Zero-Click Automated Installation)
 
 nano11 creates an ultra-minimal, high-performance Windows 11 installation by stripping redundant cloud bloatware, telemetry, and Microsoft Account requirements.
 
-### ⚡ Zero-Click Fully Automated Installation (デフォルト: 完全自動・Shift+F10不要)
-本バージョンでは、`autounattend.xml` の specialize パス、offline レジストリ、および `SetupComplete.cmd` / `FirstLogon.ps1` においてセットアップ完了フラグ（`ChildCompletion\setup.exe = 3`, `SetupType = 0`, `SystemSetupInProgress = 0`, `OOBEInProgress = 0` 等）が事前自動注入されます。
+### ⚡ Zero-Click Fully Automated Installation (Default: Fully Automated, No Shift+F10 Required)
+In this version, setup completion flags (`ChildCompletion\setup.exe = 3`, `SetupType = 0`, `SystemSetupInProgress = 0`, `OOBEInProgress = 0`, etc.) are pre-configured across the `specialize` pass of `autounattend.xml`, offline registry hives, and `SetupComplete.cmd` / `FirstLogon.ps1`.
 
-これにより、**インストール途中で「Windows could not complete the installation」ダイアログが表示されることなく、キーボードの `Shift + F10` 操作も一切不要で、クリーンインストール開始からデスクトップ画面まで100%全自動（ゼロクリック）で到達します。**
+As a result, **the installation proceeds 100% automatically (zero-click) from initial boot to the desktop without halting at "Windows could not complete the installation" or requiring manual `Shift + F10` intervention.**
 
 ---
 
-### 🔧 トラブルシューティング（手動完了手順・緊急用）
-万が一、無人応答ファイルを使用しない手動インストール時や旧環境で「Windows could not complete the installation」が表示されて一時停止した場合は、以下の手順で1分以内にデスクトップを起動できます：
+### 🔧 Troubleshooting (Manual Recovery Procedure / Fallback)
+In the rare event that setup pauses with "Windows could not complete the installation" (e.g., when installing manually without the answer file or in legacy environments), you can reach the desktop in under one minute using the following steps:
 
-#### **1. ISO からの通常起動とインストール**
-- 生成された `nano11.iso` を Rufus や Ventoy 等で USB メモリに書き込み（または仮想マシンにマウントして）PC を起動します。
-- `autounattend.xml` により、パーティション作成、CompactOS 適用、ファイル展開が自動的に進行します。
+#### **1. Boot & Standard Installation from ISO**
+- Flash the generated `nano11.iso` to a USB drive using Rufus or Ventoy (or mount it in a virtual machine) and boot your PC.
+- `autounattend.xml` will automatically handle disk partitioning, CompactOS compression, and file expansion.
 
-#### **2. エラーダイアログが表示されたら**
-- 画面上に「Windows could not complete the installation（インストールを完了できませんでした）」というエラーダイアログが表示されて停止したら、**まだ [OK] ボタンを押さないでください**。
+#### **2. If an Error Dialog Appears**
+- If setup halts with a dialog stating *"Windows could not complete the installation. To install Windows on this computer, restart the installation."*, **do NOT click [OK] yet**.
 
-#### **3. コマンドプロンプトを開く**
-- エラー画面のまま、キーボードの **`Shift + F10`** を押します。  
-  *(※ノートPC や一部のキーボードでは **`Shift + Fn + F10`** を押してください)*
-- 黒いコマンドプロンプト画面（`cmd.exe`）が前面に開きます。
+#### **3. Open Command Prompt**
+- With the dialog still on screen, press **`Shift + F10`** on your keyboard.  
+  *(Note: On laptops or compact keyboards, press **`Shift + Fn + F10`**).*
+- A Command Prompt window (`cmd.exe`) will appear in the foreground.
 
-#### **4. セットアップ状態（ChildCompletion）を 3 に変更する**
-以下のいずれかの方法（GUI または コマンド1行）で設定を変更します：
+#### **4. Set Setup Status (ChildCompletion) to 3**
+Use either method below (GUI or single-line command) to update the registry:
 
-- **方法 A: レジストリエディターを使う場合（GUI）**
-  1. コマンドプロンプトに `regedit` と入力して Enter キーを押し、レジストリエディターを開きます。
-  2. 左側のツリーから以下のキーに移動します：
+- **Method A: Using Registry Editor (GUI)**
+  1. In the Command Prompt, type `regedit` and press Enter to launch Registry Editor.
+  2. Navigate to the following key in the left pane:
      ```
      HKEY_LOCAL_MACHINE\SYSTEM\Setup\Status\ChildCompletion
      ```
-  3. 右側のペインにある **`setup.exe`** をダブルクリックします。
-  4. 「値のデータ」を **`1`** から **`3`** に変更して「OK」をクリックします。
-  5. レジストリエディターとコマンドプロンプトのウィンドウを閉じます。
+  3. In the right pane, double-click **`setup.exe`**.
+  4. Change "Value data" from **`1`** to **`3`** and click "OK".
+  5. Close Registry Editor and Command Prompt.
 
-- **方法 B: コマンド1行で即時変更する場合（最速）**
-  コマンドプロンプトで以下のコマンドを入力（または右クリックで貼り付け）して Enter キーを押します：
+- **Method B: Instant One-Line Command (Fastest)**
+  In the Command Prompt, enter (or right-click paste) the following command and press Enter:
   ```cmd
   reg add "HKLM\SYSTEM\Setup\Status\ChildCompletion" /v setup.exe /t REG_DWORD /d 3 /f
   ```
-  「この操作を正しく完了しました」と表示されたら、`exit` と入力してコマンドプロンプトを閉じます。
+  Once "The operation completed successfully." appears, type `exit` and press Enter to close Command Prompt.
 
-#### **5. セットアップを完了してデスクトップを起動**
-- 元のエラーダイアログの **[OK]** ボタンをクリックします。
-- 自動的に PC が再起動し、セットアップの完了チェックを通過して、そのまま正常に Administrator デスクトップ画面が起動します！
+#### **5. Complete Setup and Launch the Desktop**
+- Click the **[OK]** button on the original error dialog.
+- The system will reboot automatically, pass completion checks, and boot directly into the Administrator desktop!
 
 > [!NOTE]
-> **仕組み・技術的背景**:  
-> `ChildCompletion\setup.exe` の値 `1` は「セットアップの子プロセスが処理中・未完了」であることを示しています。これを `3`（完了ステータス: `STATUS_SUCCESS`）に書き換えることで、Windows Setup に対して「全セットアップ工程が正常に完了した」と通知し、未構成のクラウド OOBE への不要なリダイレクトやリブートトラップを完全に回避してデスクトップへ遷移させます。
+> **Technical Background & Mechanism**:  
+> A `ChildCompletion\setup.exe` value of `1` indicates that child setup tasks are still in progress or incomplete. Changing this to `3` (`STATUS_SUCCESS`) informs Windows Setup that all phases completed successfully. This avoids re-entry into unconfigured cloud OOBE flows or reboot loops and safely transitions directly to the lightweight desktop.
 
 ---
 
