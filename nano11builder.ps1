@@ -497,10 +497,14 @@ function Unmount-RegistryHiveWithRetry {
 $adminGroupSid = New-Object System.Security.Principal.SecurityIdentifier([System.Security.Principal.WellKnownSidType]::BuiltinAdministratorsSid, $null)
 
 # Helper function: Query registered mounted images from DISM
+# Helper function: Query registered mounted images from DISM (Distinguishes 0-mount success from query failure)
 function Get-Nano11MountedImages {
     [CmdletBinding()]
     param()
     $records = @()
+    $querySuccess = $false
+    $lastErr = $null
+
     try {
         if (Get-Command -Name Get-WindowsImage -Module DISM -ErrorAction SilentlyContinue) {
             $images = @(Get-WindowsImage -Mounted -ErrorAction Stop)
@@ -512,13 +516,17 @@ function Get-Nano11MountedImages {
                     MountStatus = [string]$_.MountStatus
                 }
             })
+            $querySuccess = $true
         }
-    } catch {}
+    } catch {
+        $lastErr = $_
+    }
 
-    if ($records.Count -eq 0) {
+    if (-not $querySuccess) {
         $out = & dism.exe /English /Get-MountedImageInfo 2>&1
         $exitCode = $LASTEXITCODE
         if ($exitCode -eq 0) {
+            $querySuccess = $true
             $cur = [ordered]@{}
             foreach ($line in $out) {
                 $t = [string]$line
@@ -546,6 +554,8 @@ function Get-Nano11MountedImages {
                     MountStatus = $cur['Status']
                 }
             }
+        } else {
+            $lastErr = "dism.exe /Get-MountedImageInfo returned exit code ${exitCode}: $($out -join ' ')"
         }
     }
 
@@ -582,6 +592,10 @@ function Get-Nano11MountedImages {
             }
         }
     } catch {}
+
+    if (-not $querySuccess) {
+        throw "Failed to query mounted images from DISM (Get-WindowsImage failed and dism.exe returned non-zero exit code): $lastErr"
+    }
 
     return @($records)
 }
@@ -1198,6 +1212,288 @@ function Reset-DirectoryWithRobocopy {
 }
 
 # Helper function: Safe mountpoint cleanup guarded against modifying unmanaged external mounts
+# ==============================================================================
+# Helper Functions: Safe Deletion, Promotion, Metadata & Capacity Verification
+# ==============================================================================
+function Test-IsSafePathToDelete {
+    param([string]$Path)
+    if ([string]::IsNullOrWhiteSpace($Path)) { return $false }
+    try {
+        $full = [System.IO.Path]::GetFullPath($Path).TrimEnd('\', '/')
+        if ($full.Length -le 3) { return $false }
+        $systemProfile = [System.Environment]::GetFolderPath([System.Environment+SpecialFolder]::UserProfile)
+        if ($full -ieq $systemProfile.TrimEnd('\', '/')) { return $false }
+        $windowsDir = [System.Environment]::GetFolderPath([System.Environment+SpecialFolder]::Windows)
+        if ($full.StartsWith($windowsDir, [System.StringComparison]::OrdinalIgnoreCase)) { return $false }
+        if ($scriptDir -and ($full -ieq [System.IO.Path]::GetFullPath($scriptDir).TrimEnd('\', '/'))) { return $false }
+        return $true
+    } catch {
+        return $false
+    }
+}
+
+function New-Nano11BuildId {
+    param([datetime]$Timestamp = (Get-Date))
+    $timePart = $Timestamp.ToString('yyyyMMdd_HHmmss')
+    $guidPart = [System.Guid]::NewGuid().ToString('N').Substring(0, 8)
+    return "${timePart}_${guidPart}"
+}
+
+function Get-Nano11VolumeFreeSpaceGB {
+    param([string]$Path)
+    if ([string]::IsNullOrWhiteSpace($Path)) { return 0 }
+    try {
+        $resolved = [System.IO.Path]::GetFullPath($Path)
+        $driveLetter = (Split-Path -Path $resolved -Qualifier).TrimEnd(':')
+        $drive = [System.IO.DriveInfo]::new($driveLetter)
+        return [math]::Round($drive.AvailableFreeSpace / 1GB, 2)
+    } catch {
+        throw "Failed to query volume free space for '$Path': $_"
+    }
+}
+
+function Test-CanSafelyDeleteDirectory {
+    param(
+        [string]$Path,
+        [string]$ExpectedBaseDir,
+        [System.Collections.Generic.HashSet[string]]$PreservedDirs
+    )
+    if (-not $script:BuildSucceeded) { return $false }
+    if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path -LiteralPath $Path)) { return $false }
+    if (-not (Test-IsSafePathToDelete -Path $Path)) { return $false }
+
+    $normPath = try { ConvertTo-Nano11NormalizedPath -Path $Path } catch { return $false }
+    if ($ExpectedBaseDir) {
+        $normBase = try { ConvertTo-Nano11NormalizedPath -Path $ExpectedBaseDir } catch { return $false }
+        if (-not $normPath.StartsWith($normBase, [System.StringComparison]::OrdinalIgnoreCase) -and ($normPath -ine $normBase)) {
+            Write-Warning "Directory '$normPath' is outside workspace '$normBase'. Deletion prohibited."
+            return $false
+        }
+    }
+
+    if ($PreservedDirs) {
+        foreach ($pDir in $PreservedDirs) {
+            if ([string]::IsNullOrWhiteSpace($pDir)) { continue }
+            $normPDir = try { ConvertTo-Nano11NormalizedPath -Path $pDir } catch { $pDir.TrimEnd('\', '/') }
+            if ($normPath -ieq $normPDir) {
+                Write-Warning "Directory '$normPath' is in PreservedMountDirs. Deletion prohibited."
+                return $false
+            }
+            if ($normPDir.StartsWith($normPath + '\', [System.StringComparison]::OrdinalIgnoreCase)) {
+                Write-Warning "Directory '$normPath' is a parent of preserved directory '$normPDir'. Deletion prohibited."
+                return $false
+            }
+        }
+    }
+
+    try {
+        $activeMounts = @(Get-Nano11MountedImages)
+        $lingering = $activeMounts | Where-Object {
+            $p = if ($_.Path) { try { ConvertTo-Nano11NormalizedPath -Path $_.Path } catch { $null } } else { $null }
+            $p -and (($p -ieq $normPath) -or $p.StartsWith($normPath + '\', [System.StringComparison]::OrdinalIgnoreCase) -or $normPath.StartsWith($p + '\', [System.StringComparison]::OrdinalIgnoreCase))
+        }
+        if ($lingering) {
+            Write-Warning "Active DISM mount detected on or under '$normPath'. Deletion prohibited."
+            return $false
+        }
+    } catch {
+        Write-Warning "Could not confirm DISM mount status on '$normPath': $_. Deletion prohibited."
+        return $false
+    }
+
+    foreach ($hive in @('zCOMPONENTS', 'zDEFAULT', 'zNTUSER', 'zSOFTWARE', 'zSYSTEM')) {
+        try {
+            $hiveKey = "HKLM:\$hive"
+            if (Test-Path -LiteralPath $hiveKey -ErrorAction Stop) {
+                Write-Warning "Offline registry hive '$hive' still loaded. Deletion prohibited."
+                return $false
+            }
+        } catch {
+            Write-Warning "Could not confirm offline registry hive '$hive' status: $_. Deletion prohibited."
+            return $false
+        }
+    }
+
+    return $true
+}
+
+function Test-CanSafelyDeleteVhdx {
+    param(
+        [string]$VhdxPath,
+        [bool]$VhdxDetached,
+        [string]$ExpectedBaseDir,
+        [System.Collections.Generic.HashSet[string]]$PreservedDirs
+    )
+    if (-not $script:BuildSucceeded) { return $false }
+    if (-not $VhdxDetached) { return $false }
+    if ([string]::IsNullOrWhiteSpace($VhdxPath) -or -not (Test-Path -LiteralPath $VhdxPath)) { return $false }
+    if (-not (Test-IsSafePathToDelete -Path $VhdxPath)) { return $false }
+
+    $normVhdx = try { ConvertTo-Nano11NormalizedPath -Path $VhdxPath } catch { return $false }
+    if ($ExpectedBaseDir) {
+        $normBase = try { ConvertTo-Nano11NormalizedPath -Path $ExpectedBaseDir } catch { return $false }
+        if (-not $normVhdx.StartsWith($normBase, [System.StringComparison]::OrdinalIgnoreCase) -and ($normVhdx -ine $normBase)) {
+            Write-Warning "VHDX '$normVhdx' is outside workspace '$normBase'. Deletion prohibited."
+            return $false
+        }
+    }
+
+    if ($PreservedDirs) {
+        foreach ($pDir in $PreservedDirs) {
+            if ([string]::IsNullOrWhiteSpace($pDir)) { continue }
+            $normP = try { ConvertTo-Nano11NormalizedPath -Path $pDir } catch { $pDir.TrimEnd('\', '/') }
+            if ($normVhdx -ieq $normP -or $normVhdx.StartsWith($normP + '\', [System.StringComparison]::OrdinalIgnoreCase)) {
+                Write-Warning "VHDX '$normVhdx' is in or under PreservedMountDirs '$normP'. Deletion prohibited."
+                return $false
+            }
+        }
+    }
+
+    return $true
+}
+
+function Invoke-Nano11PromoteTemporaryIso {
+    param(
+        [string]$TempIsoPath,
+        [string]$TargetIsoPath,
+        [string]$BuildId
+    )
+    if (-not (Test-Path -LiteralPath $TempIsoPath)) {
+        throw "Temporary ISO not found: $TempIsoPath"
+    }
+    $targetDir = Split-Path -Path $TargetIsoPath -Parent
+    if (-not $targetDir) { $targetDir = $PSScriptRoot }
+    $oldIsoBackup = Join-Path -Path $targetDir -ChildPath "nano11_old_backup_${BuildId}.iso"
+
+    $hasOldIso = Test-Path -LiteralPath $TargetIsoPath
+    if ($hasOldIso) {
+        Write-Host "Backing up existing ISO to unique backup: $oldIsoBackup..." -ForegroundColor Cyan
+        Move-Item -LiteralPath $TargetIsoPath -Destination $oldIsoBackup -Force -ErrorAction Stop
+    }
+
+    $promotedSuccessfully = $false
+    try {
+        Write-Host "Promoting verified temporary ISO to official release name..." -ForegroundColor Cyan
+        Move-Item -LiteralPath $TempIsoPath -Destination $TargetIsoPath -Force -ErrorAction Stop
+        $promotedSuccessfully = $true
+    } catch {
+        $moveErr = $_
+        if ($hasOldIso -and (Test-Path -LiteralPath $oldIsoBackup)) {
+            Write-Warning "Promotion failed ($moveErr). Attempting rollback from $oldIsoBackup..."
+            try {
+                Move-Item -LiteralPath $oldIsoBackup -Destination $TargetIsoPath -Force -ErrorAction Stop
+                Write-Host "Rollback successful: Restored original ISO to $TargetIsoPath." -ForegroundColor Green
+            } catch {
+                $rollbackErr = $_
+                Write-Warning "CRITICAL: Rollback failed ($rollbackErr). Preserving backup at $oldIsoBackup"
+                if ($script:DiagnosticData) {
+                    $script:DiagnosticData.PreservedArtifacts += $oldIsoBackup
+                }
+                throw "Failed to promote temporary ISO to ${TargetIsoPath} ($moveErr) AND rollback restoration failed ($rollbackErr). Original ISO preserved at: $oldIsoBackup"
+            }
+        }
+        throw "Failed to promote temporary ISO to ${TargetIsoPath}: $moveErr"
+    }
+
+    if ($promotedSuccessfully -and $hasOldIso -and (Test-Path -LiteralPath $oldIsoBackup)) {
+        Remove-Item -LiteralPath $oldIsoBackup -Force -ErrorAction SilentlyContinue
+    }
+    return $true
+}
+
+function Test-Nano11MetadataAndCapacity {
+    param(
+        [string]$WimPath,
+        [string]$ExpectedEdition,
+        [string]$ExpectedArch,
+        [string]$VerifyApplyDir,
+        [string]$VhdxFilePath = $null,
+        [bool]$IsVhdx = $false
+    )
+    Write-Host "Querying WIM metadata via DISM /Get-WimInfo..." -ForegroundColor Cyan
+    $dismMetaOut = & dism.exe /English /Get-WimInfo "/WimFile:$WimPath" 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to query WIM metadata (ExitCode: $LASTEXITCODE)."
+    }
+    $metaText = ($dismMetaOut -join "`n")
+    $hasIndex1 = ($metaText -match '(?m)^\s*Index\s*:\s*1\s*$')
+    $totalIndexCount = ([regex]::Matches($metaText, '(?m)^\s*Index\s*:\s*\d+\s*$')).Count
+    if (-not $hasIndex1 -or ($totalIndexCount -ne 1)) {
+        throw "WIM metadata validation failed: Expected exactly 1 index (Index 1), found $totalIndexCount indices."
+    }
+
+    $dismIdx1Out = & dism.exe /English /Get-WimInfo "/WimFile:$WimPath" "/Index:1" 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to query WIM Index 1 detailed info (ExitCode: $LASTEXITCODE)."
+    }
+    $idx1Text = ($dismIdx1Out -join "`n")
+
+    $editionName = if ($idx1Text -match '(?m)^\s*Name\s*:\s*(.+)$') { $matches[1].Trim() } else { $null }
+    $arch = if ($idx1Text -match '(?m)^\s*Architecture\s*:\s*(\w+)') { $matches[1].Trim() } else { $null }
+    $sizeRaw = if ($idx1Text -match '(?m)^\s*Size\s*:\s*([\d,]+)\s*bytes') { $matches[1] -replace ',', '' } else { $null }
+
+    if (-not $editionName -or -not $arch -or -not $sizeRaw) {
+        throw "Failed to extract required image info (Edition: '$editionName', Arch: '$arch', Size: '$sizeRaw')."
+    }
+
+    if ($ExpectedEdition -and ($editionName -inotlike "*$ExpectedEdition*")) {
+        throw "Edition mismatch: Expected '$ExpectedEdition', found '$editionName'."
+    }
+
+    $normArch = $arch.ToLower()
+    $normExpectedArch = if ($ExpectedArch) { $ExpectedArch.ToLower() } else { "" }
+    if ($normExpectedArch -eq 'amd64') { $normExpectedArch = 'x64' }
+    if ($normArch -eq 'amd64') { $normArch = 'x64' }
+    if ($normExpectedArch -and ($normArch -ne $normExpectedArch)) {
+        throw "Architecture mismatch: Expected '$normExpectedArch', found '$normArch'."
+    }
+
+    [int64]$expandedSizeBytes = [int64]$sizeRaw
+    $expandedSizeGB = [math]::Ceiling($expandedSizeBytes / 1GB)
+    $scratchMarginGB = 5
+    $requiredSpaceGB = [math]::Max(15, ($expandedSizeGB + $scratchMarginGB))
+
+    $targetFreeGB = Get-Nano11VolumeFreeSpaceGB -Path $VerifyApplyDir
+    $applyDriveLetter = try { (Split-Path -Path ([System.IO.Path]::GetFullPath($VerifyApplyDir)) -Qualifier).TrimEnd(':') } catch { "C" }
+
+    Write-Host "Capacity Analysis for Deep Apply Verification:" -ForegroundColor Cyan
+    Write-Host "  - Uncompressed Expanded Image Size: $expandedSizeGB GB ($expandedSizeBytes bytes)" -ForegroundColor Gray
+    Write-Host "  - Scratch & Working Overhead:       $scratchMarginGB GB" -ForegroundColor Gray
+    Write-Host "  - Dynamic Required Space:           $requiredSpaceGB GB" -ForegroundColor Gray
+    Write-Host "  - Apply Target Volume (${applyDriveLetter}:):     $targetFreeGB GB available" -ForegroundColor Gray
+
+    if ($IsVhdx -and $VhdxFilePath -and (Test-Path -LiteralPath $VhdxFilePath)) {
+        $vhdxHostFreeGB = Get-Nano11VolumeFreeSpaceGB -Path $VhdxFilePath
+        $vhdxHostDriveLetter = try { (Split-Path -Path (Resolve-Path $VhdxFilePath).Path -Qualifier).TrimEnd(':') } catch { "C" }
+        Write-Host "  - VHDX Host Volume (${vhdxHostDriveLetter}:):          $vhdxHostFreeGB GB available" -ForegroundColor Gray
+
+        if ($applyDriveLetter -ieq $vhdxHostDriveLetter) {
+            if ($targetFreeGB -lt $requiredSpaceGB) {
+                throw "Insufficient disk space on host volume ${applyDriveLetter}: ($targetFreeGB GB available, $requiredSpaceGB GB required)."
+            }
+        } else {
+            if ($targetFreeGB -lt $requiredSpaceGB) {
+                throw "Insufficient disk space on VHDX apply volume ${applyDriveLetter}: ($targetFreeGB GB available, $requiredSpaceGB GB required)."
+            }
+            if ($vhdxHostFreeGB -lt 10) {
+                throw "Insufficient disk space on VHDX host volume ${vhdxHostDriveLetter}: ($vhdxHostFreeGB GB available, minimum 10 GB required to back VHDX expansion)."
+            }
+        }
+    } else {
+        if ($targetFreeGB -lt $requiredSpaceGB) {
+            throw "Insufficient disk space on volume ${applyDriveLetter}: ($targetFreeGB GB available, $requiredSpaceGB GB required for expanded image + overhead)."
+        }
+    }
+
+    return [PSCustomObject]@{
+        EditionName      = $editionName
+        Architecture     = $arch
+        ExpandedSizeGB   = $expandedSizeGB
+        RequiredSpaceGB  = $requiredSpaceGB
+        TargetFreeGB     = $targetFreeGB
+    }
+}
+
 function Invoke-Nano11MountpointCleanup {
     [CmdletBinding()]
     param()
@@ -4625,7 +4921,7 @@ $script:DefenderExclusionAdded = $false
 $script:IsVhdxMounted = $false
 
 # Diagnostic Session Isolation (Rule 2)
-$script:BuildId = [System.Guid]::NewGuid().ToString("N").Substring(0, 8) + "_" + (Get-Date -Format "yyyyMMdd_HHmmss")
+$script:BuildId = New-Nano11BuildId
 $script:DiagDir = Join-Path -Path $scriptDir -ChildPath "build_diagnostics\$($script:BuildId)"
 New-Item -ItemType Directory -Path $script:DiagDir -Force | Out-Null
 
@@ -8697,9 +8993,9 @@ if ($splitWIMMode) {
     throw "Split-WIM (SWM) export mode is disabled because multipart apply verification is unverified. Please build standard WIM."
 }
 
-# Preserve pre-export original WIM backup (Rule 5)
-$destWimBackup = Join-Path -Path "$nano11Dir\sources" -ChildPath "install_pre_export_backup.wim"
-$tempExportWim = Join-Path -Path "$nano11Dir\sources" -ChildPath "install_export_temp.wim"
+# Preserve pre-export original WIM backup (outside ISO input tree, uniquely keyed by BuildId) (Rule 5)
+$destWimBackup = Join-Path -Path $workDir -ChildPath "install_pre_export_backup_$($script:BuildId).wim"
+$tempExportWim = Join-Path -Path $workDir -ChildPath "install_export_temp_$($script:BuildId).wim"
 
 if (Test-Path -LiteralPath $destWim) {
     $script:DiagnosticData.PreExportWimSha256 = (Get-FileHash -LiteralPath $destWim -Algorithm SHA256).Hash
@@ -8758,7 +9054,7 @@ if ($LASTEXITCODE -ne 0) {
     throw "Phase 13: Exported temporary WIM metadata inspection failed."
 }
 
-# Step 2: Move original WIM to unique backup (Rule 5)
+# Step 2: Move original WIM to unique backup outside ISO tree (Rule 5)
 Move-Item -LiteralPath $destWim -Destination $destWimBackup -Force -ErrorAction Stop
 # Step 3: Move export output to final install.wim
 Move-Item -LiteralPath $tempExportWim -Destination $destWim -Force -ErrorAction Stop
@@ -8871,31 +9167,30 @@ if (-not (Test-Path -LiteralPath $wimCheck) -or ((Get-Item -LiteralPath $wimChec
 $wimSizeGB = [math]::Round((Get-Item -LiteralPath $wimCheck).Length / 1GB, 2)
 Write-Host "Final installation image confirmed: install.wim ($wimSizeGB GB)" -ForegroundColor Green
 
-# 1. Metadata Verification via DISM /Get-WimInfo (Strictly metadata query only, no /CheckIntegrity) (Rule 8)
-Write-Host "Verifying install.wim metadata structure via DISM..." -ForegroundColor Cyan
-$dismMetaOut = & dism.exe /English /Get-WimInfo "/WimFile:$wimCheck" 2>&1
-$dismMetaExit = $LASTEXITCODE
-$metaText = ($dismMetaOut -join "`n")
-$hasIndex1 = ($metaText -match '(?m)^\s*Index\s*:\s*1\s*$')
-$totalIndexCount = ([regex]::Matches($metaText, '(?m)^\s*Index\s*:\s*\d+\s*$')).Count
-
-$metadataValid = ($dismMetaExit -eq 0) -and $hasIndex1 -and ($totalIndexCount -eq 1)
-$metadataStatus = if ($metadataValid) { "PASS" } else { "FAIL" }
-
-if ($metadataStatus -eq "FAIL") {
-    $script:DiagnosticData.FailurePhase = "Phase 15: Metadata Verification"
-    $script:DiagnosticData.FailureMessage = "install.wim failed metadata verification (ExitCode: $dismMetaExit, IndexCount: $totalIndexCount)"
-    Write-Nano11DiagnosticReport "Metadata check failed"
-    throw "install.wim failed metadata verification (ExitCode: $dismMetaExit). Expected exactly 1 index (Index 1)."
-}
-
-# 2. Mandatory Deep Apply Verification of Final Payload (Rule 6)
-Write-Host "Performing mandatory deep apply verification of install.wim via DISM..." -ForegroundColor Cyan
-$verifyApply = Join-Path -Path $workDir -ChildPath "deep_apply_verification"
-$verifyScratch = Join-Path -Path $workDir -ChildPath "deep_apply_scratch"
+# 1. Metadata Verification & Dynamic Capacity Assessment via DISM /Get-WimInfo (Rule 8)
+Write-Host "Verifying install.wim metadata structure and target capacity..." -ForegroundColor Cyan
+$verifyApply = Join-Path -Path $workDir -ChildPath "deep_apply_verification_$($script:BuildId)"
+$verifyScratch = Join-Path -Path $workDir -ChildPath "deep_apply_scratch_$($script:BuildId)"
 $verifyLog = Join-Path -Path $script:DiagDir -ChildPath "dism_deep_apply.log"
 $verifyReport = Join-Path -Path $script:DiagDir -ChildPath "final_apply_report.txt"
 
+$metaCapInfo = Test-Nano11MetadataAndCapacity `
+    -WimPath $wimCheck `
+    -ExpectedEdition $targetEditionName `
+    -ExpectedArch $architecture `
+    -VerifyApplyDir $verifyApply `
+    -VhdxFilePath $vhdxPath `
+    -IsVhdx $script:IsVhdxMounted
+
+$metadataStatus = "PASS"
+Write-Host "  - Verified Edition:     $($metaCapInfo.EditionName)" -ForegroundColor Green
+Write-Host "  - Verified Arch:        $($metaCapInfo.Architecture)" -ForegroundColor Green
+Write-Host "  - Expanded Image Size:  $($metaCapInfo.ExpandedSizeGB) GB" -ForegroundColor Green
+Write-Host "  - Required Space:       $($metaCapInfo.RequiredSpaceGB) GB" -ForegroundColor Green
+Write-Host "  - Available Free Space: $($metaCapInfo.TargetFreeGB) GB" -ForegroundColor Green
+
+# 2. Mandatory Deep Apply Verification of Final Payload (Rule 6)
+Write-Host "Performing mandatory deep apply verification of install.wim via DISM..." -ForegroundColor Cyan
 if (Test-Path -LiteralPath $verifyApply) {
     Remove-Item -LiteralPath $verifyApply -Recurse -Force -ErrorAction SilentlyContinue
 }
@@ -8904,18 +9199,6 @@ if (Test-Path -LiteralPath $verifyScratch) {
 }
 New-Item -ItemType Directory -Path $verifyApply -Force | Out-Null
 New-Item -ItemType Directory -Path $verifyScratch -Force | Out-Null
-
-# Verify free space on target drive (minimum 15GB recommended)
-$applyDriveLetter = (Split-Path -Path (Resolve-Path $verifyApply).Path -Qualifier).TrimEnd(':')
-$driveInfo = [System.IO.DriveInfo]::new($applyDriveLetter)
-$freeSpaceGB = [math]::Round($driveInfo.AvailableFreeSpace / 1GB, 2)
-if ($freeSpaceGB -lt 15) {
-    $spaceMsg = "Insufficient disk space for deep apply verification on drive ${applyDriveLetter}: ($freeSpaceGB GB free, minimum 15 GB required)."
-    $script:DiagnosticData.FailurePhase = "Phase 15: Deep Apply Verification Space Check"
-    $script:DiagnosticData.FailureMessage = $spaceMsg
-    Write-Nano11DiagnosticReport $spaceMsg
-    throw $spaceMsg
-}
 
 $applyCmdStr = "dism.exe /English /Apply-Image /ImageFile:`"$wimCheck`" /Index:1 /ApplyDir:`"$verifyApply`" /CheckIntegrity /Verify /ScratchDir:`"$verifyScratch`" /LogPath:`"$verifyLog`""
 $script:DiagnosticData.FinalApplyCommand = $applyCmdStr
@@ -9015,6 +9298,15 @@ if (Test-Path -LiteralPath $sourcesDir) {
     $brokenOem = Join-Path -Path $sourcesDir -ChildPath "`$OEM`$"
     if ((Test-Path -LiteralPath $brokenOem) -and ((Get-ChildItem -Path $brokenOem -Recurse -File -ErrorAction SilentlyContinue).Count -eq 0)) {
         Remove-Item -LiteralPath $brokenOem -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    # Verify no temporary or backup files remain in ISO sources tree
+    $suspiciousFiles = Get-ChildItem -Path $sourcesDir -File -ErrorAction SilentlyContinue | Where-Object {
+        $_.Name -like "*backup*" -or $_.Name -like "*temp*" -or $_.Name -like "*export*"
+    }
+    if ($suspiciousFiles) {
+        $badNames = ($suspiciousFiles | ForEach-Object { $_.Name }) -join ", "
+        throw "Verification failed: Temporary or backup files remain in ISO sources tree: $badNames"
     }
 }
 
@@ -9132,17 +9424,7 @@ if ($OutputIsoName) {
 }
 $outputIso = Join-Path -Path $scriptDir -ChildPath $isoFileName
 
-# Dismount and remove any existing output ISO to prevent file locks/collisions
-try {
-    $mounted = Get-DiskImage -ImagePath $outputIso -ErrorAction SilentlyContinue
-    if ($mounted) {
-        Write-Host "Dismounting previously mounted output ISO: $outputIso..." -ForegroundColor Yellow
-        Dismount-DiskImage -ImagePath $outputIso -ErrorAction SilentlyContinue | Out-Null
-    }
-} catch {}
-if (Test-Path -LiteralPath $outputIso) {
-    Remove-Item -LiteralPath $outputIso -Force -ErrorAction SilentlyContinue
-}
+# Existing output ISO is protected until new temporary ISO is completely verified (Rule 12)
 
 # Resolve etfsboot.com (BIOS boot sector)
 $etfsBootCandidates = @(
@@ -9215,7 +9497,7 @@ if ($uefiOnly -and $efiSys) {
 }
 
 # Temporary ISO generation & payload verification (Rules 11, 12, 13, 14, 20)
-$tempIsoFileName = "nano11_temp_${profSlug}_${isoTimestamp}.iso"
+$tempIsoFileName = "nano11_temp_${profSlug}_$($script:BuildId).iso"
 $tempOutputIso = Join-Path -Path $scriptDir -ChildPath $tempIsoFileName
 if (Test-Path -LiteralPath $tempOutputIso) {
     Remove-Item -LiteralPath $tempOutputIso -Force -ErrorAction SilentlyContinue
@@ -9283,16 +9565,8 @@ try {
     }
 }
 
-# Promote temporary ISO to official output ISO (Rule 12)
-Write-Host "Promoting verified temporary ISO to official release name..." -ForegroundColor Cyan
-try {
-    $oldMounted = Get-DiskImage -ImagePath $outputIso -ErrorAction SilentlyContinue
-    if ($oldMounted) { Dismount-DiskImage -ImagePath $outputIso -ErrorAction SilentlyContinue | Out-Null }
-} catch {}
-if (Test-Path -LiteralPath $outputIso) {
-    Remove-Item -LiteralPath $outputIso -Force -ErrorAction Stop
-}
-Move-Item -LiteralPath $tempOutputIso -Destination $outputIso -Force -ErrorAction Stop
+# Promote temporary ISO to official output ISO with rollback protection (Rule 12)
+[void](Invoke-Nano11PromoteTemporaryIso -TempIsoPath $tempOutputIso -TargetIsoPath $outputIso -BuildId $script:BuildId)
 
 # 3-Generation Retention Rotation for ISOs matching this profile (when TimestampIso is used)
 if ($TimestampIso) {
@@ -9309,15 +9583,12 @@ if ($TimestampIso) {
     } catch {}
 }
 
-# Post-build hook execution (tools\post-build.ps1) (Rule 14)
+# Post-build hook execution (Explicitly disabled for verification build per specification)
 $postBuildScript = Join-Path -Path $scriptDir -ChildPath "tools\post-build.ps1"
 if (Test-Path -LiteralPath $postBuildScript) {
-    Write-Host "Executing post-build hook: $postBuildScript..." -ForegroundColor Cyan
-    try {
-        $isoSha256PreHook = (Get-FileHash -LiteralPath $outputIso -Algorithm SHA256).Hash
-        & $postBuildScript -IsoPath $outputIso -IsoHash $isoSha256PreHook -Profile $selectedProfile -LogDir $logDir
-    } catch {
-        Write-Warning "Post-build hook exited with warning: $_"
+    Write-Host "Post-build hook is explicitly disabled for verification build: $postBuildScript" -ForegroundColor Yellow
+    if ($script:DiagnosticData) {
+        $script:DiagnosticData['PostBuildHookStatus'] = "DISABLED_FOR_VERIFICATION_BUILD"
     }
 }
 
@@ -9356,6 +9627,16 @@ try {
     Write-Host "Visual Build Report generated: $reportPath" -ForegroundColor Cyan
 } catch {
     Write-Warning "Could not export visual build report: $_"
+}
+
+# Post-build hook execution (toolspost-build.ps1)
+# Explicitly disabled for verification build per specification
+$postBuildScript = Join-Path -Path $scriptDir -ChildPath "toolspost-build.ps1"
+if (Test-Path -LiteralPath $postBuildScript) {
+    Write-Warning "Post-build hook ($postBuildScript) is explicitly disabled for verification build."
+    if ($script:DiagnosticData) {
+        $script:DiagnosticData['PostBuildHookStatus'] = "DISABLED_FOR_VERIFICATION_BUILD"
+    }
 }
 
 # Auxiliary File Inspection (-Validate) (Rule 15)
@@ -9461,23 +9742,6 @@ if ($GUI -and $script:BuildSucceeded -and (Test-Path -LiteralPath $outputIso)) {
     [GC]::Collect()
     [GC]::WaitForPendingFinalizers()
 
-    function Test-IsSafePathToDelete {
-        param([string]$Path)
-        if ([string]::IsNullOrWhiteSpace($Path)) { return $false }
-        try {
-            $full = [System.IO.Path]::GetFullPath($Path).TrimEnd('\', '/')
-            if ($full.Length -le 3) { return $false }
-            $systemProfile = [System.Environment]::GetFolderPath([System.Environment+SpecialFolder]::UserProfile)
-            if ($full -ieq $systemProfile.TrimEnd('\', '/')) { return $false }
-            $windowsDir = [System.Environment]::GetFolderPath([System.Environment+SpecialFolder]::Windows)
-            if ($full.StartsWith($windowsDir, [System.StringComparison]::OrdinalIgnoreCase)) { return $false }
-            if ($scriptDir -and ($full -ieq [System.IO.Path]::GetFullPath($scriptDir).TrimEnd('\', '/'))) { return $false }
-            return $true
-        } catch {
-            return $false
-        }
-    }
-
     # 1. ALWAYS unmount offline registry hives (Rule 17)
     if ($script:HivesLoaded) {
         Write-Host "Cleaning up lingering registry hives..." -ForegroundColor Yellow
@@ -9521,24 +9785,37 @@ if ($GUI -and $script:BuildSucceeded -and (Test-Path -LiteralPath $outputIso)) {
         }
     }
 
-    # 3. Detach VHDX scratch disk if initialized (ALWAYS ATTEMPT DETACH, Rule 18)
+    # 3. Detach VHDX scratch disk if initialized (Strict status check before true)
     $vhdxDetached = $false
     if ($script:IsVhdxMounted -or ($vhdxPath -and (Test-Path -LiteralPath $vhdxPath))) {
         try {
             Write-Host "Detaching VHDX scratch disk..." -ForegroundColor Cyan
             $dpDetachScript = "select vdisk file=`"$vhdxPath`"`r`ndetach vdisk`r`n"
-            $dpDetachFile = Join-Path -Path $env:TEMP -ChildPath "nano11_dp_detach_$([System.IO.Path]::GetRandomFileName()).txt"
+            $dpDetachFile = Join-Path -Path $env:TEMP -ChildPath "nano11_dp_detach_$($script:BuildId)_$([System.IO.Path]::GetRandomFileName()).txt"
             $dpDetachScript | Set-Content -LiteralPath $dpDetachFile -Encoding ascii
-            & diskpart.exe /s $dpDetachFile > $null 2>&1
+            $dpOut = & diskpart.exe /s $dpDetachFile 2>&1
+            $dpExit = $LASTEXITCODE
             Remove-Item -LiteralPath $dpDetachFile -Force -ErrorAction SilentlyContinue
 
-            $vhdxDetached = $true
-            try {
-                $diskImg = Get-DiskImage -ImagePath $vhdxPath -ErrorAction Stop
-                if ($diskImg.Attached) { $vhdxDetached = $false }
-            } catch {}
-            if ($vhdxDetached) {
-                $script:IsVhdxMounted = $false
+            if ($script:DiagnosticData) {
+                $script:DiagnosticData['VhdxDetachExitCode'] = $dpExit
+                $script:DiagnosticData['VhdxDetachOutput'] = ($dpOut -join "`n")
+            }
+
+            if ($dpExit -eq 0) {
+                try {
+                    $diskImg = Get-DiskImage -ImagePath $vhdxPath -ErrorAction Stop
+                    if ($diskImg -and ($diskImg.Attached -eq $false)) {
+                        $vhdxDetached = $true
+                        $script:IsVhdxMounted = $false
+                    } else {
+                        Write-Warning "VHDX disk image still reports Attached = $(if ($diskImg) { $diskImg.Attached } else { 'Unknown' }) despite detach command."
+                    }
+                } catch {
+                    Write-Warning "Could not verify VHDX detachment state via Get-DiskImage: $_"
+                }
+            } else {
+                Write-Warning "diskpart detach command returned non-zero code ${dpExit}: $($dpOut -join ' ')"
             }
         } catch {
             Write-Warning "VHDX detachment encountered error: $_"
@@ -9562,27 +9839,29 @@ if ($GUI -and $script:BuildSucceeded -and (Test-Path -LiteralPath $outputIso)) {
         } catch {}
     }
 
-    # 6. Disk deletion: ONLY IF BUILDSUCCEEDED -EQ $TRUE (Rules 17, 18, 19)
-    if ($script:BuildSucceeded) {
-        Write-Host "Build succeeded. Cleaning workspace and intermediate build artifacts..." -ForegroundColor Cyan
+    # 6. Disk deletion: ONLY IF ALL SAFETY CONDITIONS MET
+    $destWimBackupPath = Join-Path -Path $workDir -ChildPath "install_pre_export_backup_$($script:BuildId).wim"
+    $canDeleteWorkspace = Test-CanSafelyDeleteDirectory -Path $nano11Dir -ExpectedBaseDir $baseWorkDir -PreservedDirs $script:PreservedMountDirs
 
-        # Clean backup WIM
-        $destWimBackupPath = Join-Path -Path "$nano11Dir\sources" -ChildPath "install_pre_export_backup.wim"
+    if ($script:BuildSucceeded -and $canDeleteWorkspace) {
+        Write-Host "Build succeeded and safety checks passed. Cleaning workspace artifacts..." -ForegroundColor Cyan
+
+        # Clean backup WIM outside ISO tree
         if (Test-Path -LiteralPath $destWimBackupPath) {
             Remove-Item -LiteralPath $destWimBackupPath -Force -ErrorAction SilentlyContinue
         }
 
         # Clean nano11Dir
-        if ($nano11Dir -and (Test-Path -LiteralPath $nano11Dir) -and (Test-IsSafePathToDelete -Path $nano11Dir)) {
+        if ($nano11Dir -and (Test-Path -LiteralPath $nano11Dir)) {
             try {
                 Reset-DirectoryWithRobocopy -Path $nano11Dir
                 Remove-Item -LiteralPath $nano11Dir -Force -ErrorAction SilentlyContinue
             } catch {}
         }
 
-        # Clean target mount directories
+        # Clean target mount directories only if individual safety checks pass
         foreach ($mPath in $allTargetMounts) {
-            if ((Test-Path -LiteralPath $mPath) -and (Test-IsSafePathToDelete -Path $mPath)) {
+            if (Test-CanSafelyDeleteDirectory -Path $mPath -ExpectedBaseDir $baseWorkDir -PreservedDirs $script:PreservedMountDirs) {
                 try {
                     Reset-DirectoryWithRobocopy -Path $mPath
                     Remove-Item -LiteralPath $mPath -Force -ErrorAction SilentlyContinue
@@ -9590,15 +9869,15 @@ if ($GUI -and $script:BuildSucceeded -and (Test-Path -LiteralPath $outputIso)) {
             }
         }
 
-        # Clean VHDX file on success
-        if ($vhdxDetached -and $vhdxPath -and (Test-Path -LiteralPath $vhdxPath)) {
+        # Clean VHDX file on success only if confirmed detached and all safety guards pass
+        if (Test-CanSafelyDeleteVhdx -VhdxPath $vhdxPath -VhdxDetached $vhdxDetached -ExpectedBaseDir $baseWorkDir -PreservedDirs $script:PreservedMountDirs) {
             if ($vhdxMountDir -and (Test-Path -LiteralPath $vhdxMountDir)) {
                 $rpCheck = Get-Item -LiteralPath $vhdxMountDir -Force -ErrorAction SilentlyContinue
                 if ($rpCheck -and ($rpCheck.Attributes -band [System.IO.FileAttributes]::ReparsePoint)) {
                     try { & mountvol.exe "$vhdxMountDir" /D > $null 2>&1 } catch {}
                     try { [System.IO.Directory]::Delete($vhdxMountDir, $false) } catch { try { $rpCheck.Delete() } catch {} }
                 } else {
-                    if (Test-IsSafePathToDelete -Path $vhdxMountDir) {
+                    if (Test-CanSafelyDeleteDirectory -Path $vhdxMountDir -ExpectedBaseDir $baseWorkDir -PreservedDirs $script:PreservedMountDirs) {
                         Reset-DirectoryWithRobocopy -Path $vhdxMountDir
                         Remove-Item -LiteralPath $vhdxMountDir -Force -ErrorAction SilentlyContinue
                     }
@@ -9607,25 +9886,24 @@ if ($GUI -and $script:BuildSucceeded -and (Test-Path -LiteralPath $outputIso)) {
             Remove-Item -LiteralPath $vhdxPath -Force -ErrorAction SilentlyContinue
         }
     } else {
-        # BUILD FAILED: STRICTLY PRESERVE FORENSIC ARTIFACTS (Rules 17, 18)
+        # BUILD FAILED OR UNVERIFIED STATE: STRICTLY PRESERVE FORENSIC ARTIFACTS
         Write-Host ""
         Write-Host "=========================================================" -ForegroundColor Yellow
-        Write-Host " [DIAGNOSTIC PRESERVATION] BUILD DID NOT SUCCEED         " -ForegroundColor Yellow
+        Write-Host " [DIAGNOSTIC PRESERVATION] BUILD NOT COMPLETED / PROTECTED" -ForegroundColor Yellow
         Write-Host " Preserving intermediate artifacts for forensic analysis:" -ForegroundColor Yellow
         Write-Host "=========================================================" -ForegroundColor Yellow
         if ($nano11Dir -and (Test-Path -LiteralPath $nano11Dir)) {
             Write-Host "  - ISO Workspace:     $nano11Dir" -ForegroundColor Yellow
             $script:DiagnosticData.PreservedArtifacts += $nano11Dir
-            $destWimBackupPath = Join-Path -Path "$nano11Dir\sources" -ChildPath "install_pre_export_backup.wim"
-            if (Test-Path -LiteralPath $destWimBackupPath) {
-                Write-Host "  - Pre-Export WIM:    $destWimBackupPath" -ForegroundColor Yellow
-                $script:DiagnosticData.PreservedArtifacts += $destWimBackupPath
-            }
             $finalWimPath = Join-Path -Path "$nano11Dir\sources" -ChildPath "install.wim"
             if (Test-Path -LiteralPath $finalWimPath) {
                 Write-Host "  - Exported WIM:      $finalWimPath" -ForegroundColor Yellow
                 $script:DiagnosticData.PreservedArtifacts += $finalWimPath
             }
+        }
+        if (Test-Path -LiteralPath $destWimBackupPath) {
+            Write-Host "  - Pre-Export WIM:    $destWimBackupPath" -ForegroundColor Yellow
+            $script:DiagnosticData.PreservedArtifacts += $destWimBackupPath
         }
         if ($workDir -and (Test-Path -LiteralPath $workDir)) {
             Write-Host "  - Working Directory: $workDir" -ForegroundColor Yellow
@@ -9640,7 +9918,7 @@ if ($GUI -and $script:BuildSucceeded -and (Test-Path -LiteralPath $outputIso)) {
             $script:DiagnosticData.PreservedArtifacts += $script:DiagDir
         }
         Write-Host "=========================================================" -ForegroundColor Yellow
-        Write-Nano11DiagnosticReport "Artifacts preserved after build failure"
+        Write-Nano11DiagnosticReport "Artifacts preserved after build failure or unverified state"
     }
 
     # 7. Build elapsed time and policy stats
