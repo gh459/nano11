@@ -2747,25 +2747,25 @@ function Invoke-Nano11SelfTest {
     $profPass = $false
     $profMsg = ""
     $expectedPresetKeys = @('extreme', 'balanced', 'fat32', 'handheld', 'vm', 'audio')
-    $missingPresets = @()
+    $missingPresets = [System.Collections.Generic.List[string]]::new()
     foreach ($ep in $expectedPresetKeys) {
         if (-not $script:BuiltInPresets.Contains($ep)) {
-            $missingPresets += $ep
+            $missingPresets.Add($ep)
         }
     }
     if ($missingPresets.Count -eq 0 -and $script:TweakGroups.Count -ge 6 -and $script:PowerPresets.Count -ge 4) {
-        $badPresets = @()
+        $badPresets = [System.Collections.Generic.List[string]]::new()
         foreach ($kv in $script:BuiltInPresets.GetEnumerator()) {
             $pName = $kv.Key
             $pDef = $kv.Value
             if (-not $pDef.ProfileName -or -not $pDef.Description) {
-                $badPresets += "$pName (missing ProfileName/Description)"
+                $badPresets.Add("$pName (missing ProfileName/Description)")
             }
             if (-not $pDef.PowerPreset -or -not $script:PowerPresets.Contains($pDef.PowerPreset)) {
-                $badPresets += "$pName (invalid PowerPreset: $($pDef.PowerPreset))"
+                $badPresets.Add("$pName (invalid PowerPreset: $($pDef.PowerPreset))")
             }
             if (-not $pDef.TweakGroups) {
-                $badPresets += "$pName (missing TweakGroups)"
+                $badPresets.Add("$pName (missing TweakGroups)")
             }
         }
         if ($badPresets.Count -eq 0) {
