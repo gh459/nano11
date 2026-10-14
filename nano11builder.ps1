@@ -2625,10 +2625,10 @@ function Import-Nano11Profile {
             'CleanWinSxS', 'SkipEdge', 'KeepXboxServices', 'KeepAudioTweaks', 'KeepBasicApps', 'KeepSearchIndex',
             'UseVHDX', 'ProfileName', 'Description', 'Version', 'Architecture'
         )
-        $unknownKeys = @()
+        $unknownKeys = [System.Collections.Generic.List[string]]::new()
         foreach ($prop in $settings.PSObject.Properties) {
             if ($knownKeys -notcontains $prop.Name) {
-                $unknownKeys += $prop.Name
+                $unknownKeys.Add($prop.Name)
             }
         }
         if ($unknownKeys.Count -gt 0) {
