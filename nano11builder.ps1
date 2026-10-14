@@ -2929,13 +2929,13 @@ function Invoke-Nano11SelfTest {
         )
 
         $regex = '(?i)^\{[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}(?<HivePath>[A-Za-z]:[\\/].+)$'
-        $matchedKeys = @()
+        $matchedKeys = [System.Collections.Generic.List[string]]::new()
         foreach ($mk in $mockKeys) {
             if ($mk -match $regex) {
                 try {
                     $normH = ConvertTo-Nano11NormalizedPath -Path $Matches['HivePath']
                     if ($expectedSet.Contains($normH)) {
-                        $matchedKeys += $mk
+                        [void]$matchedKeys.Add($mk)
                     }
                 } catch {}
             }
