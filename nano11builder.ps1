@@ -2096,15 +2096,6 @@ function Enter-Phase {
     Write-Host "=========================================================" -ForegroundColor Cyan
 }
 
-function Exit-Phase {
-    if ($script:PhaseStopwatch) {
-        $script:PhaseStopwatch.Stop()
-        $prevPhaseKey = "Phase $($script:CurrentPhase)"
-        $script:PhaseTimings[$prevPhaseKey] = [math]::Round($script:PhaseStopwatch.Elapsed.TotalSeconds, 1)
-        $script:PhaseStopwatch = $null
-    }
-}
-
 # ==============================================================================
 # Modular Tweak Architecture & In-Memory Built-in Presets
 # ==============================================================================
