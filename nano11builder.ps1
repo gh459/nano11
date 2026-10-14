@@ -3155,6 +3155,35 @@ function Invoke-Nano11SelfTest {
     }
     $results += [PSCustomObject]@{ Test = "14. Workspace Preservation Logic"; Passed = $preserveTestPass; Details = $preserveTestMsg }
 
+    # 15. Context Menu Command Quoting Safety
+    $contextMenuPass = $false
+    $contextMenuMsg = ""
+    try {
+        if (Test-Path -LiteralPath $BuilderPath) {
+            $scriptLines = Get-Content -LiteralPath $BuilderPath
+            $unquotedPlaceholders = @()
+            for ($i = 0; $i -lt $scriptLines.Count; $i++) {
+                $line = $scriptLines[$i]
+                if ($line -like "*Classes\*shell*\command*" -and $line -notlike "*#*") {
+                    if ($line -match 'pushd,%V' -or ($line -match '%V' -and $line -notmatch '\\"%V\\"') -or ($line -match '%1' -and $line -notmatch '\\"%1\\"')) {
+                        $unquotedPlaceholders += "Line $($i+1)"
+                    }
+                }
+            }
+            if ($unquotedPlaceholders.Count -eq 0) {
+                $contextMenuPass = $true
+                $contextMenuMsg = "All context menu command path placeholders (%V, %1) properly quoted"
+            } else {
+                $contextMenuMsg = "Unquoted placeholders found: $($unquotedPlaceholders -join ', ')"
+            }
+        } else {
+            $contextMenuMsg = "Builder script not found"
+        }
+    } catch {
+        $contextMenuMsg = "Exception during context menu quoting test: $_"
+    }
+    $results += [PSCustomObject]@{ Test = "15. Context Menu Quoting Safety"; Passed = $contextMenuPass; Details = $contextMenuMsg }
+
     # Display Results
     Write-Host ""
     $allPassed = $true
@@ -7286,7 +7315,7 @@ reg.exe add "HKLM\zSOFTWARE\Classes\Directory\shell\runas\command" /f /v "Isolat
 # Context Menu: Command Prompt as Administrator
 reg.exe add "HKLM\zSOFTWARE\Classes\Directory\Background\shell\runas" /f /ve /t REG_SZ /d "Open Command Prompt as Administrator" > $null 2>&1
 reg.exe add "HKLM\zSOFTWARE\Classes\Directory\Background\shell\runas" /f /v "HasLUAShield" /t REG_SZ /d '""' > $null 2>&1
-reg.exe add "HKLM\zSOFTWARE\Classes\Directory\Background\shell\runas\command" /f /ve /t REG_SZ /d 'PowerShell -windowstyle hidden -Command \"Start-Process cmd.exe -ArgumentList ''/s,/k,pushd,%V'' -Verb RunAs\"' > $null 2>&1
+reg.exe add "HKLM\zSOFTWARE\Classes\Directory\Background\shell\runas\command" /f /ve /t REG_SZ /d 'PowerShell -windowstyle hidden -Command \"Start-Process cmd.exe -ArgumentList ''/s,/k,pushd,\"%V\"'' -Verb RunAs\"' > $null 2>&1
 
 # Context Menu: Rotate Right / Rotate Left for Images
 $imgExts = @('.avif', '.dds', '.gif', '.heif', '.jfif', '.jpeg', '.jpg', '.jxr', '.png', '.rle', '.tiff', '.webp')
