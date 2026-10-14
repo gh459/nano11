@@ -3449,7 +3449,7 @@ function Show-Nano11GUI {
     # Function to populate and refresh available source drives and ISOs
     $populateSources = {
         $cmbSource.Items.Clear()
-        $detectedSources = @()
+        $detectedSources = [System.Collections.Generic.List[string]]::new()
 
         # 1. Detected media drives with install.wim or install.esd
         foreach ($psd in (Get-PSDrive -PSProvider FileSystem -ErrorAction SilentlyContinue)) {
@@ -3460,9 +3460,9 @@ function Show-Nano11GUI {
             $vol = Get-Volume -DriveLetter ($r.TrimEnd(':')) -ErrorAction SilentlyContinue
             $volLabel = if ($vol -and $vol.FileSystemLabel) { " [$($vol.FileSystemLabel)]" } else { "" }
             if ((Test-Path -LiteralPath $wim) -and ((Get-Item -LiteralPath $wim).Length -gt 500MB)) {
-                $detectedSources += "$r\$volLabel (Windows 11 メディア - install.wim)"
+                $detectedSources.Add("$r\$volLabel (Windows 11 メディア - install.wim)")
             } elseif ((Test-Path -LiteralPath $esd) -and ((Get-Item -LiteralPath $esd).Length -gt 500MB)) {
-                $detectedSources += "$r\$volLabel (Windows 11 メディア - install.esd)"
+                $detectedSources.Add("$r\$volLabel (Windows 11 メディア - install.esd)")
             }
         }
 
@@ -3475,7 +3475,7 @@ function Show-Nano11GUI {
                 $foundIsos = Get-ChildItem -Path $p -Filter "*.iso" -File -ErrorAction SilentlyContinue |
                     Where-Object { $_.Length -gt 3GB -and ($_.Name -like "*Win11*" -or $_.Name -like "*Windows11*" -or $_.Name -like "*26300*" -or $_.Name -like "*24H2*") -and $_.Name -notlike "*nano11*" }
                 foreach ($iso in $foundIsos) {
-                    $detectedSources += $iso.FullName
+                    $detectedSources.Add($iso.FullName)
                 }
             }
         }
@@ -3500,7 +3500,7 @@ function Show-Nano11GUI {
                         }
                     }
                     if (-not $alreadyListed) {
-                        $detectedSources += $entry
+                        $detectedSources.Add($entry)
                     }
                 }
             }
