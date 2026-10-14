@@ -2719,13 +2719,13 @@ function Invoke-Nano11SelfTest {
             $doc.Load($UnattendPath)
             if ($doc.DocumentElement.Name -eq 'unattend' -and $doc.unattend.settings) {
                 # Check for duplicate components in the same pass
-                $duplicateComponents = @()
+                $duplicateComponents = [System.Collections.Generic.List[string]]::new()
                 foreach ($pass in $doc.unattend.settings) {
                     $passName = $pass.pass
                     $compKeys = @($pass.component | ForEach-Object { "$($_.name) [$($_.processorArchitecture)]" })
                     $dups = $compKeys | Group-Object | Where-Object { $_.Count -gt 1 }
                     if ($dups) {
-                        $duplicateComponents += "Pass '$passName': $($dups.Name -join ', ')"
+                        $duplicateComponents.Add("Pass '$passName': $($dups.Name -join ', ')")
                     }
                 }
                 if ($duplicateComponents.Count -gt 0) {
