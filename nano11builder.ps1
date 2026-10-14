@@ -2797,13 +2797,13 @@ function Invoke-Nano11SelfTest {
     $batMsg = ""
     $batFiles = Get-ChildItem -Path $ScriptRoot -Filter "*.bat" -File -ErrorAction SilentlyContinue
     if ($batFiles.Count -gt 0) {
-        $badBats = @()
+        $badBats = [System.Collections.Generic.List[string]]::new()
         foreach ($bf in $batFiles) {
             $batText = [System.IO.File]::ReadAllText($bf.FullName, [System.Text.Encoding]::UTF8)
             if ($batText -match 'BUILDER' -or $batText -match 'nano11builder') {
                 # Valid reference
             } else {
-                $badBats += "$($bf.Name) (no builder reference)"
+                $badBats.Add("$($bf.Name) (no builder reference)")
             }
         }
         if ($badBats.Count -eq 0) {
