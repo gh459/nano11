@@ -2868,13 +2868,13 @@ function Invoke-Nano11SelfTest {
         'Microsoft.Getstarted_10.2209.1.0_neutral_~_8wekyb3d8bbwe'
     )
     $testPatterns = @('*Bing*', '*Notepad*', '*Paint*', '*Calculator*', '*549981C3F5F10*', '*Zune*', '*GamingApp*', '*Getstarted*')
-    $unmatched = @()
+    $unmatched = [System.Collections.Generic.List[string]]::new()
     foreach ($tp in $testPatterns) {
         $matched = $false
         foreach ($sp in $samplePackages) {
             if ($sp -like $tp) { $matched = $true; break }
         }
-        if (-not $matched) { $unmatched += $tp }
+        if (-not $matched) { $unmatched.Add($tp) }
     }
     if ($unmatched.Count -eq 0) {
         $appxTestPass = $true
