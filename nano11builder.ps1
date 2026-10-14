@@ -1569,7 +1569,7 @@ function Clear-DismMountConflicts {
     # Step 1: Attempt standard DISM unmount / remount retry loop
     for ($attempt = 1; $attempt -le $Retries; $attempt++) {
         $mounted = @(Get-Nano11MountedImages)
-        $conflicts = @()
+        $conflicts = [System.Collections.Generic.List[psobject]]::new()
 
         foreach ($m in $mounted) {
             $mPath = if ($m.Path) { try { [System.IO.Path]::GetFullPath($m.Path).TrimEnd('\') } catch { $null } } else { $null }
@@ -1605,7 +1605,7 @@ function Clear-DismMountConflicts {
                     Write-Host "Detected prior build mount at workspace path '$mPath' for '$normWim'. Adopting for safe cleanup." -ForegroundColor Yellow
                     [void]$script:ManagedMountDirs.Add($mPath)
                     [void]$script:AllocatedMountDirs.Add($mPath)
-                    $conflicts += $m
+                    [void]$conflicts.Add($m)
                     continue
                 } else {
                     throw "Safety violation: Target image '$normWim' is currently mounted at an external unmanaged directory '$mPath' (Status: $($m.MountStatus)). Refusing to automatically discard."
@@ -1613,7 +1613,7 @@ function Clear-DismMountConflicts {
             }
 
             if ($matchMount -or $matchWim) {
-                $conflicts += $m
+                [void]$conflicts.Add($m)
             }
         }
 
