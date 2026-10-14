@@ -2832,10 +2832,10 @@ function Invoke-Nano11SelfTest {
     if ($allUnattends.Count -eq 1 -and $allUnattends[0].Name -ieq "autounattend.xml") {
         $xmlRaw = [System.IO.File]::ReadAllText($allUnattends[0].FullName, [System.Text.Encoding]::UTF8)
         $requiredScripts = @('Specialize.ps1', 'FirstLogon.ps1', 'DefaultUser.ps1', 'UserOnce.ps1')
-        $missingScripts = @()
+        $missingScripts = [System.Collections.Generic.List[string]]::new()
         foreach ($rs in $requiredScripts) {
             if ($xmlRaw -notmatch [regex]::Escape($rs)) {
-                $missingScripts += $rs
+                $missingScripts.Add($rs)
             }
         }
         if ($missingScripts.Count -eq 0) {
