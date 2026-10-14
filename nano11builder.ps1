@@ -5308,7 +5308,7 @@ function Find-AndMountHealthyWindowsIso {
 
 if (-not $DriveLetter) {
     # Scan all filesystem drives for sources\install.wim or sources\install.esd
-    $detectedMediaDrives = @()
+    $detectedMediaDrives = [System.Collections.Generic.List[psobject]]::new()
     foreach ($psd in (Get-PSDrive -PSProvider FileSystem -ErrorAction SilentlyContinue)) {
         if (-not $psd.Root) { continue }
         $rootClean = $psd.Root.TrimEnd('\')
@@ -5317,9 +5317,9 @@ if (-not $DriveLetter) {
         $hasWimP = (Test-Path -LiteralPath $wimP) -and ((Get-Item -LiteralPath $wimP).Length -gt 1GB)
         $hasEsdP = (Test-Path -LiteralPath $esdP) -and ((Get-Item -LiteralPath $esdP).Length -gt 1GB)
         if ($hasWimP) {
-            $detectedMediaDrives += $psd
+            $detectedMediaDrives.Add($psd)
         } elseif ($hasEsdP) {
-            $detectedMediaDrives += $psd
+            $detectedMediaDrives.Add($psd)
             Write-Host "  [i] Notice: Drive $rootClean contains 'install.esd'. It will be converted to install.wim via DISM." -ForegroundColor Cyan
         }
     }
@@ -5335,7 +5335,7 @@ if (-not $DriveLetter) {
             $mountedClean = $mountedDriveLetter.TrimEnd(':')
             $newPsd = Get-PSDrive -Name $mountedClean -PSProvider FileSystem -ErrorAction SilentlyContinue
             if ($newPsd -and ($detectedMediaDrives.Root -notcontains $newPsd.Root)) {
-                $detectedMediaDrives += $newPsd
+                $detectedMediaDrives.Add($newPsd)
             }
         }
     }
