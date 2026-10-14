@@ -366,20 +366,6 @@ function Get-Nano11BuildState {
     return [PSCustomObject]@{ Phases = (New-Object PSObject) }
 }
 
-function Set-Nano11BuildState {
-    param([string]$Phase, [string]$Status = "Completed")
-    if (-not $script:BuildStateFile) { return }
-    try {
-        $st = Get-Nano11BuildState
-        if (-not $st.Phases) {
-            $st | Add-Member -MemberType NoteProperty -Name Phases -Value (New-Object PSObject) -Force
-        }
-        $st.Phases | Add-Member -MemberType NoteProperty -Name $Phase -Value $Status -Force
-        $json = $st | ConvertTo-Json -Depth 5
-        [System.IO.File]::WriteAllText($script:BuildStateFile, $json, (New-Object System.Text.UTF8Encoding($false)))
-    } catch {}
-}
-
 function Test-Nano11PhaseCompleted {
     param([string]$Phase)
     if (-not $Resume) { return $false }
