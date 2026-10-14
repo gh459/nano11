@@ -2592,60 +2592,6 @@ function Apply-ProfileSettings {
     return $targetPreset
 }
 
-# Helper function: Import configuration settings from a JSON profile
-function Import-Nano11Profile {
-    param(
-        [Parameter(Mandatory=$true)]
-        [string]$FilePath
-    )
-    if (-not (Test-Path -LiteralPath $FilePath)) {
-        if ($NonInteractive) {
-            throw "Error: Profile file not found: $FilePath"
-        } else {
-            Write-Host "Error: Profile file not found: $FilePath" -ForegroundColor Red
-            return $null
-        }
-    }
-    try {
-        $rawJson = [System.IO.File]::ReadAllText($FilePath, [System.Text.Encoding]::UTF8)
-        $data = $rawJson | ConvertFrom-Json
-        if ($data.Version -and $data.Version -ne "2.0" -and $data.Version -ne "2.1" -and $data.Version -ne $script:Nano11Version) {
-            Write-Warning "Profile version ($($data.Version)) differs from current ($script:Nano11Version)."
-        }
-        $settings = if ($data.Settings) { $data.Settings } else { $data }
-
-        # Profile Schema Linter & Unknown Key Typo Detection
-        $knownKeys = @(
-            'RemoveDefender', 'SkipDefender', 'KeepAsianIME', 'KeepExtraFonts',
-            'RemoveDrivers', 'DisableWindowsUpdate', 'SkipSecurityUpdates', 'KeepBluetooth',
-            'WSLSupport', 'KeepRecoveryEnv', 'KeepWinRE', 'SafeDebloatMode',
-            'UltraSlimMode', 'SetJapaneseKeyboard', 'AtlasReviOSMode',
-            'RemoveStore', 'KeepStore', 'BypassActivationRestrictions', 'UnlockPersonalization', 'NoActivationRestrictions',
-            'PayloadFormat', 'SplitWim', 'Fat32Compatible', 'EnableCompactOS',
-            'CleanWinSxS', 'SkipEdge', 'KeepXboxServices', 'KeepAudioTweaks', 'KeepBasicApps', 'KeepSearchIndex',
-            'UseVHDX', 'ProfileName', 'Description', 'Version', 'Architecture'
-        )
-        $unknownKeys = @()
-        foreach ($prop in $settings.PSObject.Properties) {
-            if ($knownKeys -notcontains $prop.Name) {
-                $unknownKeys += $prop.Name
-            }
-        }
-        if ($unknownKeys.Count -gt 0) {
-            Write-Warning "Profile '$([System.IO.Path]::GetFileName($FilePath))' contains unrecognized setting(s): $($unknownKeys -join ', '). Please check for typos."
-        }
-
-        return $settings
-    } catch {
-        if ($NonInteractive) {
-            throw "Failed to parse JSON profile '$FilePath': $_"
-        } else {
-            Write-Host "Failed to parse JSON profile: $_" -ForegroundColor Red
-            return $null
-        }
-    }
-}
-
 # Helper function: Execute built-in diagnostic and repository self-test suite
 function Invoke-Nano11SelfTest {
     [CmdletBinding()]
