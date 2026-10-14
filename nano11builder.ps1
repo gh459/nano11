@@ -8612,6 +8612,31 @@ try {
 } catch {}
 $ErrorActionPreference = 'Stop'
 
+function Test-InstallerSignature {
+    param(
+        [string]$Path,
+        [string]$ExpectedPublisherPattern
+    )
+    if (-not (Test-Path -LiteralPath $Path)) { return $false }
+    try {
+        $sig = Get-AuthenticodeSignature -FilePath $Path -ErrorAction SilentlyContinue
+        if ($null -eq $sig -or $sig.Status -ne 'Valid') {
+            $statusStr = if ($sig) { $sig.Status } else { 'Unknown' }
+            Write-Host "Security Error: Digital signature verification failed for $Path (Status: $statusStr)." -ForegroundColor Red
+            return $false
+        }
+        if ($ExpectedPublisherPattern -and $sig.SignerCertificate.Subject -notmatch $ExpectedPublisherPattern) {
+            Write-Host "Security Error: Publisher '$($sig.SignerCertificate.Subject)' does not match expected pattern '$ExpectedPublisherPattern'." -ForegroundColor Red
+            return $false
+        }
+        Write-Host "Verified Authenticode signature: $($sig.SignerCertificate.Subject)" -ForegroundColor Green
+        return $true
+    } catch {
+        Write-Host "Security Error: Exception during signature verification: $($_.Exception.Message)" -ForegroundColor Red
+        return $false
+    }
+}
+
 Clear-Host
 Write-Host "=========================================================" -ForegroundColor Cyan
 Write-Host "               nano11 Browser Installer" -ForegroundColor Cyan
@@ -8639,6 +8664,9 @@ try {
             Write-Host "`nDownloading Google Chrome..." -ForegroundColor Green
             $installer = Join-Path -Path $tempDir -ChildPath "ChromeSetup.exe"
             Invoke-WebRequest -Uri "https://dl.google.com/chrome/install/latest/chrome_installer.exe" -OutFile $installer -UseBasicParsing
+            if (-not (Test-InstallerSignature -Path $installer -ExpectedPublisherPattern "Google")) {
+                throw "Google Chrome installer failed digital signature verification! Aborting installation for security."
+            }
             Write-Host "Installing Google Chrome silently..." -ForegroundColor Green
             Start-Process -FilePath $installer -ArgumentList "/silent /install" -Wait
             Write-Host "Google Chrome installation completed!" -ForegroundColor Green
@@ -8647,6 +8675,9 @@ try {
             Write-Host "`nDownloading Mozilla Firefox..." -ForegroundColor Yellow
             $installer = Join-Path -Path $tempDir -ChildPath "FirefoxSetup.exe"
             Invoke-WebRequest -Uri "https://download.mozilla.org/?product=firefox-latest-ssl&os=win64&lang=ja" -OutFile $installer -UseBasicParsing
+            if (-not (Test-InstallerSignature -Path $installer -ExpectedPublisherPattern "Mozilla")) {
+                throw "Mozilla Firefox installer failed digital signature verification! Aborting installation for security."
+            }
             Write-Host "Installing Mozilla Firefox silently..." -ForegroundColor Yellow
             Start-Process -FilePath $installer -ArgumentList "/S" -Wait
             Write-Host "Mozilla Firefox installation completed!" -ForegroundColor Green
@@ -8655,6 +8686,9 @@ try {
             Write-Host "`nDownloading Brave Browser..." -ForegroundColor Magenta
             $installer = Join-Path -Path $tempDir -ChildPath "BraveSetup.exe"
             Invoke-WebRequest -Uri "https://laptop-updates.brave.com/latest/winx64" -OutFile $installer -UseBasicParsing
+            if (-not (Test-InstallerSignature -Path $installer -ExpectedPublisherPattern "Brave")) {
+                throw "Brave Browser installer failed digital signature verification! Aborting installation for security."
+            }
             Write-Host "Installing Brave Browser silently..." -ForegroundColor Magenta
             Start-Process -FilePath $installer -ArgumentList "/silent /install" -Wait
             Write-Host "Brave Browser installation completed!" -ForegroundColor Green
@@ -8663,6 +8697,9 @@ try {
             Write-Host "`nDownloading Floorp Browser..." -ForegroundColor Cyan
             $installer = Join-Path -Path $tempDir -ChildPath "FloorpSetup.exe"
             Invoke-WebRequest -Uri "https://github.com/Floorp-Projects/Floorp/releases/latest/download/floorp-windows-x86_64-setup.exe" -OutFile $installer -UseBasicParsing
+            if (-not (Test-InstallerSignature -Path $installer -ExpectedPublisherPattern "Floorp|Abelian|Mozilla")) {
+                throw "Floorp Browser installer failed digital signature verification! Aborting installation for security."
+            }
             Write-Host "Installing Floorp Browser silently..." -ForegroundColor Cyan
             Start-Process -FilePath $installer -ArgumentList "/S" -Wait
             Write-Host "Floorp Browser installation completed!" -ForegroundColor Green
@@ -8671,6 +8708,9 @@ try {
             Write-Host "`nDownloading Microsoft Edge..." -ForegroundColor Blue
             $installer = Join-Path -Path $tempDir -ChildPath "MicrosoftEdgeSetup.exe"
             Invoke-WebRequest -Uri "https://msedge.sf.dl.delivery.mp.microsoft.com/filestreamingservice/files/latest/MicrosoftEdgeSetup.exe" -OutFile $installer -UseBasicParsing
+            if (-not (Test-InstallerSignature -Path $installer -ExpectedPublisherPattern "Microsoft")) {
+                throw "Microsoft Edge installer failed digital signature verification! Aborting installation for security."
+            }
             Write-Host "Installing Microsoft Edge silently..." -ForegroundColor Blue
             Start-Process -FilePath $installer -ArgumentList "/silent /install" -Wait
             Write-Host "Microsoft Edge installation completed!" -ForegroundColor Green
