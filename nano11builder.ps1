@@ -3162,6 +3162,34 @@ function Invoke-Nano11SelfTest {
     }
     $results += [PSCustomObject]@{ Test = "14. Workspace Preservation Logic"; Passed = $preserveTestPass; Details = $preserveTestMsg }
 
+    # 15. NTFS Volume Detection Logic (Test-IsNtfsVolume)
+    $ntfsTestPass = $false
+    $ntfsTestMsg = ""
+    try {
+        # Check invalid/null/empty/whitespace paths
+        $nullResult = Test-IsNtfsVolume -Path $null
+        $emptyResult = Test-IsNtfsVolume -Path ""
+        $spaceResult = Test-IsNtfsVolume -Path "   "
+        $invalidResult = Test-IsNtfsVolume -Path "Z:\NonExistentDirectory9999\SubFolder"
+
+        $nullCheckPassed = (-not $nullResult) -and (-not $emptyResult) -and (-not $spaceResult) -and (-not $invalidResult)
+
+        # Check system drive if available
+        $sysDrive = $env:SystemDrive
+        if (-not $sysDrive) { $sysDrive = "C:" }
+        $sysDriveResult = Test-IsNtfsVolume -Path "$sysDrive\"
+
+        if ($nullCheckPassed) {
+            $ntfsTestPass = $true
+            $ntfsTestMsg = "Null/empty/whitespace/invalid paths safely returned `$false; system drive ($sysDrive\) evaluated to $sysDriveResult"
+        } else {
+            $ntfsTestMsg = "Failed input validation checks for Test-IsNtfsVolume"
+        }
+    } catch {
+        $ntfsTestMsg = "Exception during NTFS volume detection test: $_"
+    }
+    $results += [PSCustomObject]@{ Test = "15. NTFS Volume Detection Logic"; Passed = $ntfsTestPass; Details = $ntfsTestMsg }
+
     # Display Results
     Write-Host ""
     $allPassed = $true
