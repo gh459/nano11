@@ -380,16 +380,6 @@ function Set-Nano11BuildState {
     } catch {}
 }
 
-function Test-Nano11PhaseCompleted {
-    param([string]$Phase)
-    if (-not $Resume) { return $false }
-    $st = Get-Nano11BuildState
-    if ($st -and $st.Phases -and $st.Phases.PSObject.Properties[$Phase] -and ($st.Phases.$Phase -eq "Completed")) {
-        return $true
-    }
-    return $false
-}
-
 # Helper function: Standardized DISM wrapper with retries and exit code diagnostics
 function Invoke-Dism {
     param(
