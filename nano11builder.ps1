@@ -2693,11 +2693,14 @@ function Invoke-Nano11SelfTest {
     $regMsg = "Safe: No illegal offline CurrentControlSet keys created"
     if (Test-Path -LiteralPath $BuilderPath) {
         $lines = Get-Content -LiteralPath $BuilderPath
-        $illegal = @()
+        $illegal = [System.Collections.Generic.List[string]]::new()
         for ($i = 0; $i -lt $lines.Count; $i++) {
             $line = $lines[$i]
-            if ($line -like "*zSYSTEM\CurrentControlSet*" -and $line -notlike "*reg.exe query*" -and $line -notlike "*reg.exe delete*" -and $line -notlike "*#*") {
-                $illegal += "Line $($i+1): $line"
+            if ($line.IndexOf("zSYSTEM\CurrentControlSet", [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -and
+                $line.IndexOf("reg.exe query", [System.StringComparison]::OrdinalIgnoreCase) -lt 0 -and
+                $line.IndexOf("reg.exe delete", [System.StringComparison]::OrdinalIgnoreCase) -lt 0 -and
+                $line.IndexOf("#", [System.StringComparison]::OrdinalIgnoreCase) -lt 0) {
+                $illegal.Add("Line $($i+1): $line")
             }
         }
         if ($illegal.Count -gt 0) {
