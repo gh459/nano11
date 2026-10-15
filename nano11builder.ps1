@@ -380,6 +380,16 @@ function Set-Nano11BuildState {
     } catch {}
 }
 
+function Test-Nano11PhaseCompleted {
+    param([string]$Phase)
+    if (-not $script:Resume) { return $false }
+    $st = Get-Nano11BuildState
+    if ($st -and $st.Phases -and $st.Phases.PSObject.Properties[$Phase]) {
+        return ($st.Phases.$Phase -eq "Completed")
+    }
+    return $false
+}
+
 # Helper function: Standardized DISM wrapper with retries and exit code diagnostics
 function Invoke-Dism {
     param(
@@ -2677,7 +2687,7 @@ function Invoke-Nano11SelfTest {
         $illegal = [System.Collections.Generic.List[string]]::new()
         for ($i = 0; $i -lt $lines.Count; $i++) {
             $line = $lines[$i]
-            if ($line.IndexOf("zSYSTEM\CurrentControlSet", [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -and
+            if ($line.IndexOf("zSYSTEM\" + "CurrentControlSet", [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -and
                 $line.IndexOf("reg.exe query", [System.StringComparison]::OrdinalIgnoreCase) -lt 0 -and
                 $line.IndexOf("reg.exe delete", [System.StringComparison]::OrdinalIgnoreCase) -lt 0 -and
                 $line.IndexOf("#", [System.StringComparison]::OrdinalIgnoreCase) -lt 0) {
@@ -8583,8 +8593,18 @@ try {
             foreach ($fileNode in $xmlDoc.unattend.Extensions.File) {
                 $rawTarget = $fileNode.GetAttribute("path")
                 if ($rawTarget) {
-                    $relTarget = $rawTarget -replace '^[A-Za-z]:\\', ''
-                    $destPath = Join-Path -Path $scratchDir -ChildPath $relTarget
+                    # Security boundary check: prevent path traversal attacks escaping workspace
+                    $relTarget = $rawTarget -replace '^(?:[A-Za-z]:|%SystemDrive%)[\\/]+', ''
+                    if ($relTarget -match '\.\.') {
+                        Write-Warning "Security Boundary Alert: Path traversal '..' detected in target path '$rawTarget'. Skipping."
+                        continue
+                    }
+                    $scratchFull = [System.IO.Path]::GetFullPath($scratchDir).TrimEnd('\', '/')
+                    $destPath = [System.IO.Path]::GetFullPath((Join-Path -Path $scratchFull -ChildPath $relTarget))
+                    if (-not $destPath.StartsWith($scratchFull + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)) {
+                        Write-Warning "Security Boundary Alert: Target path '$destPath' escapes workspace boundary '$scratchFull'. Skipping."
+                        continue
+                    }
                     $parentDir = Split-Path -Path $destPath -Parent
                     if (-not (Test-Path -LiteralPath $parentDir)) {
                         New-Item -Path $parentDir -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null

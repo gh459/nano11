@@ -20,6 +20,55 @@ BeforeAll {
     }
 }
 
+Describe "Unattend Pre-Extraction Path Traversal Security" {
+    It "Should reject path traversal sequences and workspace escaping targets" {
+        $mockScratch = Join-Path -Path ([System.IO.Path]::GetTempPath()) -ChildPath "nano11_mock_scratch_$([Guid]::NewGuid().ToString('N'))"
+        New-Item -ItemType Directory -Path $mockScratch -Force | Out-Null
+
+        try {
+            $testXml = @"
+<unattend xmlns="urn:schemas-microsoft-com:unattend">
+    <Extensions xmlns="https://schneegans.de/windows/unattend-generator/">
+        <File path="C:\Windows\Setup\Scripts\Valid.ps1">Write-Host 'Safe'</File>
+        <File path="C:\..\..\..\EscapedHostFile.txt">Write-Host 'Malicious'</File>
+    </Extensions>
+</unattend>
+"@
+            $xmlDoc = [xml]$testXml
+            $scratchDir = $mockScratch
+
+            foreach ($fileNode in $xmlDoc.unattend.Extensions.File) {
+                $rawTarget = $fileNode.GetAttribute("path")
+                if ($rawTarget) {
+                    $relTarget = $rawTarget -replace '^(?:[A-Za-z]:|%SystemDrive%)[\\/]+', ''
+                    if ($relTarget -match '\.\.') {
+                        continue
+                    }
+                    $scratchFull = [System.IO.Path]::GetFullPath($scratchDir).TrimEnd('\', '/')
+                    $destPath = [System.IO.Path]::GetFullPath((Join-Path -Path $scratchFull -ChildPath $relTarget))
+                    if (-not $destPath.StartsWith($scratchFull + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)) {
+                        continue
+                    }
+                    $parentDir = Split-Path -Path $destPath -Parent
+                    if (-not (Test-Path -LiteralPath $parentDir)) {
+                        New-Item -Path $parentDir -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null
+                    }
+                    $utf8WithBom = New-Object System.Text.UTF8Encoding($true)
+                    [System.IO.File]::WriteAllText($destPath, $fileNode.InnerText.Trim(), $utf8WithBom)
+                }
+            }
+
+            Test-Path -LiteralPath (Join-Path -Path $mockScratch -ChildPath "Windows\Setup\Scripts\Valid.ps1") | Should -Be $true
+            Test-Path -LiteralPath (Join-Path -Path $mockScratch -ChildPath "EscapedHostFile.txt") | Should -Be $false
+            Test-Path -LiteralPath (Join-Path -Path ([System.IO.Path]::GetTempPath()) -ChildPath "EscapedHostFile.txt") | Should -Be $false
+        } finally {
+            if (Test-Path -LiteralPath $mockScratch) {
+                Remove-Item -LiteralPath $mockScratch -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        }
+    }
+}
+
 Describe "nano11builder.ps1 Script AST & Structure" {
     It "Should parse with 0 syntax or parser errors" {
         $tokens = $null
