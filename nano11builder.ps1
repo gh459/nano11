@@ -3641,6 +3641,7 @@ function Show-Nano11GUI {
         if (-not $docsDir) { $docsDir = Join-Path $env:USERPROFILE "Documents" }
         $txtWork.Text = Join-Path -Path $docsDir -ChildPath "nano11_workspace"
     }
+    $toolTip.SetToolTip($txtWork, "ISOの展開やイメージ編集を行う一時作業フォルダーパスを指定します (空き容量25GB以上推奨)")
     $grpMedia.Controls.Add($txtWork)
 
     $btnBrowseWork = New-Object System.Windows.Forms.Button
@@ -3650,6 +3651,7 @@ function Show-Nano11GUI {
     $btnBrowseWork.BackColor = [System.Drawing.Color]::FromArgb(45, 50, 60)
     $btnBrowseWork.ForeColor = [System.Drawing.Color]::White
     $btnBrowseWork.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $toolTip.SetToolTip($btnBrowseWork, "作業用フォルダーを選択するダイアログを開きます (空き容量25GB以上推奨)")
     $btnBrowseWork.Add_Click({
         $fbd = New-Object System.Windows.Forms.FolderBrowserDialog
         $fbd.Description = "空き容量が25GB以上ある NTFS ドライブ上の作業フォルダーを選択してください"
@@ -3699,6 +3701,7 @@ function Show-Nano11GUI {
     $btnBrowseDrivers.BackColor = [System.Drawing.Color]::FromArgb(45, 50, 60)
     $btnBrowseDrivers.ForeColor = [System.Drawing.Color]::White
     $btnBrowseDrivers.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $toolTip.SetToolTip($btnBrowseDrivers, "自動注入するドライバーフォルダー (.inf) を選択するダイアログを開きます")
     $btnBrowseDrivers.Add_Click({
         $fbd = New-Object System.Windows.Forms.FolderBrowserDialog
         $fbd.Description = "注入するドライバー群 (.inf) が格納されたフォルダーを選択してください"
@@ -3739,6 +3742,7 @@ function Show-Nano11GUI {
         "カスタム構成 (手動カスタマイズ)"
     ))
     $cmbPreset.SelectedIndex = 0
+    $toolTip.SetToolTip($cmbPreset, "用途に合わせた最適化構成プリセットを選択します")
     $grpProfile.Controls.Add($cmbPreset)
 
     # 3. Customization & Debloat Options GroupBox
@@ -3839,6 +3843,7 @@ function Show-Nano11GUI {
     $radWIM.Size = New-Object System.Drawing.Size(230, 25)
     $radWIM.ForeColor = [System.Drawing.Color]::FromArgb(235, 238, 245)
     $radWIM.Checked = $true
+    $toolTip.SetToolTip($radWIM, "標準の install.wim 形式で出力します (LZX 圧縮)")
     $grpPayload.Controls.Add($radWIM)
 
     $radESD = New-Object System.Windows.Forms.RadioButton
@@ -3846,6 +3851,7 @@ function Show-Nano11GUI {
     $radESD.Location = New-Object System.Drawing.Point(250, 28)
     $radESD.Size = New-Object System.Drawing.Size(215, 25)
     $radESD.ForeColor = [System.Drawing.Color]::FromArgb(235, 238, 245)
+    $toolTip.SetToolTip($radESD, "高圧縮の install.esd 形式で出力します (LZMS 圧縮・ISOサイズ削減)")
     $grpPayload.Controls.Add($radESD)
 
     $radSWM = New-Object System.Windows.Forms.RadioButton
@@ -3853,6 +3859,7 @@ function Show-Nano11GUI {
     $radSWM.Location = New-Object System.Drawing.Point(470, 28)
     $radSWM.Size = New-Object System.Drawing.Size(250, 25)
     $radSWM.ForeColor = [System.Drawing.Color]::FromArgb(235, 238, 245)
+    $toolTip.SetToolTip($radSWM, "FAT32 USB メモリ対応の分割 install.swm 形式で出力します")
     $grpPayload.Controls.Add($radSWM)
 
     if ($InitialSettings.ExportESDMode) {
@@ -3931,6 +3938,7 @@ function Show-Nano11GUI {
     $chkDryRun.Location = New-Object System.Drawing.Point(20, 22)
     $chkDryRun.Size = New-Object System.Drawing.Size(220, 24)
     $chkDryRun.ForeColor = [System.Drawing.Color]::FromArgb(235, 238, 245)
+    $toolTip.SetToolTip($chkDryRun, "実際のイメージ改変を行わず、処理フローと事前チェックのみを検証します")
     $bottomPanel.Controls.Add($chkDryRun)
 
     $btnBuild = New-Object System.Windows.Forms.Button
@@ -3941,6 +3949,7 @@ function Show-Nano11GUI {
     $btnBuild.ForeColor = [System.Drawing.Color]::White
     $btnBuild.Font = New-Object System.Drawing.Font($uiFontName, 10.5, [System.Drawing.FontStyle]::Bold)
     $btnBuild.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $toolTip.SetToolTip($btnBuild, "選択された設定で nano11 カスタマイズ ISO のビルドを開始します")
     $bottomPanel.Controls.Add($btnBuild)
 
     $btnCancel = New-Object System.Windows.Forms.Button
@@ -3952,6 +3961,7 @@ function Show-Nano11GUI {
     $btnCancel.ForeColor = [System.Drawing.Color]::White
     $btnCancel.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
     $btnCancel.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+    $toolTip.SetToolTip($btnCancel, "設定の変更を破棄して GUI を閉じます")
     $bottomPanel.Controls.Add($btnCancel)
 
     $formResult = @{ Success = $false }
