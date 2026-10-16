@@ -1,4 +1,0 @@
-## 2025-05-18 - Path Traversal in Secondary Unattend Pre-Extraction
-**Vulnerability:** Secondary unattend XML pre-extraction loop in `Set-Nano11UnattendScriptPreExtraction` relied on a simplistic drive strip regex (`^[A-Za-z]:\\`) without checking for path traversal (`..`) or workspace boundary escaping (`StartsWith`), allowing malformed XML `<File path="...">` elements to escape the build scratch directory and overwrite arbitrary files on the host machine.
-**Learning:** Primary extraction routines in the codebase had strict `GetFullPath` and `StartsWith` boundary validation, but the secondary fallback pre-extraction loop omitted these checks.
-**Prevention:** Always centralize path extraction and boundary assertion logic into a shared helper function (`Assert-Nano11DirectorySafety` or `Test-IsSafePathToDelete`) rather than duplicating `Join-Path` and file extraction loops across multiple functions.
