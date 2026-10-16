@@ -8045,6 +8045,10 @@ try {
                 foreach ($file in $fileNodes) {
                     $rawPath = $file.GetAttribute('path')
                     if (-not $rawPath) { continue }
+                    if ($rawPath -match '\.\.') {
+                        Log-Extract "Security Boundary Alert: Path traversal '..' detected in target path '$rawPath'. Skipping."
+                        continue
+                    }
                     $targetPath = [System.Environment]::ExpandEnvironmentVariables($rawPath)
                     if (-not (Test-Path -LiteralPath $targetPath)) {
                         $parent = Split-Path -Path $targetPath -Parent
