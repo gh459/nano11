@@ -1275,7 +1275,9 @@ function Test-CanSafelyDeleteDirectory {
     $normPath = try { ConvertTo-Nano11NormalizedPath -Path $Path } catch { return $false }
     if ($ExpectedBaseDir) {
         $normBase = try { ConvertTo-Nano11NormalizedPath -Path $ExpectedBaseDir } catch { return $false }
-        if (-not $normPath.StartsWith($normBase, [System.StringComparison]::OrdinalIgnoreCase) -and ($normPath -ine $normBase)) {
+        # Security: Require trailing separator to prevent partial directory prefix matching bypass (e.g. C:\scratch_evil matching C:\scratch)
+        $normBaseWithSep = $normBase + '\'
+        if (-not ($normPath.StartsWith($normBaseWithSep, [System.StringComparison]::OrdinalIgnoreCase) -or ($normPath -ieq $normBase))) {
             Write-Warning "Directory '$normPath' is outside workspace '$normBase'. Deletion prohibited."
             return $false
         }
@@ -1342,7 +1344,9 @@ function Test-CanSafelyDeleteVhdx {
     $normVhdx = try { ConvertTo-Nano11NormalizedPath -Path $VhdxPath } catch { return $false }
     if ($ExpectedBaseDir) {
         $normBase = try { ConvertTo-Nano11NormalizedPath -Path $ExpectedBaseDir } catch { return $false }
-        if (-not $normVhdx.StartsWith($normBase, [System.StringComparison]::OrdinalIgnoreCase) -and ($normVhdx -ine $normBase)) {
+        # Security: Require trailing separator to prevent partial directory prefix matching bypass
+        $normBaseWithSep = $normBase + '\'
+        if (-not ($normVhdx.StartsWith($normBaseWithSep, [System.StringComparison]::OrdinalIgnoreCase) -or ($normVhdx -ieq $normBase))) {
             Write-Warning "VHDX '$normVhdx' is outside workspace '$normBase'. Deletion prohibited."
             return $false
         }
@@ -7920,7 +7924,9 @@ if (Test-Path -LiteralPath $unattendSource) {
             throw "Pre-extraction security violation: Path traversal '..' detected in target path: $targetRaw"
         }
         $targetImageFile = [System.IO.Path]::GetFullPath((Join-Path -Path $scratchFullRoot -ChildPath $relPath))
-        if (-not $targetImageFile.StartsWith($scratchFullRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+        # Security: Append directory separator to prevent partial path prefix matching escape (e.g. C:\scratch_evil matching C:\scratch)
+        $scratchRootWithSep = $scratchFullRoot + [System.IO.Path]::DirectorySeparatorChar
+        if (-not ($targetImageFile.StartsWith($scratchRootWithSep, [System.StringComparison]::OrdinalIgnoreCase) -or ($targetImageFile -ieq $scratchFullRoot))) {
             throw "Pre-extraction security violation: Target path '$targetImageFile' escapes mount root '$scratchFullRoot'"
         }
 
