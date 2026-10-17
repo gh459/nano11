@@ -3650,6 +3650,7 @@ function Show-Nano11GUI {
     $btnBrowseWork.BackColor = [System.Drawing.Color]::FromArgb(45, 50, 60)
     $btnBrowseWork.ForeColor = [System.Drawing.Color]::White
     $btnBrowseWork.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $toolTip.SetToolTip($btnBrowseWork, "ビルド処理用の作業フォルダー（NTFS・25GB以上の空き容量推奨）を選択します")
     $btnBrowseWork.Add_Click({
         $fbd = New-Object System.Windows.Forms.FolderBrowserDialog
         $fbd.Description = "空き容量が25GB以上ある NTFS ドライブ上の作業フォルダーを選択してください"
@@ -3699,6 +3700,7 @@ function Show-Nano11GUI {
     $btnBrowseDrivers.BackColor = [System.Drawing.Color]::FromArgb(45, 50, 60)
     $btnBrowseDrivers.ForeColor = [System.Drawing.Color]::White
     $btnBrowseDrivers.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $toolTip.SetToolTip($btnBrowseDrivers, "OSセットアップ時に自動注入するハードウェアドライバーフォルダー (.inf) を選択します")
     $btnBrowseDrivers.Add_Click({
         $fbd = New-Object System.Windows.Forms.FolderBrowserDialog
         $fbd.Description = "注入するドライバー群 (.inf) が格納されたフォルダーを選択してください"
@@ -3739,6 +3741,7 @@ function Show-Nano11GUI {
         "カスタム構成 (手動カスタマイズ)"
     ))
     $cmbPreset.SelectedIndex = 0
+    $toolTip.SetToolTip($cmbPreset, "用途に応じた最適化プリセットを選択します（カスタム構成も選択可能）")
     $grpProfile.Controls.Add($cmbPreset)
 
     # 3. Customization & Debloat Options GroupBox
@@ -3931,6 +3934,7 @@ function Show-Nano11GUI {
     $chkDryRun.Location = New-Object System.Drawing.Point(20, 22)
     $chkDryRun.Size = New-Object System.Drawing.Size(220, 24)
     $chkDryRun.ForeColor = [System.Drawing.Color]::FromArgb(235, 238, 245)
+    $toolTip.SetToolTip($chkDryRun, "実際のイメージ変更を行わずに処理フローと設定の検証のみを実行します")
     $bottomPanel.Controls.Add($chkDryRun)
 
     $btnBuild = New-Object System.Windows.Forms.Button
@@ -3941,6 +3945,7 @@ function Show-Nano11GUI {
     $btnBuild.ForeColor = [System.Drawing.Color]::White
     $btnBuild.Font = New-Object System.Drawing.Font($uiFontName, 10.5, [System.Drawing.FontStyle]::Bold)
     $btnBuild.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $toolTip.SetToolTip($btnBuild, "現在の設定で nano11 ISO イメージの作成を開始します (Enterキー)")
     $bottomPanel.Controls.Add($btnBuild)
 
     $btnCancel = New-Object System.Windows.Forms.Button
@@ -3952,7 +3957,11 @@ function Show-Nano11GUI {
     $btnCancel.ForeColor = [System.Drawing.Color]::White
     $btnCancel.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
     $btnCancel.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+    $toolTip.SetToolTip($btnCancel, "設定をキャンセルして終了します (Escキー)")
     $bottomPanel.Controls.Add($btnCancel)
+
+    $form.AcceptButton = $btnBuild
+    $form.CancelButton = $btnCancel
 
     $formResult = @{ Success = $false }
 
