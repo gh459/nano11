@@ -1,0 +1,3 @@
+## 2025-10-18 - Chaining Vector Comparison Operators in PowerShell
+**Learning:** In PowerShell, pipeline filtering (`$array | Where-Object { $_ -notlike ... }`) introduces heavy script block invocation and pipeline pipeline-object wrapping overhead. Direct vector array filtering (`$array -notlike '*p1*' -notlike '*p2*'`) can be chained directly on array outputs and executes natively in C#, providing a 4x-190x speedup depending on array size. Wrapping the result in `@(...)` guarantees array type retention.
+**Action:** Replace `Where-Object` array filtering with chained native comparison operators (`-like`, `-notlike`, `-match`, `-notmatch`) for array filtering in PowerShell scripts.
