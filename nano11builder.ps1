@@ -1275,7 +1275,8 @@ function Test-CanSafelyDeleteDirectory {
     $normPath = try { ConvertTo-Nano11NormalizedPath -Path $Path } catch { return $false }
     if ($ExpectedBaseDir) {
         $normBase = try { ConvertTo-Nano11NormalizedPath -Path $ExpectedBaseDir } catch { return $false }
-        if (-not $normPath.StartsWith($normBase, [System.StringComparison]::OrdinalIgnoreCase) -and ($normPath -ine $normBase)) {
+        # Security Boundary Check: Require trailing backslash to prevent partial directory prefix matching bypass (e.g., C:\workspace_evil matching C:\workspace)
+        if ($normPath -ine $normBase -and -not $normPath.StartsWith($normBase + '\', [System.StringComparison]::OrdinalIgnoreCase)) {
             Write-Warning "Directory '$normPath' is outside workspace '$normBase'. Deletion prohibited."
             return $false
         }
@@ -1342,7 +1343,8 @@ function Test-CanSafelyDeleteVhdx {
     $normVhdx = try { ConvertTo-Nano11NormalizedPath -Path $VhdxPath } catch { return $false }
     if ($ExpectedBaseDir) {
         $normBase = try { ConvertTo-Nano11NormalizedPath -Path $ExpectedBaseDir } catch { return $false }
-        if (-not $normVhdx.StartsWith($normBase, [System.StringComparison]::OrdinalIgnoreCase) -and ($normVhdx -ine $normBase)) {
+        # Security Boundary Check: Require trailing backslash to prevent partial directory prefix matching bypass (e.g., C:\workspace_evil matching C:\workspace)
+        if ($normVhdx -ine $normBase -and -not $normVhdx.StartsWith($normBase + '\', [System.StringComparison]::OrdinalIgnoreCase)) {
             Write-Warning "VHDX '$normVhdx' is outside workspace '$normBase'. Deletion prohibited."
             return $false
         }
