@@ -3557,6 +3557,7 @@ function Show-Nano11GUI {
     }
 
     $toolTip = New-Object System.Windows.Forms.ToolTip
+    $toolTip.SetToolTip($cmbSource, "Windows 11 インストールメディアのドライブレターまたは ISO ファイルパスを指定します")
 
     # Button: Browse Drive (FolderBrowserDialog for Virtual DVD / USB / Directory)
     $btnBrowseDrive = New-Object System.Windows.Forms.Button
@@ -3641,6 +3642,7 @@ function Show-Nano11GUI {
         if (-not $docsDir) { $docsDir = Join-Path $env:USERPROFILE "Documents" }
         $txtWork.Text = Join-Path -Path $docsDir -ChildPath "nano11_workspace"
     }
+    $toolTip.SetToolTip($txtWork, "イメージ展開およびビルド作業用フォルダーのパス (空き容量25GB以上が必要)")
     $grpMedia.Controls.Add($txtWork)
 
     $btnBrowseWork = New-Object System.Windows.Forms.Button
@@ -3650,6 +3652,7 @@ function Show-Nano11GUI {
     $btnBrowseWork.BackColor = [System.Drawing.Color]::FromArgb(45, 50, 60)
     $btnBrowseWork.ForeColor = [System.Drawing.Color]::White
     $btnBrowseWork.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $toolTip.SetToolTip($btnBrowseWork, "ビルド時に使用する作業フォルダー（空き容量25GB以上推奨）を選択します")
     $btnBrowseWork.Add_Click({
         $fbd = New-Object System.Windows.Forms.FolderBrowserDialog
         $fbd.Description = "空き容量が25GB以上ある NTFS ドライブ上の作業フォルダーを選択してください"
@@ -3699,6 +3702,7 @@ function Show-Nano11GUI {
     $btnBrowseDrivers.BackColor = [System.Drawing.Color]::FromArgb(45, 50, 60)
     $btnBrowseDrivers.ForeColor = [System.Drawing.Color]::White
     $btnBrowseDrivers.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $toolTip.SetToolTip($btnBrowseDrivers, "OSセットアップ時に自動注入するドライバーフォルダー (.inf) を選択します")
     $btnBrowseDrivers.Add_Click({
         $fbd = New-Object System.Windows.Forms.FolderBrowserDialog
         $fbd.Description = "注入するドライバー群 (.inf) が格納されたフォルダーを選択してください"
@@ -3739,6 +3743,7 @@ function Show-Nano11GUI {
         "カスタム構成 (手動カスタマイズ)"
     ))
     $cmbPreset.SelectedIndex = 0
+    $toolTip.SetToolTip($cmbPreset, "用途に応じた最適化プリセット構成を選択します")
     $grpProfile.Controls.Add($cmbPreset)
 
     # 3. Customization & Debloat Options GroupBox
@@ -3839,6 +3844,7 @@ function Show-Nano11GUI {
     $radWIM.Size = New-Object System.Drawing.Size(230, 25)
     $radWIM.ForeColor = [System.Drawing.Color]::FromArgb(235, 238, 245)
     $radWIM.Checked = $true
+    $toolTip.SetToolTip($radWIM, "標準の LZX 圧縮 install.wim を出力します（最高速度・標準互換性）")
     $grpPayload.Controls.Add($radWIM)
 
     $radESD = New-Object System.Windows.Forms.RadioButton
@@ -3846,6 +3852,7 @@ function Show-Nano11GUI {
     $radESD.Location = New-Object System.Drawing.Point(250, 28)
     $radESD.Size = New-Object System.Drawing.Size(215, 25)
     $radESD.ForeColor = [System.Drawing.Color]::FromArgb(235, 238, 245)
+    $toolTip.SetToolTip($radESD, "高圧縮の LZMS 圧縮 install.esd を出力します（最小ファイルサイズ）")
     $grpPayload.Controls.Add($radESD)
 
     $radSWM = New-Object System.Windows.Forms.RadioButton
@@ -3853,6 +3860,7 @@ function Show-Nano11GUI {
     $radSWM.Location = New-Object System.Drawing.Point(470, 28)
     $radSWM.Size = New-Object System.Drawing.Size(250, 25)
     $radSWM.ForeColor = [System.Drawing.Color]::FromArgb(235, 238, 245)
+    $toolTip.SetToolTip($radSWM, "FAT32 制限（4GB未満）に対応するため Split-WIM (install.swm) 形式で出力します")
     $grpPayload.Controls.Add($radSWM)
 
     if ($InitialSettings.ExportESDMode) {
@@ -3931,6 +3939,7 @@ function Show-Nano11GUI {
     $chkDryRun.Location = New-Object System.Drawing.Point(20, 22)
     $chkDryRun.Size = New-Object System.Drawing.Size(220, 24)
     $chkDryRun.ForeColor = [System.Drawing.Color]::FromArgb(235, 238, 245)
+    $toolTip.SetToolTip($chkDryRun, "実際の変更やファイル作成を行わずに処理フローをシミュレーション検証します")
     $bottomPanel.Controls.Add($chkDryRun)
 
     $btnBuild = New-Object System.Windows.Forms.Button
@@ -3941,6 +3950,7 @@ function Show-Nano11GUI {
     $btnBuild.ForeColor = [System.Drawing.Color]::White
     $btnBuild.Font = New-Object System.Drawing.Font($uiFontName, 10.5, [System.Drawing.FontStyle]::Bold)
     $btnBuild.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $toolTip.SetToolTip($btnBuild, "指定された設定で nano11 ISO / WIM のビルド処理を開始します (Enter)")
     $bottomPanel.Controls.Add($btnBuild)
 
     $btnCancel = New-Object System.Windows.Forms.Button
@@ -3952,7 +3962,12 @@ function Show-Nano11GUI {
     $btnCancel.ForeColor = [System.Drawing.Color]::White
     $btnCancel.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
     $btnCancel.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+    $toolTip.SetToolTip($btnCancel, "設定を変更せずに nano11 ビルダーを終了します (Esc)")
     $bottomPanel.Controls.Add($btnCancel)
+
+    # Keyboard navigation: Enter triggers AcceptButton ($btnBuild), Esc triggers CancelButton ($btnCancel)
+    $form.AcceptButton = $btnBuild
+    $form.CancelButton = $btnCancel
 
     $formResult = @{ Success = $false }
 
