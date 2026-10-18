@@ -28,10 +28,6 @@
         </RunSynchronousCommand>
         <RunSynchronousCommand wcm:action="add">
           <Order>5</Order>
-          <Path>reg.exe add "HKLM\SYSTEM\ControlSet001\Control\BitLocker" /v PreventDeviceEncryption /t REG_DWORD /d 1 /f</Path>
-        </RunSynchronousCommand>
-        <RunSynchronousCommand wcm:action="add">
-          <Order>6</Order>
           <Path>reg.exe add "HKLM\SYSTEM\CurrentControlSet\Control\BitLocker" /v PreventDeviceEncryption /t REG_DWORD /d 1 /f</Path>
         </RunSynchronousCommand>
       </RunSynchronous>
@@ -59,10 +55,6 @@
         </RunSynchronousCommand>
         <RunSynchronousCommand wcm:action="add">
           <Order>5</Order>
-          <Path>reg.exe add "HKLM\SYSTEM\ControlSet001\Control\BitLocker" /v PreventDeviceEncryption /t REG_DWORD /d 1 /f</Path>
-        </RunSynchronousCommand>
-        <RunSynchronousCommand wcm:action="add">
-          <Order>6</Order>
           <Path>reg.exe add "HKLM\SYSTEM\CurrentControlSet\Control\BitLocker" /v PreventDeviceEncryption /t REG_DWORD /d 1 /f</Path>
         </RunSynchronousCommand>
       </RunSynchronous>
@@ -824,7 +816,7 @@ if (-not $UserCustomizations) {
         Set-RegistryValue -Path $_.PSPath -Name 'AutoColorManagementEnabled' -Type 'DWord' -Value 0 -Description 'Allow Windows to automatically manage color profiles for all connected displays that support it'
     }
     Remove-RegistryValue -Path 'HKLM:\SOFTWARE\Microsoft\Windows\Dwm' -Name 'OverlayTestMode' -Description 'Composite multiple display layers in hardware using the GPU. Disabling can fix screen flickering, black screens, and stuttering on multi-monitor setups'
-    Remove-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\GraphicsDrivers' -Name 'DisableOverlays' -Description 'Allow the graphics driver to use hardware overlay surfaces for compositing. Disabling forces software composition for all overlays and is known to break the Steam, Discord, and RTSS in-game overlays 驕ｯ・ｶ郢晢ｽｻleave enabled unless you specifically need this'
+    Remove-RegistryValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\GraphicsDrivers' -Name 'DisableOverlays' -Description 'Allow the graphics driver to use hardware overlay surfaces for compositing. Disabling forces software composition for all overlays and is known to break the Steam, Discord, and RTSS in-game overlays - leave enabled unless you specifically need this'
     Remove-RegistryValue -Path 'HKLM:\SOFTWARE\Microsoft\Windows\Dwm' -Name 'OverlayMinFPS' -Description 'Allow Desktop Window Manager to dynamically switch apps between overlay modes based on frame rate. Disabling can fix stuttering in browsers and Discord without fully disabling MPO'
     Set-RegistryValue -Path 'HKLM:\Software\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile' -Name 'NetworkThrottlingIndex' -Type 'DWord' -Value 4294967295 -Description 'Controls network packet rate limiting for multimedia applications. 0xFFFFFFFF disables network throttling for maximum throughput'
     Get-ChildItem -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces' -ErrorAction SilentlyContinue | ForEach-Object {

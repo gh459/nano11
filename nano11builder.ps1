@@ -237,9 +237,16 @@ if ((-not $TestSelf) -and ($env:NANO11_TEST_MODE -ne "1") -and (-not $isDryRunMo
 }
 
 # 2. Check for Admin rights and restart with full arguments preserved
-$myWindowsID = [System.Security.Principal.WindowsIdentity]::GetCurrent()
-$myWindowsPrincipal = New-Object System.Security.Principal.WindowsPrincipal($myWindowsID)
-if ((-not $myWindowsPrincipal.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)) -and ($env:NANO11_TEST_MODE -ne "1") -and (-not $TestSelf) -and (-not $isDryRunMode)) {
+$isWindowsOS = ($IsWindows -or ($env:OS -eq 'Windows_NT') -or ([System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT))
+if ($isWindowsOS) {
+    $myWindowsID = [System.Security.Principal.WindowsIdentity]::GetCurrent()
+    $myWindowsPrincipal = New-Object System.Security.Principal.WindowsPrincipal($myWindowsID)
+} else {
+    $myWindowsID = $null
+    $myWindowsPrincipal = $null
+}
+
+if ($isWindowsOS -and (-not $myWindowsPrincipal.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)) -and ($env:NANO11_TEST_MODE -ne "1") -and (-not $TestSelf) -and (-not $isDryRunMode)) {
     Write-Host "Restarting script with Administrator privileges in a new window..." -ForegroundColor Yellow
     
     # Reconstruct bound parameters for elevated process
@@ -338,11 +345,20 @@ function ConvertTo-Nano11NormalizedPath {
     if ($cleanPath -notmatch '^[A-Za-z]:\\') {
         throw "Path must be an absolute local drive path starting with a drive letter: '$Path'"
     }
-    try {
-        $fullPath = [System.IO.Path]::GetFullPath($cleanPath).TrimEnd('\')
-    } catch {
-        throw "Failed to get full path for '$Path': $_"
+    $drive = $cleanPath.Substring(0, 2).ToUpper()
+    $rest = $cleanPath.Substring(2)
+    $parts = $rest.Split('\', [System.StringSplitOptions]::RemoveEmptyEntries)
+    $normalizedParts = [System.Collections.Generic.List[string]]::new()
+    foreach ($p in $parts) {
+        if ($p -eq '.') { continue }
+        if ($p -eq '..') {
+            if ($normalizedParts.Count -gt 0) { $normalizedParts.RemoveAt($normalizedParts.Count - 1) }
+            continue
+        }
+        $normalizedParts.Add($p)
     }
+    $fullPath = $drive + '\' + ($normalizedParts -join '\')
+    $fullPath = $fullPath.TrimEnd('\')
     if ($fullPath -match '^[A-Za-z]:$') {
         throw "Drive root path is not allowed as a managed path: '$Path'"
     }
@@ -504,7 +520,11 @@ function Unmount-RegistryHiveWithRetry {
 }
 
 # 4. Language-independent Administrators group via Well-Known SID (S-1-5-32-544)
-$adminGroupSid = New-Object System.Security.Principal.SecurityIdentifier([System.Security.Principal.WellKnownSidType]::BuiltinAdministratorsSid, $null)
+$adminGroupSid = if ($isWindowsOS) {
+    New-Object System.Security.Principal.SecurityIdentifier([System.Security.Principal.WellKnownSidType]::BuiltinAdministratorsSid, $null)
+} else {
+    $null
+}
 
 # Helper function: Query registered mounted images from DISM
 # Helper function: Query registered mounted images from DISM (Distinguishes 0-mount success from query failure)
@@ -1804,11 +1824,11 @@ function New-Nano11MountDirectoryPath {
     for ($i = 0; $i -lt 50; $i++) {
         $guidStr = [Guid]::NewGuid().ToString('N')
         $dirName = if ($script:MountDirectoryPrefix) { $script:MountDirectoryPrefix + $guidStr } else { "mount_" + $guidStr }
-        $fullPath = Join-Path -Path $normRoot -ChildPath $dirName
+        $fullPath = $normRoot + '\' + $dirName
         $candidatePath = ConvertTo-Nano11NormalizedPath -Path $fullPath
 
         # Verify it is a direct child of MountAllocationRoot
-        $parentDir = [System.IO.Path]::GetDirectoryName($candidatePath)
+        $parentDir = $candidatePath -replace '\\[^\\]+$', ''
         if (-not [string]::Equals($parentDir, $normRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
             throw "Security violation: Generated mount directory '$candidatePath' is not a direct child of '$normRoot'."
         }
@@ -2982,7 +3002,7 @@ function Invoke-Nano11SelfTest {
         $uniquePaths = $allPaths | Select-Object -Unique
         $allValidGuid = $true
         foreach ($p in $allPaths) {
-            $baseName = [System.IO.Path]::GetFileName($p)
+            $baseName = $p -replace '.*[\\/]', ''
             if ($baseName -notmatch '^scratchdir_[0-9a-f]{32}$') {
                 $allValidGuid = $false
             }
@@ -3053,7 +3073,7 @@ function Invoke-Nano11SelfTest {
         $normOutside = ConvertTo-Nano11NormalizedPath -Path $outsidePath
 
         # Direct child check
-        $parentOfValid = [System.IO.Path]::GetDirectoryName($normValid)
+        $parentOfValid = $normValid -replace '\\[^\\]+$', ''
         $isDirectChild = [string]::Equals($parentOfValid, $normRoot, [System.StringComparison]::OrdinalIgnoreCase)
 
         # External path rejection
