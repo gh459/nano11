@@ -3650,6 +3650,9 @@ function Show-Nano11GUI {
     $btnBrowseWork.BackColor = [System.Drawing.Color]::FromArgb(45, 50, 60)
     $btnBrowseWork.ForeColor = [System.Drawing.Color]::White
     $btnBrowseWork.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $btnBrowseWork.AccessibleName = "作業フォルダー参照"
+    $btnBrowseWork.AccessibleDescription = "ビルド作業用の一時フォルダーを選択します"
+    $toolTip.SetToolTip($btnBrowseWork, "ビルド作業用の一時フォルダーを選択します")
     $btnBrowseWork.Add_Click({
         $fbd = New-Object System.Windows.Forms.FolderBrowserDialog
         $fbd.Description = "空き容量が25GB以上ある NTFS ドライブ上の作業フォルダーを選択してください"
@@ -3699,6 +3702,9 @@ function Show-Nano11GUI {
     $btnBrowseDrivers.BackColor = [System.Drawing.Color]::FromArgb(45, 50, 60)
     $btnBrowseDrivers.ForeColor = [System.Drawing.Color]::White
     $btnBrowseDrivers.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $btnBrowseDrivers.AccessibleName = "ドライバーフォルダー参照"
+    $btnBrowseDrivers.AccessibleDescription = "OSセットアップ時に自動注入するドライバーフォルダー (.inf) を選択します"
+    $toolTip.SetToolTip($btnBrowseDrivers, "OSセットアップ時に自動注入するドライバーフォルダー (.inf) を選択します")
     $btnBrowseDrivers.Add_Click({
         $fbd = New-Object System.Windows.Forms.FolderBrowserDialog
         $fbd.Description = "注入するドライバー群 (.inf) が格納されたフォルダーを選択してください"
@@ -3931,6 +3937,9 @@ function Show-Nano11GUI {
     $chkDryRun.Location = New-Object System.Drawing.Point(20, 22)
     $chkDryRun.Size = New-Object System.Drawing.Size(220, 24)
     $chkDryRun.ForeColor = [System.Drawing.Color]::FromArgb(235, 238, 245)
+    $chkDryRun.AccessibleName = "DryRun シミュレーション"
+    $chkDryRun.AccessibleDescription = "実際のイメージ変換を行わずに設定とパスの正常性を検証します"
+    $toolTip.SetToolTip($chkDryRun, "実際のイメージ変換を行わずに設定とパスの正常性を検証します")
     $bottomPanel.Controls.Add($chkDryRun)
 
     $btnBuild = New-Object System.Windows.Forms.Button
@@ -3941,6 +3950,9 @@ function Show-Nano11GUI {
     $btnBuild.ForeColor = [System.Drawing.Color]::White
     $btnBuild.Font = New-Object System.Drawing.Font($uiFontName, 10.5, [System.Drawing.FontStyle]::Bold)
     $btnBuild.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $btnBuild.AccessibleName = "nano11 ビルド開始"
+    $btnBuild.AccessibleDescription = "選択した設定で Windows 11 の軽量化ビルド処理を開始します (Enter)"
+    $toolTip.SetToolTip($btnBuild, "選択した設定で Windows 11 の軽量化ビルド処理を開始します (Enter)")
     $bottomPanel.Controls.Add($btnBuild)
 
     $btnCancel = New-Object System.Windows.Forms.Button
@@ -3952,7 +3964,13 @@ function Show-Nano11GUI {
     $btnCancel.ForeColor = [System.Drawing.Color]::White
     $btnCancel.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
     $btnCancel.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+    $btnCancel.AccessibleName = "キャンセル"
+    $btnCancel.AccessibleDescription = "設定をキャンセルして GUI を閉じます (Esc)"
+    $toolTip.SetToolTip($btnCancel, "設定をキャンセルして GUI を閉じます (Esc)")
     $bottomPanel.Controls.Add($btnCancel)
+
+    $form.AcceptButton = $btnBuild
+    $form.CancelButton = $btnCancel
 
     $formResult = @{ Success = $false }
 
